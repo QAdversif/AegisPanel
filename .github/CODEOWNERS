@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Aegis code owners. Tweak when the team grows. Until then every
+# change requests a single review from the @aegispanel/aegis-maintainers
+# team; the team is created once the public repository is set up.
+
+*                               @aegispanel/aegis-maintainers
+/backend/                        @aegispanel/aegis-maintainers
+/frontend/                       @aegispanel/aegis-maintainers
+/deploy/                         @aegispanel/aegis-maintainers
+/docs/                           @aegispanel/aegis-maintainers
+/.github/                        @aegispanel/aegis-maintainers
+
+/ARCHITECTURE.md                 @aegispanel/aegis-maintainers
+/CHANGELOG.md                    @aegispanel/aegis-maintainers
+/LICENSE                         @aegispanel/aegis-maintainers
+/README.md                       @aegispanel/aegis-maintainers
+/SECURITY.md                     @aegispanel/aegis-maintainers
+/CONTRIBUTING.md                 @aegispanel/aegis-maintainers

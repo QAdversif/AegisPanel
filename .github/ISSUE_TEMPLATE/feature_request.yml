@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a new capability for Aegis.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A good feature request explains the problem you are trying to
+        solve, not just the solution you have in mind.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+      placeholder: |
+        When I rotate a node, all clients reconnecting at once overwhelm the new instance.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: How would you solve it? Mock-ups, command lines, config snippets all help.
+      validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you look at? Why is this one better?
+      validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which part of Aegis would this touch? (panel, agent, node provisioning, UI, …)
+      validations:
+      required: false
+
+  - type: textarea
+    id: related
+    attributes:
+      label: Related work
+      description: |
+        Link any related issues, discussions, or upstream projects. Check
+        ARCHITECTURE.md for the relevant section if you can.
+      validations:
+      required: false

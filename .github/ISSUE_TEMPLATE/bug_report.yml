@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible bug in Aegis.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill in the
+        template below — a minimal reproduction is the single biggest
+        help you can provide.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: One-sentence summary of the bug.
+      placeholder: |
+        The panel returns 500 when I try to install a node with a missing SSH key.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: |
+        The panel should reject the request with a 400 explaining which field is missing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, deterministic reproduction. Shell / curl / UI clicks all count.
+      placeholder: |
+        1. Run `make docker-dev`
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Go / Node versions, commit hash, container image tag.
+      placeholder: |
+        - OS:        Ubuntu 22.04
+        - Go:        1.22.3
+        - Node:      20.10
+        - Aegis:     dev-1a2b3c4
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: |
+        Paste relevant log lines. Wrap code in triple backticks.
+      validations:
+      required: false
+
+  - type: textarea
+    id: severity
+    attributes:
+      label: Severity
+      description: How broken is this for you?
+      placeholder: |
+        - critical: panel won't start, data loss
+        - high:     a major feature is unusable
+        - medium:   workaround exists
+        - low:      cosmetic / nice-to-have
+    validations:
+      required: false

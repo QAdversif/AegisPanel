@@ -1,0 +1,39 @@
+# <type>(<scope>): <short summary>
+#
+# Types:
+#   feat     — new user-visible feature
+#   fix      — bug fix
+#   docs     — docs only
+#   style    — formatting, no logic change
+#   refactor — code change, no feature/fix
+#   perf     — performance improvement
+#   test     — add/fix tests
+#   build    — build system, deps, CI
+#   chore    — tooling, no production code change
+#   revert   — revert a previous commit
+#
+# Scope (optional):
+#   backend, frontend, docs, deploy, infra
+#   backend.auth, backend.nodes, ...
+#   frontend.dashboard, ...
+#   deploy.ansible, deploy.caddy, ...
+#
+# Body: explain WHAT and WHY, not HOW.
+# Wrap at 72 columns. Use imperative mood.
+#
+# Footer:
+#   BREAKING CHANGE: <description>
+#   Refs: #123, #456
+#   Co-authored-by: Name <email>
+#
+# Examples:
+#   feat(backend): add JWT refresh rotation
+#   fix(frontend): correct pool weight zero-division
+#   docs: add Caddyfile template for masquerade ports
+#   chore(deploy): bump Caddy to 2.8
+#
+# ---
+# Remember:
+#   * One commit = one logical change
+#   * Subject ≤ 72 chars, no trailing period
+#   * Body explains motivation, not mechanics

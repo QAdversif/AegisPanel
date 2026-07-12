@@ -1,0 +1,7 @@
+name: Security report
+description: Privately report a security issue. **Do not** use this for general bugs.
+labels: ["security"]
+# Issues filed from this template are *not* immediately visible. Aegis
+# also runs a GitHub Security Advisories program — see SECURITY.md for
+# the preferred private disclosure channel.
+type: security

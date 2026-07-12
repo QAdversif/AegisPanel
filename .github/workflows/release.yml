@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show tag
+        run: |
+          echo "tag = ${{ github.ref_name }}"
+          git tag --list 'v*' | sort -V
+
+      # Build the panel image.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/aegispanel/aegis
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          flavor: latest=auto
+
+      - name: Build and push panel image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Build and push UI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/aegispanel/aegis-ui:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # Create a GitHub release with auto-generated notes (uses the
+      # conventional-commits PR titles we already produce).
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
