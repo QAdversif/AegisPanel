@@ -1,0 +1,26 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Provision a single Aegis node:
+#   * bootstrap_node  — base user, dirs, packages
+#   * install_caddy   — reverse proxy with decoy + secret paths
+#   * install_fail2ban — SSH + panel-login jails
+#   * install_agent   — downloads the agent from the panel
+#   * setup_decoy     — renders the per-node decoy site
+#
+# Run:
+#   cd deploy/ansible
+#   ansible-playbook -i inventories/local/hosts.ini playbooks/node.yml \
+#     -e aegis_bootstrap_token=<token-from-panel>
+
+- name: Provision a single Aegis node
+  hosts: aegis_nodes
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: bootstrap_node
+    - role: install_caddy
+    - role: install_fail2ban
+    - role: install_agent
+    - role: setup_decoy

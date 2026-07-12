@@ -1,0 +1,49 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Install the Aegis agent binary on a node.
+# Phase 0 stub: the agent binary is downloaded from the panel's
+# release endpoint (authenticated via the bootstrap token in
+# `aegis_bootstrap_token`). Real implementation lands in Phase 1.
+
+- name: Download the Aegis agent binary from the panel
+  ansible.builtin.get_url:
+    url: "{{ aegis_panel_url }}/api/v1/agents/{{ ansible_facts['system'] | lower }}/{{ ansible_facts['architecture'] }}/bin"
+    dest: /opt/aegis-agent/bin/aegis-agent
+    owner: aegis
+    group: aegis
+    mode: "0750"
+    headers:
+      Authorization: "Bearer {{ aegis_bootstrap_token }}"
+  become: true
+  notify: restart aegis-agent
+
+- name: Write the agent environment file
+  ansible.builtin.template:
+    src: agent.env.j2
+    dest: /etc/aegis/agent.env
+    owner: aegis
+    group: aegis
+    mode: "0640"
+  become: true
+  notify: restart aegis-agent
+
+- name: Install the systemd unit
+  ansible.builtin.copy:
+    src: aegis-agent.service
+    dest: /etc/systemd/system/aegis-agent.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify:
+    - reload systemd
+    - restart aegis-agent
+
+- name: Enable and start the agent
+  ansible.builtin.systemd:
+    name: aegis-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true

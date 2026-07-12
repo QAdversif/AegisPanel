@@ -1,0 +1,29 @@
+; SPDX-License-Identifier: AGPL-3.0-or-later
+;
+; fail2ban configuration for Aegis nodes.
+; Installed by deploy/ansible/roles/install_fail2ban.
+
+[DEFAULT]
+backend      = systemd
+bantime      = 1h
+findtime     = 10m
+maxretry     = 5
+ignoreip     = 127.0.0.1/8 ::1
+              ; + operator's static IPs at the bottom of this file
+
+# SSH — standard protection against brute-force.
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = %(sshd_log)s
+
+# Panel login — read 401/403 responses from the Caddy JSON access log.
+[panel-login]
+enabled  = true
+port     = http,https
+filter   = panel-login
+logpath  = /var/log/caddy/panel-access.log
+maxretry = 5
+findtime = 10m
+bantime  = 1h

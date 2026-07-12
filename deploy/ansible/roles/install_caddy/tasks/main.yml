@@ -1,0 +1,30 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Caddy reverse proxy on a node.
+# Installs Caddy, drops the node Caddyfile template in place, and
+# writes the per-node decoy path + secret admin path into the env
+# file. Phase 0 stub.
+
+- name: Install Caddy
+  ansible.builtin.package:
+    name: caddy
+    state: present
+  become: true
+
+- name: Render the node Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.node.j2
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: reload caddy
+
+- name: Enable and start Caddy
+  ansible.builtin.systemd:
+    name: caddy
+    enabled: true
+    state: started
+  become: true

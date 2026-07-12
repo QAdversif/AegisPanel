@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Aegis UI global styles. Phase 0 uses a dark theme tuned for long
+// ops shifts; future work can add light / high-contrast themes.
+
+:root {
+  --aegis-bg: #0b0f1a;
+  --aegis-surface: #111727;
+  --aegis-surface-2: #1c2440;
+  --aegis-border: #1f2942;
+  --aegis-text: #e6e8ee;
+  --aegis-text-muted: #aab1c2;
+  --aegis-text-subtle: #6f7891;
+  --aegis-accent: #6c8cff;
+  --aegis-success: #4ade80;
+  --aegis-danger: #f87171;
+
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--aegis-bg);
+  color: var(--aegis-text);
+}
+
+a {
+  color: var(--aegis-accent);
+}
+
+button {
+  font: inherit;
+}

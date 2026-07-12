@@ -1,0 +1,40 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fail2ban installation + jail configuration. Phase 0 stub.
+# Real rules live in deploy/fail2ban/jail.local and are copied in
+# during the playbook run; filters under deploy/fail2ban/filter.d
+# are installed alongside.
+
+- name: Install fail2ban
+  ansible.builtin.package:
+    name: fail2ban
+    state: present
+  become: true
+
+- name: Copy the jail configuration
+  ansible.builtin.copy:
+    src: jail.local
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: restart fail2ban
+
+- name: Install the panel-login filter
+  ansible.builtin.copy:
+    src: filter.d/panel-login.conf
+    dest: /etc/fail2ban/filter.d/panel-login.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+  become: true

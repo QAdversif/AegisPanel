@@ -1,0 +1,20 @@
+{
+  "nav": {
+    "dashboard": "Сводка"
+  },
+  "dashboard": {
+    "title": "Сводка",
+    "subtitle": "Оперативный обзор панели Aegis.",
+    "panel": "Панель",
+    "nodes": "Ноды",
+    "users": "Пользователи",
+    "hosts": "Хосты",
+    "lastChecked": "Последняя проверка",
+    "placeholder": "Подключится в Phase 1+",
+    "status": {
+      "ok": "Доступна",
+      "down": "Недоступна",
+      "unknown": "Проверка…"
+    }
+  }
+}

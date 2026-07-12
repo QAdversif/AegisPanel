@@ -1,0 +1,28 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Handlers shared across the bootstrap / install_agent / install_caddy /
+# install_fail2ban / setup_decoy roles.
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+
+- name: restart aegis-agent
+  ansible.builtin.systemd:
+    name: aegis-agent
+    state: restarted
+  become: true
+
+- name: reload caddy
+  ansible.builtin.systemd:
+    name: caddy
+    state: reloaded
+  become: true
+
+- name: restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted
+  become: true

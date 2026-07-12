@@ -1,0 +1,14 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Defaults shared across the bootstrap / install_agent / install_caddy /
+# install_fail2ban / setup_decoy roles.
+
+# Where the agent will be installed and how to reach the panel.
+aegis_panel_url: "https://panel.aegis.local"
+aegis_bootstrap_token: ""        # injected at run time from --extra-vars
+aegis_node_name: "{{ inventory_hostname }}"
+aegis_decoy_preset: "personal-blog"  # see ARCHITECTURE.md §26.4
+
+# Whether the role should actually start services (off in CI / lint).
+aegis_enable_services: true

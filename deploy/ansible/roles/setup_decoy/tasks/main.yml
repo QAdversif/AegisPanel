@@ -1,0 +1,25 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Per-node decoy-site setup. Phase 0 stub.
+# Real implementation: render the chosen preset (or a custom uploaded
+# HTML archive) into /var/www/decoy, update Caddyfile via Caddy's
+# admin API to point `root` at the new directory, hot-reload.
+
+- name: Render the decoy site
+  ansible.builtin.template:
+    src: "decoy/{{ aegis_decoy_preset }}.html.j2"
+    dest: /var/www/decoy/index.html
+    owner: aegis
+    group: aegis
+    mode: "0644"
+  become: true
+
+- name: Touch the .well-known directory for ACME challenges
+  ansible.builtin.file:
+    path: /var/www/decoy/.well-known
+    state: directory
+    owner: aegis
+    group: aegis
+    mode: "0755"
+  become: true

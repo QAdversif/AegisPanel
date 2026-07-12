@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Aegis local dev stack.
+#
+# Brings up the infrastructure the Go panel talks to during development:
+#   - postgres  (operational data: admins, nodes, hosts, users, …)
+#   - redis     (subscription cache, rate-limit, sessions, ephemeral locks)
+#   - nats      (event bus + JetStream)
+#   - clickhouse(metrics: per-user traffic, node health, …)
+#   - minio     (S3-compatible blob storage for backups, decoy sites)
+#   - caddy     (TLS terminator + reverse proxy + ACME for *.aegis.local)
+#
+# The Go panel itself runs OUTSIDE docker (via `make backend`) so that
+# the dev cycle is fast and you can attach a debugger. The UI runs via
+# `make frontend`.
+#
+# Quick start:
+#   cp deploy/docker/.env.example deploy/docker/.env
+#   $EDITOR deploy/docker/.env
+#   make docker-dev
+#
+# Tear down:
+#   make docker-dev DOWN=1
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aegis-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aegis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegis}
+      POSTGRES_DB: ${POSTGRES_DB:-aegis}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aegis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aegis-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: aegis-nats
+    command: ["nats-server", "-js", "-sd", "/data"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    container_name: aegis-clickhouse
+    environment:
+      CLICKHOUSE_DB: aegis
+      CLICKHOUSE_USER: aegis
+      CLICKHOUSE_PASSWORD: aegis
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: aegis-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: aegis
+      MINIO_ROOT_PASSWORD: aegis-secret
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: aegis-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"   # admin API
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      AEGIS_PANEL_DOMAIN: ${AEGIS_PANEL_DOMAIN:-panel.aegis.local}
+      AEGIS_CADDY_ADMIN_TOKEN: ${AEGIS_CADDY_ADMIN_TOKEN:-aegis-dev-admin-token}
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  nats-data:
+  clickhouse-data:
+  minio-data:
+  caddy-data:
+  caddy-config:

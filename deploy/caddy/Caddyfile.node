@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Caddyfile for an Aegis node.
+#
+# Architecture context: ARCHITECTURE.md §15, §19.4.2, §26.6.
+#
+# Behaviour:
+#   * Random "secret" proxy path    → reverse proxy to sing-box/Xray
+#   * /healthz                      → 200 OK
+#   * everything else                → decoy site
+#
+# sing-box / Xray listens on 127.0.0.1:10000 (or whatever the core
+# listens on). Reality / fallbacks hand unknown clients back to Caddy,
+# which then serves the decoy site — the "double mask" described in
+# ARCHITECTURE.md §26.6.
+
+{
+    email {$AEGIS_NODE_EMAIL:admin@node.aegis.local}
+    acme_dns cloudflare {env.AEGIS_CLOUDFLARE_API_TOKEN}
+    admin localhost:2019
+}
+
+# Main domain on 443 (standard HTTPS) and the popular masquerade ports
+# from ARCHITECTURE.md §19.4.2. Caddy listens on all of them in
+# parallel — clients pick whichever one their network doesn't block.
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:443,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:2053,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:2083,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:2087,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:2095,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:2096,
+{$AEGIS_NODE_DOMAIN:node.aegis.local}:8443 {
+
+    # Random secret path → sing-box / Xray inbound on 127.0.0.1:10000.
+    @proxy_path path /_/proxy-*
+    handle @proxy_path {
+        reverse_proxy 127.0.0.1:10000
+    }
+
+    # Liveness for the panel agent's heartbeat.
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    # Decoy site for everyone else.
+    handle /* {
+        root * /var/www/decoy/node
+        file_server
+        encode gzip zstd
+        header {
+            X-Content-Type-Options "nosniff"
+            X-Frame-Options "SAMEORIGIN"
+        }
+    }
+
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    log {
+        output file /var/log/caddy/node-access.log {
+            roll_size 100MiB
+            roll_keep 3
+        }
+        format json
+    }
+}

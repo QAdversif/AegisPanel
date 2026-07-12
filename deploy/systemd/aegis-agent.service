@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# systemd unit for the Aegis node agent. Installed by the
+# `bootstrap_node` + `install_agent` Ansible roles.
+
+[Unit]
+Description=Aegis node agent
+Documentation=https://github.com/aegispanel/aegis
+After=network-online.target caddy.service
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=notify
+User=aegis
+Group=aegis
+WorkingDirectory=/opt/aegis-agent
+EnvironmentFile=/etc/aegis/agent.env
+ExecStart=/opt/aegis-agent/bin/aegis-agent
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aegis /var/log/aegis /var/www/decoy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

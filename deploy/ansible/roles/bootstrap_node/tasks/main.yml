@@ -1,0 +1,51 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Idempotently prepare a BYO node for hosting the Aegis agent + Core.
+# Phase 0 stub; expanded as we land real packages (Caddy, fail2ban,
+# firewall rules, decoy-site paths) in subsequent roles.
+
+- name: Ensure 'aegis' system group exists
+  ansible.builtin.group:
+    name: aegis
+    state: present
+
+- name: Ensure 'aegis' system user exists
+  ansible.builtin.user:
+    name: aegis
+    group: aegis
+    home: /var/lib/aegis
+    shell: /usr/sbin/nologin
+    system: true
+    createhome: true
+
+- name: Create base directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: aegis
+    group: aegis
+    mode: "0750"
+  loop:
+    - /opt/aegis-agent
+    - /opt/aegis-agent/bin
+    - /etc/aegis
+    - /var/lib/aegis
+    - /var/log/aegis
+    - /var/www/decoy
+
+- name: Refuse to run on unsupported distributions
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] in ['Debian', 'RedHat']
+    fail_msg: "Aegis node role supports Debian/Ubuntu and RHEL/Fedora only."
+
+- name: Install base packages
+  ansible.builtin.package:
+    name:
+      - ca-certificates
+      - curl
+      - jq
+      - rsync
+    state: present
+  become: true

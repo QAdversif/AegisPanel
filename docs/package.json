@@ -1,0 +1,19 @@
+{
+  "name": "aegis-docs",
+  "version": "0.0.0-dev",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Aegis documentation site (VuePress 2, local-only)",
+  "scripts": {
+    "dev": "vuepress dev --host 0.0.0.0 --port 8080",
+    "build": "vuepress build",
+    "preview": "vuepress preview",
+    "lint": "echo 'lint: skipped (VuePress site has no formal lint config yet)'"
+  },
+  "devDependencies": {
+    "@vuepress/bundler-vite": "^2.0.0",
+    "vue": "^3.5.13",
+    "vuepress": "^2.0.0"
+  }
+}

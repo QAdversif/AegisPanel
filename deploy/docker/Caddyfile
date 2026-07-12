@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Local-dev Caddyfile for the Aegis panel.
+#
+# Serves:
+#   * HTTPS on 443 for panel.aegis.local (and any *.aegis.local)
+#   * HTTP -> HTTPS redirect on :80
+#   * /metrics on a separate port (so scrapers don't have to fight ACME)
+#   * the ACME http-01 challenge endpoint on :80
+#
+# The Caddy admin API on :2019 is exposed for the panel to reload this
+# file at runtime (e.g. when a new host is added with a fresh decoy
+# path).
+
+{
+    # Internal CA for *.aegis.local so the dev browser trusts the
+    # certificate without manual installation. mkcert (https://mkcert.dev)
+    # is the standard tool, but the simpler approach for docker is to let
+    # Caddy issue a self-signed cert and import the CA into the system
+    # trust store on the host.
+    admin localhost:2019
+    admin {$AEGIS_CADDY_ADMIN_TOKEN:aegis-dev-admin-token}
+    auto_https off
+}
+
+# Plain HTTP -> serve the internal panel directly. In dev we are
+# behind the docker bridge, so TLS is off; Caddy in production handles
+# ACME / Cloudflare DNS-01.
+:8080 {
+    reverse_proxy host.docker.internal:8080
+    encode gzip zstd
+    log {
+        output stdout
+        format json
+    }
+}
+
+# Metrics endpoint on a separate port for Prometheus.
+:9100 {
+    reverse_proxy host.docker.internal:8080 {
+        @metrics path /metrics
+        route @metrics {
+            reverse_proxy host.docker.internal:8080
+        }
+    }
+    basicauth {
+        aegis $2a$14$placeholder-placeholder-placeholder-placeholder-placeholder
+    }
+}

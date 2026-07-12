@@ -1,0 +1,20 @@
+{
+  "nav": {
+    "dashboard": "Dashboard"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Operational overview of the Aegis panel.",
+    "panel": "Panel",
+    "nodes": "Nodes",
+    "users": "Users",
+    "hosts": "Hosts",
+    "lastChecked": "Last checked",
+    "placeholder": "Wired up in Phase 1+",
+    "status": {
+      "ok": "Online",
+      "down": "Offline",
+      "unknown": "Checking…"
+    }
+  }
+}

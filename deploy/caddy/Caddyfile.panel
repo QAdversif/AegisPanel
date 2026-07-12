@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Caddyfile for the Aegis panel.
+#
+# Architecture context: ARCHITECTURE.md §15, §19.4, §26.
+#
+# Behaviour:
+#   * Random "secret" admin path   → Aegis backend (Vue SPA + API)
+#   * Random "secret" sub path     → Aegis backend (subscription endpoint)
+#   * /healthz                     → backend
+#   * everything else               → decoy site
+#
+# The two secret paths are auto-generated on first boot and written to
+# /etc/aegis/panel.env. They are referenced here as environment
+# placeholders that Caddy's admin API rewrites at runtime.
+
+{
+    email {$AEGIS_PANEL_EMAIL:admin@panel.aegis.local}
+    acme_dns cloudflare {env.AEGIS_CLOUDFLARE_API_TOKEN}
+    admin localhost:2019
+}
+
+{$AEGIS_PANEL_DOMAIN:panel.aegis.local} {
+
+    # Aegis admin SPA + API. Mounted under a random path so the
+    # default URL doesn't leak "this is a VPN panel".
+    @admin_path path /s3cr3t-p4n3l-*/*
+    handle @admin_path {
+        reverse_proxy aegis-backend:8080
+        encode gzip zstd
+        header {
+            Strict-Transport-Security "max-age=31536000; includeSubDomains"
+            X-Content-Type-Options "nosniff"
+            X-Frame-Options "DENY"
+            Referrer-Policy "strict-origin-when-cross-origin"
+        }
+    }
+
+    # Subscription endpoint. Same trick — separate secret path so a
+    # scrape of /api/v1/users doesn't reveal the admin URL.
+    @sub_path path /s3cr3t-sub-*/*
+    handle @sub_path {
+        reverse_proxy aegis-backend:8080
+    }
+
+    # Liveness + readiness.
+    handle /healthz {
+        reverse_proxy aegis-backend:8080
+    }
+
+    # Prometheus metrics, with basic auth (placeholder).
+    @metrics path /metrics
+    handle @metrics {
+        basicauth {
+            aegis $2a$14$replace-me-with-real-bcrypt
+        }
+        reverse_proxy aegis-backend:8080
+    }
+
+    # Decoy site: the default behaviour. Anyone probing the panel
+    # domain gets the operator-supplied HTML, not the admin UI.
+    handle /* {
+        root * /var/www/decoy/panel
+        file_server
+        encode gzip zstd
+        header {
+            X-Content-Type-Options "nosniff"
+            X-Frame-Options "SAMEORIGIN"
+        }
+    }
+
+    log {
+        output file /var/log/caddy/panel-access.log {
+            roll_size 50MiB
+            roll_keep 5
+        }
+        format json
+    }
+}
