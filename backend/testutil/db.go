@@ -260,9 +260,19 @@ func runMigrations(t *testing.T, dsn string) error {
 }
 
 // applyMigration runs every statement in `raw` inside a single
-// `pgx.Tx`, skipping comments and empty lines. See runMigrations
-// for the rationale behind the manual split.
+// `pgx.Tx`, with full-line SQL comments stripped before splitting.
+// See runMigrations for the rationale behind the manual split.
+//
+// We strip `-- ...` *lines* (not just leading comments) before
+// splitting on `;`. Without this, a statement that starts with a
+// `-- +migrate Up` comment — as every goose-style migration does —
+// would either be skipped as a comment (no-op: tables never get
+// created) or sent to Postgres with a dangling comment that
+// depends on the parser being lenient. Stripping whole lines is
+// unambiguous and matches what `psql --filter-comments` does.
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
+	cleaned := stripSQLLineComments(raw)
+
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx for %s: %w", name, err)
@@ -274,9 +284,9 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) e
 		_ = tx.Rollback(ctx)
 	}()
 
-	for _, stmt := range splitSQL(raw) {
+	for _, stmt := range splitSQL(cleaned) {
 		trimmed := strings.TrimSpace(stmt)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+		if trimmed == "" {
 			continue
 		}
 		if _, err := tx.Exec(ctx, trimmed); err != nil {
@@ -288,6 +298,25 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) e
 		return fmt.Errorf("commit %s: %w", name, err)
 	}
 	return nil
+}
+
+// stripSQLLineComments removes any `-- ...` line from the input.
+// It does NOT touch `--` that appears inside a string literal —
+// none of Aegis' migrations do that today, and if we ever do, the
+// right fix is a proper SQL tokeniser, not a regex.
+func stripSQLLineComments(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, line := range strings.Split(s, "\n") {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			line = line[:idx]
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+	}
+	return b.String()
 }
 
 // splitSQL is a naive `;`-delimited splitter. Aegis migration files
