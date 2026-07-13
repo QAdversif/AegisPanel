@@ -13,11 +13,15 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 )
 
-// Build returns the v1 http.Handler for Aegis.
-func Build(cfg *config.Config) http.Handler {
+// Build returns the v1 http.Handler for Aegis. The auth subrouter is
+// wired into /api/v1/auth; its protected endpoints sit behind
+// auth.Service.Middleware() and surface the verified Claims on the
+// request context for downstream handlers.
+func Build(cfg *config.Config, authSvc *auth.Service) http.Handler {
 	r := chi.NewRouter()
 
 	// Built-in middlewares (recover, real IP, request ID, logger).
@@ -33,8 +37,11 @@ func Build(cfg *config.Config) http.Handler {
 			_, _ = w.Write([]byte(`{"status":"ok","version":"dev"}`))
 		})
 
+		// Auth surface: login, refresh, me. Mounted unconditionally
+		// in Phase 0 — Phase 1+ will mount it conditionally on cfg.AuthEnabled.
+		r.Mount("/auth", authSvc.Mount())
+
 		// Module routers will be mounted here in Phase 0+:
-		//   r.Mount("/auth",         auth.Router(cfg))
 		//   r.Mount("/users",        users.Router(cfg))
 		//   r.Mount("/nodes",        nodes.Router(cfg))
 		//   r.Mount("/hosts",        hosts.Router(cfg))
@@ -43,6 +50,6 @@ func Build(cfg *config.Config) http.Handler {
 		//   r.Mount("/webhooks",     webhooks.Router(cfg))
 	})
 
-	log.Info().Msg("v1 router initialised (modules to be mounted)")
+	log.Info().Msg("v1 router initialised (auth mounted)")
 	return r
 }
