@@ -58,7 +58,7 @@ jobs:
       - name: Build
         run: go build -trimpath ./...
 
-        - name: Run tests
+      - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Upload coverage
