@@ -53,6 +53,16 @@ func main() {
 			With().Timestamp().Logger()
 	}
 
+	// `aegis migrate …` is a maintenance subcommand that
+	// runs before the rest of the boot sequence. It does not
+	// touch the rest of config (env, observability, …) on
+	// purpose: a migrations command should not require a
+	// fully-initialised runtime to run.
+	if len(os.Args) >= 2 && os.Args[1] == "migrate" {
+		runMigrate(os.Args[2:])
+		return
+	}
+
 	// Top-level context for boot-time operations. Cancelled when
 	// the process receives SIGINT / SIGTERM (see signal.NotifyContext
 	// below). The cancel is registered as a defer *after* the early
@@ -182,4 +192,75 @@ func mustHash(plaintext string) string {
 		panic(fmt.Errorf("seed hash: %w", err))
 	}
 	return h
+}
+
+// runMigrate implements the `aegis migrate` subcommand. The
+// caller has already verified that os.Args[1] == "migrate";
+// args is the rest of the command line.
+//
+// Usage:
+//
+//	aegis migrate up    [DIR]    — apply every .sql file in DIR
+//	                              (default "migrations").
+//	aegis migrate down  FILE    — roll back a single migration
+//	                              file (filename only, no path).
+//
+// The DSN is read from AEGIS_POSTGRES_DSN directly so the
+// subcommand does not require the rest of the configuration
+// to be valid (env, observability, …) — useful when a
+// migrations run is the only thing that can recover a broken
+// install.
+func runMigrate(args []string) {
+	if len(args) == 0 {
+		migrateUsage()
+		os.Exit(2)
+	}
+	dsn := os.Getenv("AEGIS_POSTGRES_DSN")
+	if dsn == "" {
+		log.Fatal().Msg("migrate: AEGIS_POSTGRES_DSN is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		log.Fatal().Err(err).Msg("migrate: pgxpool.New")
+	}
+	defer pool.Close()
+
+	switch args[0] {
+	case "up":
+		dir := "migrations"
+		if len(args) >= 2 {
+			dir = args[1]
+		}
+		if err := migrations.Up(ctx, pool, dir); err != nil {
+			log.Fatal().Err(err).Msg("migrate up: failed")
+		}
+		log.Info().Str("dir", dir).Msg("migrate up: applied")
+	case "down":
+		if len(args) < 2 {
+			log.Fatal().Msg("migrate down: usage: aegis migrate down <file>")
+		}
+		target := args[1]
+		dir := "migrations"
+		if len(args) >= 3 {
+			dir = args[2]
+		}
+		if err := migrations.Down(ctx, pool, dir, target); err != nil {
+			log.Fatal().Err(err).Str("file", target).Msg("migrate down: failed")
+		}
+		log.Info().Str("file", target).Msg("migrate down: applied")
+	default:
+		migrateUsage()
+		os.Exit(2)
+	}
+}
+
+func migrateUsage() {
+	fmt.Fprintln(os.Stderr, "usage: aegis migrate <up|down> [args]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  aegis migrate up    [DIR]    apply every .sql in DIR (default migrations)")
+	fmt.Fprintln(os.Stderr, "  aegis migrate down  FILE    roll back FILE inside migrations/ (or DIR)")
 }

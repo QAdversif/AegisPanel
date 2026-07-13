@@ -67,15 +67,41 @@ func Up(ctx context.Context, pool *pgxpool.Pool, dir string) error {
 	return nil
 }
 
-// applyOne runs every Up-only statement of `raw` inside a single
-// pgx transaction. The Tx wrapper provides the atomicity that
-// the file-level BEGIN; ... COMMIT; would have provided in a tool
-// that honoured multi-statement transactions. If a statement
-// fails the Tx is rolled back, the file is left in its pre-state,
-// and we return an error that includes the failing statement's
-// first line for triage.
-func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
-	body := UpBodyOf(raw)
+// Down applies the Down body of a single migration file. The
+// file is `target` (a filename relative to `dir`, e.g.
+// "0001_initial.sql"); only the slice between the
+// `-- +migrate Down` marker and end-of-file is applied. See
+// DownBodyOf for the slicing rules.
+//
+// We deliberately do not "rewind" the whole database by
+// iterating files in reverse — the operator picks the
+// specific migration they want to roll back, and the
+// ordering of Down bodies is the file author's
+// responsibility. The current Aegis migration files write
+// DROP TABLE statements in the correct reverse-dependency
+// order, so a single Down per file is enough.
+func Down(ctx context.Context, pool *pgxpool.Pool, dir, target string) error {
+	if target == "" {
+		return fmt.Errorf("down: target file is required")
+	}
+	if strings.ContainsAny(target, "/\\") {
+		return fmt.Errorf("down: target must be a bare filename, not a path")
+	}
+	path := filepath.Join(dir, target)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return applyBody(ctx, pool, target, DownBodyOf(string(raw)))
+}
+
+// applyBody is the shared execution path for Up and Down. It
+// runs every statement in `body` inside a single pgx Tx,
+// skipping comments and empty lines. If a statement fails the
+// Tx is rolled back, the file is left in its pre-state, and we
+// return an error that includes the failing statement's first
+// line for triage.
+func applyBody(ctx context.Context, pool *pgxpool.Pool, name, body string) error {
 	cleaned := StripSQLLineComments(body)
 
 	tx, err := pool.Begin(ctx)
@@ -106,6 +132,12 @@ func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
 	return nil
 }
 
+// applyOne is the per-file wrapper used by Up. It pulls the Up
+// body out of `raw` and hands it to applyBody.
+func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
+	return applyBody(ctx, pool, name, UpBodyOf(raw))
+}
+
 // UpBodyOf extracts the Up body of a goose-style migration file.
 // The file may look like:
 //
@@ -123,18 +155,52 @@ func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
 // `-- +migrate Up` comment so error messages that surface a
 // failing statement also surface a useful line of context.
 func UpBodyOf(raw string) string {
-	const up = "-- +migrate Up"
-	upIdx := strings.Index(raw, up)
-	if upIdx < 0 {
-		return raw
+	return upDownBodyOf(raw, true)
+}
+
+// DownBodyOf is the inverse of UpBodyOf: it returns the slice
+// from the first `-- +migrate Down` marker to the end of the
+// file. If no Down marker is present, the function returns an
+// empty string — there is no sensible default for a Down that
+// has not been written. The slice keeps the leading
+// `-- +migrate Down` comment for the same reason UpBodyOf does
+// for its marker.
+func DownBodyOf(raw string) string {
+	return upDownBodyOf(raw, false)
+}
+
+// upDownBodyOf is the shared implementation. `up` is true for
+// the leading half (Up marker onward, stop at Down marker or
+// EOF) and false for the trailing half (Down marker onward).
+// Extracted so the two public helpers stay in lockstep — if the
+// marker logic ever changes (e.g. to honour
+// `-- +migrate StatementBegin` for multi-statement files), the
+// change is made in one place.
+func upDownBodyOf(raw string, up bool) string {
+	const upMarker = "-- +migrate Up"
+	const downMarker = "-- +migrate Down"
+
+	upIdx := strings.Index(raw, upMarker)
+	downIdx := strings.Index(raw, downMarker)
+
+	if up {
+		if upIdx < 0 {
+			return raw
+		}
+		// Stop at the Down marker if present, otherwise
+		// return to end of file. The slice keeps the
+		// Up marker comment itself.
+		if downIdx < 0 || downIdx < upIdx {
+			return raw[upIdx:]
+		}
+		return raw[upIdx:downIdx]
 	}
-	const down = "-- +migrate Down"
-	after := raw[upIdx+len(up):]
-	downIdx := strings.Index(after, down)
+
+	// Down slice.
 	if downIdx < 0 {
-		return raw[upIdx:]
+		return ""
 	}
-	return raw[upIdx : upIdx+len(up)+downIdx]
+	return raw[downIdx:]
 }
 
 // StripSQLLineComments removes any `-- ...` line from `s`. It does
