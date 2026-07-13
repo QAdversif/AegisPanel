@@ -43,7 +43,6 @@ linters:
       rules:
         - name: exported
           disabled: false
-        - name: package-comments
         - name: var-naming
         - name: indent-error-flow
         - name: error-strings

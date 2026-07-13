@@ -94,7 +94,7 @@ func (s *Signer) Verify(tokenString string) (*Claims, error) {
 		jwt.WithTimeFunc(s.now),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 	if !tok.Valid {
 		return nil, ErrInvalidToken
@@ -105,7 +105,7 @@ func (s *Signer) Verify(tokenString string) (*Claims, error) {
 // NewRefreshToken returns a cryptographically random 32-byte token
 // (base16-encoded, 64 chars) plus its SHA-256 hash. The token is
 // given to the client; only the hash is stored.
-func NewRefreshToken() (token string, hash string, err error) {
+func NewRefreshToken() (token, hash string, err error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", fmt.Errorf("rand: %w", err)
@@ -135,7 +135,7 @@ func ValidateRefreshTokenFormat(token string) error {
 		return ErrInvalidRefreshToken
 	}
 	for _, r := range token {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return ErrInvalidRefreshToken
 		}
 	}
