@@ -40,6 +40,8 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
@@ -93,6 +95,21 @@ func main() {
 	// All boot-time resources are now live — safe to register the
 	// signal-context cancel so graceful shutdown actually runs.
 	defer cancelBoot()
+
+	// In dev builds, register the noop core provider so the
+	// UI can talk to /api/v1/cores before any real provider
+	// (sing-box, xray, …) has been wired in. In production we
+	// expect a real provider to have self-registered via its
+	// own init() — adding noop there would shadow it.
+	if cfg.Env != "production" {
+		if err := cores.Register(noop.New("noop", "0.0.0-dev")); err != nil {
+			// Duplicate registration (e.g. a test that already
+			// inserted noop) is benign — log and move on.
+			log.Debug().Err(err).Msg("cores: noop already registered")
+		} else {
+			log.Info().Msg("cores: registered noop provider (dev mode)")
+		}
+	}
 
 	log.Info().
 		Str("version", "0.0.0-dev").
