@@ -14,7 +14,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,23 +26,21 @@ import (
 	// as blank imports so that `go mod tidy` keeps the corresponding
 	// requirements in go.mod. They will be wired into real modules in
 	// upcoming phases (auth/users → pgx, jwt, crypto, uuid; events → nats;
-	// cache → redis; validation → validator; migrations → goose; openapi → swag).
+	// cache → redis; validation → validator; openapi → swag).
 	_ "github.com/go-playground/validator/v10" // Phase 1 — input validation
 	_ "github.com/golang-jwt/jwt/v5"           // Phase 1 — JWT (access + refresh tokens)
 	_ "github.com/google/uuid"                 // Phase 1 — UUIDv4 generation
-	_ "github.com/jackc/pgx/v5/stdlib"         // Phase 1.1 — sql driver for goose
 	_ "github.com/nats-io/nats.go"             // Phase 1 — event bus / JetStream
-	_ "github.com/pressly/goose/v3"            // Phase 1.1 — SQL migrations
 	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/router"
 )
@@ -107,20 +104,12 @@ func main() {
 			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection")
 		}
 		defer pool.Close()
-		// Goose wants *sql.DB, so we open a sibling connection
-		// through the pgx stdlib adapter. The pool above is the
-		// runtime handle for the auth store; the sql.DB is just
-		// for migrations and is closed as soon as Up returns.
-		migDB, err := sql.Open("pgx", cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("sql.Open: failed to open migration connection")
-		}
-		// Close is best-effort: the connection lives only for the
-		// duration of the migration run, and at that point we are
-		// either shutting down cleanly (defer runs) or exiting via
-		// log.Fatal (defer skipped, OS reclaims the handle).
-		defer func() { _ = migDB.Close() }()
-		if err := runMigrations(ctx, migDB, "migrations"); err != nil {
+		// Apply migrations on the same pool the runtime uses. We
+		// deliberately do NOT open a sibling *sql.DB through the
+		// pgx stdlib adapter: that adapter does not honour
+		// multi-statement transactions, and Aegis migrations
+		// rely on BEGIN; ... COMMIT; in each file.
+		if err := migrations.Up(ctx, pool, "migrations"); err != nil {
 			log.Fatal().Err(err).Msg("migrations: failed to apply")
 		}
 		authStore = auth.NewPgStore(pool)
@@ -186,18 +175,4 @@ func mustHash(plaintext string) string {
 		panic(fmt.Errorf("seed hash: %w", err))
 	}
 	return h
-}
-
-// runMigrations applies all "*.sql" files under dir in lexical
-// order using goose. db is the *sql.DB destination; goose borrows
-// it for the duration of the migration run.
-func runMigrations(ctx context.Context, db *sql.DB, dir string) error {
-	goose.SetBaseFS(os.DirFS("."))
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("goose dialect: %w", err)
-	}
-	if err := goose.UpContext(ctx, db, dir); err != nil {
-		return fmt.Errorf("goose up: %w", err)
-	}
-	return nil
 }
