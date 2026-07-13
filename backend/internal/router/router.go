@@ -16,6 +16,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
@@ -24,7 +25,7 @@ import (
 // auth.Service.Middleware() and surface the verified Claims on the
 // request context for downstream handlers. Other module routers
 // (nodes, …) are mounted here too — see comments inline.
-func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service) http.Handler {
+func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, hostsSvc *hosts.Service) http.Handler {
 	r := chi.NewRouter()
 
 	// Built-in middlewares (recover, real IP, request ID, logger).
@@ -53,6 +54,11 @@ func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service) h
 		// auth middleware + ScopeNodes requirement (applied
 		// inside nodes.Router itself).
 		r.Mount("/nodes", nodes.Router(nodesSvc, authSvc.Middleware()))
+
+		// Hosts CRUD — Phase 1. Hosts reference nodes by id,
+		// so the hosts service is constructed in main.go with
+		// the nodes service as a dependency.
+		r.Mount("/hosts", hosts.Router(hostsSvc, authSvc.Middleware()))
 
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)

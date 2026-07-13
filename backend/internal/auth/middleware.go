@@ -28,6 +28,16 @@ func ClaimsFromContext(ctx context.Context) *Claims {
 	return v
 }
 
+// WithClaims attaches claims to a context. Intended for
+// tests that want to exercise a downstream middleware
+// (like RequireScope) without going through the real JWT
+// verification path. Production code should not use this —
+// Middleware() is the only safe way to put claims on a
+// request.
+func WithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, ctxKeyClaims, claims)
+}
+
 // Middleware returns a chi middleware that verifies a Bearer access
 // token on the Authorization header and stashes the resulting
 // claims on the request context. Public endpoints (login, refresh,
