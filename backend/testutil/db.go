@@ -272,30 +272,43 @@ func runMigrations(t *testing.T, dsn string) error {
 // unambiguous and matches what `psql --filter-comments` does.
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
 	cleaned := stripSQLLineComments(raw)
+	stmts := splitSQL(cleaned)
+	fmt.Fprintf(os.Stderr, "DEBUG applyMigration %s: %d statements\n", name, len(stmts))
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx for %s: %w", name, err)
 	}
 	defer func() {
-		// Rollback is a no-op after a successful Commit, so this
-		// is safe to leave attached to every path including the
-		// happy one.
 		_ = tx.Rollback(ctx)
 	}()
 
-	for _, stmt := range splitSQL(cleaned) {
+	for i, stmt := range stmts {
 		trimmed := strings.TrimSpace(stmt)
 		if trimmed == "" {
 			continue
 		}
 		if _, err := tx.Exec(ctx, trimmed); err != nil {
+			fmt.Fprintf(os.Stderr, "DEBUG   stmt %d failed: %s\n", i, truncate(trimmed, 80))
 			return fmt.Errorf("apply %s (stmt: %s...): %w", name, truncate(trimmed, 60), err)
 		}
+		fmt.Fprintf(os.Stderr, "DEBUG   stmt %d ok: %s\n", i, truncate(trimmed, 80))
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit %s: %w", name, err)
+	}
+	fmt.Fprintf(os.Stderr, "DEBUG applyMigration %s: committed\n", name)
+
+	// Sanity: after commit, verify the schema is visible to a
+	// fresh connection from the pool. If this check ever fails
+	// we'll know whether the issue is the commit itself or a
+	// connection-state quirk on the next migration.
+	var n int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_tables WHERE schemaname='public'").Scan(&n); err != nil {
+		fmt.Fprintf(os.Stderr, "DEBUG   post-commit verify failed: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "DEBUG   post-commit tables: %d\n", n)
 	}
 	return nil
 }
