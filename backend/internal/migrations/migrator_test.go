@@ -64,6 +64,65 @@ COMMIT;
 	}
 }
 
+func TestDownBodyOf_FullRoundTrip(t *testing.T) {
+	// Up and Down should be complementary slices — the Up
+	// body plus the Down body equals the markers-onward
+	// portion of the file, with no overlap.
+	in := `BEGIN;
+
+-- +migrate Up
+CREATE TABLE foo (id INT);
+
+-- +migrate Down
+DROP TABLE foo;
+DROP TABLE bar;
+
+COMMIT;
+`
+	up := UpBodyOf(in)
+	down := DownBodyOf(in)
+	if strings.Contains(up, "DROP TABLE") {
+		t.Fatalf("Down body leaked into Up: %q", up)
+	}
+	if !strings.Contains(down, "DROP TABLE foo") {
+		t.Fatalf("Down body missing expected statement: %q", down)
+	}
+	if !strings.Contains(down, "DROP TABLE bar") {
+		t.Fatalf("Down body missing second statement: %q", down)
+	}
+	if !strings.HasPrefix(down, "-- +migrate Down") {
+		t.Fatalf("Down body should start with the marker, got %q", down)
+	}
+}
+
+func TestDownBodyOf_NoMarker(t *testing.T) {
+	// A file with only an Up section has no Down body. The
+	// helper must return empty string (not panic, not
+	// return the whole file) so the Down call site can
+	// detect "this migration cannot be rolled back".
+	if got := DownBodyOf("-- +migrate Up\nSELECT 1;\n"); got != "" {
+		t.Fatalf("expected empty Down body, got %q", got)
+	}
+}
+
+func TestDownBodyOf_UpBeforeDown_KeepsBothHalves(t *testing.T) {
+	// A migration where the Up section is non-empty AND the
+	// Down section is non-empty must produce two distinct,
+	// non-overlapping slices.
+	in := "-- +migrate Up\nCREATE TABLE x(id INT);\n-- +migrate Down\nDROP TABLE x;\n"
+	up := UpBodyOf(in)
+	down := DownBodyOf(in)
+	if up == down {
+		t.Fatalf("Up and Down slices identical: %q", up)
+	}
+	if !strings.Contains(up, "CREATE TABLE") {
+		t.Fatalf("Up body missing CREATE: %q", up)
+	}
+	if !strings.Contains(down, "DROP TABLE") {
+		t.Fatalf("Down body missing DROP: %q", down)
+	}
+}
+
 func TestStripSQLLineComments_StripsEntireLine(t *testing.T) {
 	in := "SELECT 1;\n-- this is a comment\nSELECT 2;\n"
 	want := "SELECT 1;\n\nSELECT 2;\n"
