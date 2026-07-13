@@ -7,7 +7,8 @@
 // REST API for the admin UI, and renders multi-format subscription
 // configurations for end-user VPN clients.
 //
-// Architecture is documented in ../ARCHITECTURE.md.
+// Architecture is documented in ../ARCHITECTURE.md. The OpenAPI
+// spec for the HTTP API lives at docs/openapi.yaml.
 
 package main
 
