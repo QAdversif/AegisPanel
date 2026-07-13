@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        go: ['1.22', '1.23']
+        go: ['1.26']
 
     defaults:
       run:
@@ -52,11 +52,11 @@ jobs:
       - name: Build
         run: go build -trimpath ./...
 
-      - name: Run tests
+        - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Upload coverage
-        if: matrix.go == '1.22'
+        if: matrix.go == '1.26'
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -90,8 +90,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile=false
@@ -125,7 +123,7 @@ jobs:
       - name: Install sqlfluff
         run: pip install sqlfluff==3.0.3
       - name: Lint
-        run: sqlfluff lint backend/migrations
+        run: sqlfluff lint backend/migrations --dialect postgres
 
   # -----------------------------------------------------------------------
   # Ansible (ansible-lint on the deploy/ roles)
@@ -136,7 +134,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install ansible-lint
-        run: pip install ansible-lint==24.7.0
+        run: pip install ansible-lint==25.5.0
       - name: Lint
         run: ansible-lint deploy/ansible
 
