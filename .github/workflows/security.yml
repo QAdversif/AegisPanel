@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Aegis — security scanning.
+#
+# Runs four orthogonal scanners that the main `ci` workflow doesn't cover:
+#
+#   1. govulncheck  — known CVEs in Go module dependencies
+#   2. gitleaks    — secrets committed to source
+#   3. trivy       — known CVEs in the final container images
+#   4. pnpm audit  — known CVEs in frontend dependencies
+#
+# Triggers:
+#   - pull_request / push: catch regressions on the same commit
+#   - schedule (weekly):   catch newly disclosed CVEs in pinned deps
+#   - workflow_dispatch:   manual run from the Actions tab
+#
+# All jobs are strict: HIGH/CRITICAL findings fail the workflow. This is
+# intentional — false positives should be triaged and either fixed or
+# pinned via renovate-bot, not silenced globally.
+name: security
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  schedule:
+    # Mondays 06:00 UTC — cheap nightly-ish cadence for CVE drift.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. Go dependency CVEs
+  # -----------------------------------------------------------------------
+  govulncheck:
+    name: govulncheck (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: backend/go.sum
+          cache: true
+
+      - name: Show toolchain
+        run: go version
+
+      - name: Run govulncheck
+        # `govulncheck` only analyses symbols actually called from the
+        # build, so it produces a much smaller, higher-signal list than
+        # a naive `go list -m -u all`. The default exit code is 3 when
+        # a known vulnerability is reachable, so a non-zero exit is the
+        # gate — no need to parse output.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  # -----------------------------------------------------------------------
+  # 2. Secrets in source history
+  # -----------------------------------------------------------------------
+  gitleaks:
+    name: gitleaks (secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan pushed-up secrets that
+          # were later removed (a common foot-gun).
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Public repos: the OSS build is fine. If this ever moves to
+          # a private repo, swap to a GITLEAKS_LICENSE secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Upload SARIF to the Security tab so findings show up next
+          # to codeql results, not only in the Actions run log.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'true'
+          GITLEAKS_ENABLE_SUMMARY: 'true'
+
+  # -----------------------------------------------------------------------
+  # 3. Container image CVEs
+  # -----------------------------------------------------------------------
+  trivy:
+    name: trivy (${{ matrix.target.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: backend
+            file: backend/Dockerfile
+            tag: aegispanel:dev-${{ github.sha }}
+          - name: frontend
+            file: frontend/Dockerfile
+            tag: aegispanel-ui:dev-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build locally so trivy can scan the final image. The ci.yml
+      # `containers` job builds and discards, so we can't reuse it
+      # cheaply; an extra ~1-2 min per image is acceptable for a
+      # security gate that runs weekly and on every PR.
+      - name: Build ${{ matrix.target.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.target.file }}
+          tags: ${{ matrix.target.tag }}
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Scan image (HIGH+CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.target.tag }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.target.name }}.sarif'
+          severity: 'HIGH,CRITICAL'
+          # Distroless / Alpine base layers churn with upstream
+          # package updates that may not yet have a fix published
+          # by the maintainer — `ignore-unfixed` filters those out
+          # so the gate only fires on actually fixable issues.
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-${{ matrix.target.name }}.sarif'
+          category: 'trivy-${{ matrix.target.name }}'
+
+  # -----------------------------------------------------------------------
+  # 4. Frontend dependency CVEs
+  # -----------------------------------------------------------------------
+  pnpm-audit:
+    name: pnpm-audit (frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Audit
+        # `--audit-level=high` gates only on high+ severity so we don't
+        # burn a week on a moderate issue. `pnpm audit` exits non-zero
+        # on a gate failure, which is the desired behaviour.
+        run: pnpm audit --prod --audit-level=high
