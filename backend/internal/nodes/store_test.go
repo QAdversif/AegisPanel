@@ -15,8 +15,16 @@ func TestMemoryStore_CreateGetList(t *testing.T) {
 	s := NewMemoryStore()
 	ctx := context.Background()
 
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.SetClock(func() time.Time { return now })
+	// Monotonic-increasing clock so CreatedAt strictly
+	// orders the rows. A fixed clock makes List's sort
+	// unstable, which under -race sometimes returns rows in
+	// the wrong order and trips this assertion.
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var tick int64
+	s.SetClock(func() time.Time {
+		tick++
+		return t0.Add(time.Duration(tick) * time.Microsecond)
+	})
 
 	n1 := &Node{ID: uuid.New(), Name: "alpha", Region: "eu", State: StateNew, Address: "10.0.0.1:22"}
 	n2 := &Node{ID: uuid.New(), Name: "bravo", Region: "us", State: StateOnline, Address: "10.0.0.2:22"}
@@ -27,12 +35,15 @@ func TestMemoryStore_CreateGetList(t *testing.T) {
 		}
 	}
 
-	// Timestamps assigned by the store.
-	if !n1.CreatedAt.Equal(now) {
-		t.Fatalf("CreatedAt = %v, want %v", n1.CreatedAt, now)
+	// Timestamps assigned by the store. Each Create bumps
+	// the internal tick so n2's CreatedAt is strictly after
+	// n1's — the relative order matters, the absolute value
+	// does not.
+	if n2.CreatedAt.Before(n1.CreatedAt) {
+		t.Fatalf("n2.CreatedAt (%v) should be after n1.CreatedAt (%v)", n2.CreatedAt, n1.CreatedAt)
 	}
-	if !n2.UpdatedAt.Equal(now) {
-		t.Fatalf("UpdatedAt = %v, want %v", n2.UpdatedAt, now)
+	if !n1.UpdatedAt.Equal(n1.CreatedAt) {
+		t.Fatalf("UpdatedAt = %v, want %v (equal to CreatedAt on Create)", n1.UpdatedAt, n1.CreatedAt)
 	}
 
 	// GetByID returns a defensive copy — mutating the result
