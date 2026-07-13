@@ -120,6 +120,48 @@ func (s *PgStore) ConsumeRefresh(ctx context.Context, tokenHash string) (string,
 	return userID.String(), nil
 }
 
+// RevokeChain marks every still-valid refresh token belonging
+// to userID as used. Idempotent. Called when reuse of a
+// consumed token is detected — the most likely cause is
+// token theft, in which case the safest response is to
+// invalidate every outstanding refresh for that user.
+func (s *PgStore) RevokeChain(ctx context.Context, userID string) error {
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("parse user id: %w", err)
+	}
+	const q = `
+		UPDATE admin_refresh_tokens
+		SET used_at = NOW()
+		WHERE user_id = $1
+		  AND used_at IS NULL
+		  AND expires_at > NOW()`
+	if _, err := s.pool.Exec(ctx, q, uid); err != nil {
+		return fmt.Errorf("revoke chain: %w", err)
+	}
+	return nil
+}
+
+// FindRefreshUser returns the userID bound to a refresh token
+// hash WITHOUT marking it consumed. Returns ErrInvalidToken
+// if the hash is unknown.
+func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string, error) {
+	hashBytes, err := hexDecode(tokenHash)
+	if err != nil {
+		return "", ErrInvalidToken
+	}
+	const q = `SELECT user_id FROM admin_refresh_tokens WHERE token_hash = $1 LIMIT 1`
+	row := s.pool.QueryRow(ctx, q, hashBytes)
+	var userID uuid.UUID
+	if err := row.Scan(&userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrInvalidToken
+		}
+		return "", fmt.Errorf("find refresh user: %w", err)
+	}
+	return userID.String(), nil
+}
+
 // scopesForRole maps the `admins.role` column to a set of Scopes.
 // This is the only place where the wire format of the role enum
 // (from migration 0001) meets our internal Scope vocabulary.

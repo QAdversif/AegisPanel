@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Service is the public entry point for auth. It owns the Signer
@@ -66,7 +68,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (*LoginR
 
 // Refresh exchanges a valid refresh token for a new access+refresh
 // pair. The presented refresh token is consumed (single-use) and a
-// fresh one is returned. Reuse of a consumed token is rejected.
+// fresh one is returned. Reuse of a consumed token is rejected —
+// and triggers chain revocation, on the assumption that a token
+// being used twice is the most likely signal of theft.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*LoginResult, error) {
 	if err := ValidateRefreshTokenFormat(refreshToken); err != nil {
 		return nil, err
@@ -74,6 +78,24 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*LoginResul
 	hash := HashRefreshToken(refreshToken)
 	userID, err := s.store.ConsumeRefresh(ctx, hash)
 	if err != nil {
+		// ConsumeRefresh returns ErrInvalidToken in two cases:
+		//   (a) the token is unknown — natural end-of-life
+		//   (b) the token was already used — possible theft
+		// We distinguish them by asking the store for the
+		// userID without consuming. If we get a userID, the
+		// token was already consumed and we revoke the whole
+		// chain. If we get ErrInvalidToken, the row was never
+		// there to begin with.
+		if reuseUserID, lookupErr := s.store.FindRefreshUser(ctx, hash); lookupErr == nil {
+			// Token reuse — revoke the chain and return
+			// ErrInvalidToken. We log the revocation at
+			// warn level so a real incident is visible in
+			// the audit trail.
+			log.Warn().
+				Str("user_id", reuseUserID).
+				Msg("refresh token reuse detected — revoking chain")
+			_ = s.store.RevokeChain(ctx, reuseUserID)
+		}
 		return nil, err
 	}
 	u, err := s.lookupByID(ctx, userID)
