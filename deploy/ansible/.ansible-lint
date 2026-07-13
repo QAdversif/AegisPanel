@@ -19,7 +19,6 @@ skip_list:
   - var-naming[no-reserved]
   - var-naming[no-role-prefix]  # defaults shared across multiple roles (aegis_* prefix is intentional)
   - var-naming[pattern]        # variables use aegis_* / role_ prefix, not enforced
-  - syntax-check[false]
   - yaml[octal-values]
 
 use_default_rules: true
