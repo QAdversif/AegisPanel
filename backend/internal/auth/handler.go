@@ -12,31 +12,31 @@ import (
 
 // loginRequest is the POST /auth/login body. Both fields are required.
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string `json:"username" example:"admin"`
+	Password string `json:"password" example:"aegis-dev-password"`
 }
 
 // refreshRequest is the POST /auth/refresh body.
 type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refresh_token" example:"a3f1...64hex"`
 }
 
 // meResponse is the GET /auth/me body.
 type meResponse struct {
-	UserID   string   `json:"user_id"`
-	Username string   `json:"username"`
-	Scopes   []string `json:"scopes"`
+	UserID   string   `json:"user_id" example:"u-1"`
+	Username string   `json:"username" example:"admin"`
+	Scopes   []string `json:"scopes" example:"admin,read,write"`
 }
 
 // loginResponse is the POST /auth/login body on success. Refresh
 // token is returned in the body for now; Phase 1.1 will move it
 // into an HttpOnly cookie.
 type loginResponse struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token"`
-	TokenType    string    `json:"token_type"`
+	AccessToken  string    `json:"access_token" example:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."`
+	RefreshToken string    `json:"refresh_token" example:"a3f1...64hex"`
+	TokenType    string    `json:"token_type" example:"Bearer"`
 	ExpiresAt    time.Time `json:"expires_at"`
-	Scopes       []string  `json:"scopes"`
+	Scopes       []string  `json:"scopes" example:"admin,read,write"`
 }
 
 // handleLogin returns an http.HandlerFunc that authenticates a

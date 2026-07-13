@@ -41,6 +41,9 @@ func Build(cfg *config.Config, authSvc *auth.Service) http.Handler {
 		// in Phase 0 — Phase 1+ will mount it conditionally on cfg.AuthEnabled.
 		r.Mount("/auth", authSvc.Mount())
 
+		// OpenAPI spec + minimal self-contained index page.
+		mountSwagger(r)
+
 		// Module routers will be mounted here in Phase 0+:
 		//   r.Mount("/users",        users.Router(cfg))
 		//   r.Mount("/nodes",        nodes.Router(cfg))
