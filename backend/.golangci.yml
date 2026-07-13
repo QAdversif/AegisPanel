@@ -36,6 +36,7 @@ linters:
         - ifElseChain
         - hugeParam
         - rangeValCopy
+        - exitAfterDefer  # log.Fatal's os.Exit() skips defers anyway — moving defers past every Fatal is busywork
     gosec:
       excludes:
         - G304  # file inclusion via variable — needed for our config templates
