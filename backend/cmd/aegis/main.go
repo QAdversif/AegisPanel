@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,11 +34,12 @@ import (
 	_ "github.com/pressly/goose/v3"             // Phase 1 — SQL migrations
 	_ "github.com/redis/go-redis/v9"            // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                  // Phase 1 — OpenAPI generator
-	_ "golang.org/x/crypto/bcrypt"              // Phase 1 — password hashing
+	"golang.org/x/crypto/bcrypt"                // Phase 1 — password hashing (auth seeds)
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/router"
@@ -75,11 +77,26 @@ func main() {
 		Str("env", cfg.Env).
 		Msg("aegis panel starting")
 
-	// 3. Build the HTTP server with the v1 router.
+	// 3. Build the auth service. In Phase 0 this is an in-memory
+	//    store with a single seeded admin user; Phase 2 will swap
+	//    the store for a pgx-backed implementation.
+	authSigner := auth.NewSigner(cfg.JWTSecret)
+	authStore := auth.NewMemoryStore().WithUser(&auth.User{
+		ID:       "u-bootstrap",
+		Username: "admin",
+		// Dev seed password — Phase 0 only. Phase 1+ forces a
+		// password change on first login and reads from pgx.
+		PasswordHash: mustHash("aegis-dev-password"),
+		Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite},
+		CreatedAt:    time.Now().UTC(),
+	})
+	authSvc := auth.NewService(authSigner, authStore)
+
+	// 4. Build the HTTP server with the v1 router.
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc)),
 	}
 
 	// 4. Run the server in a goroutine so we can listen for signals.
@@ -112,4 +129,14 @@ func main() {
 	}
 
 	log.Info().Msg("aegis panel stopped")
+}
+
+// mustHash is a tiny panic-on-error wrapper around bcrypt for the
+// Phase 0 dev seed. Phase 1+ reads hashes from the database.
+func mustHash(plaintext string) []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	if err != nil {
+		panic(fmt.Errorf("seed hash: %w", err))
+	}
+	return h
 }

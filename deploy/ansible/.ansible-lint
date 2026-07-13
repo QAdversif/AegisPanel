@@ -1,0 +1,22 @@
+---
+# Aegis ansible-lint baseline.
+# We are not enforcing strict FQCN / name conventions in Phase 0 — most
+# playbooks are still placeholders. Tighten per-file as modules land.
+exclude_paths:
+  - .cache/
+  - .github/
+  - deploy/ansible/inventories/
+
+skip_list:
+  - role-name        # role dirs use kebab-case
+  - schema[meta]     # roles/*/meta/main.yml not yet populated
+  - fqcn[action-core]
+  - fqcn[action-plugin]
+  - name[play]
+  - name[role]
+  - name[task]
+  - var-naming[no-reserved]
+  - syntax-check[false]
+  - yaml[octal-values]
+
+use_default_rules: true
