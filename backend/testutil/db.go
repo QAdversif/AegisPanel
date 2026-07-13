@@ -31,7 +31,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -45,17 +44,6 @@ import (
 // this keeps `go test ./...` clean for anyone who does not have a
 // Postgres handy (CI is the only environment that must set it).
 const EnvIntegrationDSN = "INTEGRATION_DATABASE_URL"
-
-// leadingTxRE / trailingTxRE strip a single explicit `BEGIN;` and
-// `COMMIT;` from a migration file so pgx's `Tx` wrapper can own the
-// transaction boundary. We anchor on the start / end of the string
-// and tolerate optional whitespace. The migrator is permissive on
-// purpose — the original goose-style `BEGIN; ... -- +migrate Up ...
-// COMMIT;` is what we expect to see.
-var (
-	leadingTxRE  = regexp.MustCompile(`(?m)^\s*BEGIN\s*;\s*\n`)
-	trailingTxRE = regexp.MustCompile(`(?m)\n\s*COMMIT\s*;\s*$`)
-)
 
 // MustNewPool connects to INTEGRATION_DATABASE_URL, drops and
 // recreates the target database, applies every goose migration in
@@ -218,19 +206,21 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 // `BEGIN;` transaction wrapper. The integration suite only needs
 // the schema in place — not goose's version-tracking table.
 //
-// Our migrations wrap their bodies in `BEGIN; ... COMMIT;`, which
-// pgx would have to parse-and-resubmit as a single transaction.
-// The simple Exec helpers do not do that — pgx's `pool.Exec` runs
-// the first statement, sees BEGIN, and any follow-up statements in
-// the same call are sent on a fresh implicit transaction. To make
-// the migration atomic we strip the explicit `BEGIN;` / `COMMIT;`
-// from the file and let pgx's `Tx` wrapper provide the transaction
-// boundary instead. This is test-only; production migrations keep
-// their original `BEGIN; ... COMMIT;` and use goose there.
+// pgx's Exec helpers do not transparently apply a multi-statement
+// string that contains its own `BEGIN;` / `COMMIT;` block: in
+// extended-query mode each statement is sent separately, so the
+// first `BEGIN` opens a server-side transaction that is left
+// dangling when pgx moves on. The simplest portable answer is to
+// split the file into individual SQL statements on `;` (none of
+// the project's migration files embed a `;` inside a string
+// literal, so a naïve split is safe here) and run each one
+// inside a single `pgx.Tx`. Comments and empty lines are skipped
+// so we don't waste round-trips on `-- +migrate Up` markers.
 //
-// If a future migration depends on goose-only features (goose fix,
+// If a future migration embeds `;` inside a string literal or
+// uses a feature that needs goose-only tooling (e.g. `goose fix`,
 // Go migrators, multi-version downgrades) we'll need to revisit
-// this and align goose's behaviour with the rest of the suite.
+// this helper and align the production migrator's behaviour.
 func runMigrations(t *testing.T, dsn string) error {
 	t.Helper()
 
@@ -254,18 +244,6 @@ func runMigrations(t *testing.T, dsn string) error {
 	}
 	defer pool.Close()
 
-	// Strip an explicit leading BEGIN; and trailing COMMIT; from
-	// each file so the pgx Tx wrapper below owns the transaction
-	// boundary. The regex tolerates optional whitespace and a
-	// trailing semicolon. We only touch the very first BEGIN; and
-	// the very last COMMIT; in the file — anything in the middle
-	// is left alone.
-	stripTx := func(s string) string {
-		s = leadingTxRE.ReplaceAllString(s, "")
-		s = trailingTxRE.ReplaceAllString(s, "")
-		return s
-	}
-
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
@@ -274,21 +252,57 @@ func runMigrations(t *testing.T, dsn string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", e.Name(), err)
 		}
-		body := stripTx(string(raw))
-
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("begin tx for %s: %w", e.Name(), err)
-		}
-		if _, err := tx.Exec(ctx, body); err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("apply %s: %w", e.Name(), err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit %s: %w", e.Name(), err)
+		if err := applyMigration(ctx, pool, e.Name(), string(raw)); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// applyMigration runs every statement in `raw` inside a single
+// `pgx.Tx`, skipping comments and empty lines. See runMigrations
+// for the rationale behind the manual split.
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx for %s: %w", name, err)
+	}
+	defer func() {
+		// Rollback is a no-op after a successful Commit, so this
+		// is safe to leave attached to every path including the
+		// happy one.
+		_ = tx.Rollback(ctx)
+	}()
+
+	for _, stmt := range splitSQL(raw) {
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		if _, err := tx.Exec(ctx, trimmed); err != nil {
+			return fmt.Errorf("apply %s (stmt: %s...): %w", name, truncate(trimmed, 60), err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit %s: %w", name, err)
+	}
+	return nil
+}
+
+// splitSQL is a naive `;`-delimited splitter. Aegis migration files
+// do not embed `;` inside string literals, so this is safe; if
+// that ever changes we'll need a tokeniser that respects quotes
+// and dollar-quoted blocks.
+func splitSQL(raw string) []string { return strings.Split(raw, ";") }
+
+// truncate is a tiny helper for error messages — keeps the failing
+// statement to one readable line.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // findBackendDir returns the absolute path to the `backend/`
