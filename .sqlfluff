@@ -7,16 +7,17 @@ dialect = postgres
 # during the early-development phase. Tighten per-rule as the project
 # stabilises.
 
-# LT01 (whitespace alignment in CREATE TABLE) is stylistic and breaks
-# the moment a new column is added. Disabled until we have an auto-fmt
-# step. LT05 (line length) raised to 120 — SQL identifiers are long,
-# and reflowing every constraint onto multiple lines hurts readability.
-exclude_rules = LT01, LT05
-max_line_length = 120
+# Phase 0 — only the bootstrap migration is in place, hand-written and
+# still being iterated on. Loosen rules that would block trivial merges
+# during the early-development phase. Tighten per-rule as the project
+# stabilises.
 
-# LT07/08/09 (BEGIN/COMMIT, blank line at end, blank line at start) are
-# stylistic; allow.
-# Capitalisation rules are stylistic; skip for now.
+# LT01 (whitespace alignment in CREATE TABLE) is stylistic and breaks
+# the moment a new column is added. LT05 (line length) raised to 120 —
+# SQL identifiers are long, reflowing every constraint onto multiple
+# lines hurts readability. LT07/08/09 (BEGIN/COMMIT, trailing blank
+# lines) are stylistic. Capitalisation.* are stylistic; we'll tighten
+# once we have an auto-fmt step.
 exclude_rules = LT01, LT05, LT07, LT08, LT09, capitalisation.keywords, capitalisation.identifiers, capitalisation.functions, capitalisation.literals, capitalisation.types
 max_line_length = 120
 
