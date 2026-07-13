@@ -13,7 +13,7 @@ PKG        := ./...
 COVERAGE   := coverage.out
 LINTER_CFG := .golangci.yml
 
-.PHONY: help build run test test-coverage lint fmt tidy clean docker docker-build
+.PHONY: help build run test test-integration test-coverage lint fmt tidy clean docker docker-build
 
 help: ## Show this help.
 	@printf "Backend Makefile\n\nUsage: make <target>\n\nTargets:\n"
@@ -31,6 +31,13 @@ run: ## Run the service in the foreground.
 
 test: ## Run unit tests.
 	@$(GO) test -race -count=1 $(PKG)
+
+# Integration tests require a live Postgres. The `testutil.MustNewPool`
+# helper skips the suite when INTEGRATION_DATABASE_URL is unset, so
+# `make test-integration` is safe to run anywhere; only an empty result
+# is reported if no DB is configured.
+test-integration: ## Run integration tests (requires INTEGRATION_DATABASE_URL).
+	@$(GO) test -race -count=1 -tags=integration $(PKG)
 
 test-coverage: ## Run unit tests with coverage report.
 	@$(GO) test -race -count=1 -coverprofile=$(COVERAGE) $(PKG)
