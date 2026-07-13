@@ -267,14 +267,6 @@ func stringRepeat(s string, n int) string {
 	return string(out)
 }
 
-func makeSlice(n int, fill string) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = fill
-	}
-	return out
-}
-
 // uniqueValues returns n distinct strings, each prefixed with
 // the index so dedup never collapses them. Used to test the
 // cap-at-maxTags path without entangling it with the dedup path.

@@ -27,12 +27,20 @@ import (
 // constraint, so do not change them without a migration.
 type State string
 
+// State values. The set is closed (see validateState in service.go)
+// — any value outside this list is rejected at the Service
+// boundary.
 const (
-	StateNew      State = "new"      // registered but not yet bootstrapped
-	StateOnline   State = "online"   // agent reported healthy recently
-	StateDraining State = "draining" // out of rotation, no new users
-	StateOffline  State = "offline"  // agent unreachable
-	StateDisabled State = "disabled" // operator disabled
+	// StateNew: registered but not yet bootstrapped.
+	StateNew State = "new"
+	// StateOnline: agent reported healthy recently.
+	StateOnline State = "online"
+	// StateDraining: out of rotation, no new users.
+	StateDraining State = "draining"
+	// StateOffline: agent unreachable.
+	StateOffline State = "offline"
+	// StateDisabled: operator disabled.
+	StateDisabled State = "disabled"
 )
 
 // Node is the panel-side view of a VPN node. The fields mirror

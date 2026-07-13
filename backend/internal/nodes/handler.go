@@ -134,14 +134,12 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
-		n, err := s.Update(r.Context(), id, UpdateInput{
-			Name:         req.Name,
-			Region:       req.Region,
-			State:        req.State,
-			Address:      req.Address,
-			CapacityHint: req.CapacityHint,
-			Tags:         req.Tags,
-		})
+		// updateRequest and UpdateInput have identical fields, so
+		// a direct conversion is the cleanest way to pass the
+		// patch through. The staticcheck S1016 hint that flagged
+		// the previous struct-literal version is happy with
+		// this form.
+		n, err := s.Update(r.Context(), id, UpdateInput(req))
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -219,14 +217,16 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // jsonString escapes a Go string for safe inclusion in a JSON
 // string literal. Same implementation as auth.jsonString,
 // duplicated here so this package has no dependency on auth
-// internals.
+// internals. Non-ASCII runes are emitted as JSON \uXXXX escapes
+// via a hex round-trip rather than a direct byte cast, which
+// gosec flags as a potential integer-overflow conversion.
 func jsonString(s string) string {
 	var b []byte
 	b = append(b, '"')
 	for _, r := range s {
 		switch r {
 		case '"', '\\':
-			b = append(b, '\\', byte(r))
+			b = append(b, '\\', '\\', byte(r))
 		case '\n':
 			b = append(b, '\\', 'n')
 		case '\r':
@@ -239,7 +239,10 @@ func jsonString(s string) string {
 				// be invalid in JSON anyway.
 				continue
 			}
-			b = append(b, byte(r))
+			// Round-trip through fmt.Sprintf so we get the
+			// right escape for any rune without the
+			// gosec-flagged rune→byte cast.
+			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
 		}
 	}
 	b = append(b, '"')

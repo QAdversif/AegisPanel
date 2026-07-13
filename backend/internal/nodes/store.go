@@ -91,6 +91,9 @@ func NewMemoryStore() *MemoryStore {
 // SetClock swaps the time source. Intended for tests only.
 func (s *MemoryStore) SetClock(now func() time.Time) { s.now = now }
 
+// Create inserts n into the store. ErrDuplicate is returned
+// if either the Name or the ID collides with an existing row.
+// CreatedAt and UpdatedAt are stamped from s.now.
 func (s *MemoryStore) Create(_ context.Context, n *Node) error {
 	if n == nil {
 		return fmt.Errorf("create: nil node")
@@ -114,6 +117,7 @@ func (s *MemoryStore) Create(_ context.Context, n *Node) error {
 	return nil
 }
 
+// GetByID returns the node with the given id or ErrNotFound.
 func (s *MemoryStore) GetByID(_ context.Context, id uuid.UUID) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -124,6 +128,7 @@ func (s *MemoryStore) GetByID(_ context.Context, id uuid.UUID) (*Node, error) {
 	return cloneNode(n), nil
 }
 
+// GetByName returns the node with the given name or ErrNotFound.
 func (s *MemoryStore) GetByName(_ context.Context, name string) (*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -134,6 +139,9 @@ func (s *MemoryStore) GetByName(_ context.Context, name string) (*Node, error) {
 	return cloneNode(s.byID[id]), nil
 }
 
+// List returns every node sorted by CreatedAt ascending. The
+// returned slice is freshly allocated and safe for the caller
+// to mutate.
 func (s *MemoryStore) List(_ context.Context) ([]*Node, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -147,6 +155,10 @@ func (s *MemoryStore) List(_ context.Context) ([]*Node, error) {
 	return out, nil
 }
 
+// Update replaces the stored copy of n.ID. ErrNotFound if the
+// id is unknown; ErrDuplicate if the rename would collide with
+// an existing node. CreatedAt is preserved; UpdatedAt is
+// bumped.
 func (s *MemoryStore) Update(_ context.Context, n *Node) error {
 	if n == nil || n.ID == uuid.Nil {
 		return fmt.Errorf("update: missing id")
@@ -173,6 +185,8 @@ func (s *MemoryStore) Update(_ context.Context, n *Node) error {
 	return nil
 }
 
+// Delete removes the node with the given id. Returns ErrNotFound
+// if no such node exists.
 func (s *MemoryStore) Delete(_ context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
