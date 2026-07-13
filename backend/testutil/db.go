@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -44,6 +45,17 @@ import (
 // this keeps `go test ./...` clean for anyone who does not have a
 // Postgres handy (CI is the only environment that must set it).
 const EnvIntegrationDSN = "INTEGRATION_DATABASE_URL"
+
+// leadingTxRE / trailingTxRE strip a single explicit `BEGIN;` and
+// `COMMIT;` from a migration file so pgx's `Tx` wrapper can own the
+// transaction boundary. We anchor on the start / end of the string
+// and tolerate optional whitespace. The migrator is permissive on
+// purpose — the original goose-style `BEGIN; ... -- +migrate Up ...
+// COMMIT;` is what we expect to see.
+var (
+	leadingTxRE  = regexp.MustCompile(`(?m)^\s*BEGIN\s*;\s*\n`)
+	trailingTxRE = regexp.MustCompile(`(?m)\n\s*COMMIT\s*;\s*$`)
+)
 
 // MustNewPool connects to INTEGRATION_DATABASE_URL, drops and
 // recreates the target database, applies every goose migration in
@@ -197,23 +209,27 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 }
 
 // runMigrations applies every `.sql` file in the project-root
-// `migrations/` directory in lexical order.
+// `migrations/` directory in lexical order, each in its own
+// transaction.
 //
 // We deliberately bypass goose here. The production migrator
 // (`cmd/aegis/main.go`) uses `goose.UpContext`, but goose v3.27.2's
 // default parser rejects files that begin with an explicit
-// `BEGIN;` transaction wrapper, even when pgx itself handles the
-// same file fine as a multi-statement Exec. The integration suite
-// only needs the schema in place — not goose's version-tracking
-// table — so the simpler path is to read each migration and exec
-// it as a single multi-statement query. We use `pgxpool.Pool.Exec`
-// directly (not `database/sql`) because the stdlib adapter splits
-// on `;` and would not honour explicit `BEGIN; ... COMMIT;`
-// boundaries in the migration file.
+// `BEGIN;` transaction wrapper. The integration suite only needs
+// the schema in place — not goose's version-tracking table.
 //
-// If the project later adds a migration that depends on goose-only
-// features (e.g. `goose fix` data migrations, multi-version
-// downgrades, or a custom Go migrator), we'll need to revisit
+// Our migrations wrap their bodies in `BEGIN; ... COMMIT;`, which
+// pgx would have to parse-and-resubmit as a single transaction.
+// The simple Exec helpers do not do that — pgx's `pool.Exec` runs
+// the first statement, sees BEGIN, and any follow-up statements in
+// the same call are sent on a fresh implicit transaction. To make
+// the migration atomic we strip the explicit `BEGIN;` / `COMMIT;`
+// from the file and let pgx's `Tx` wrapper provide the transaction
+// boundary instead. This is test-only; production migrations keep
+// their original `BEGIN; ... COMMIT;` and use goose there.
+//
+// If a future migration depends on goose-only features (goose fix,
+// Go migrators, multi-version downgrades) we'll need to revisit
 // this and align goose's behaviour with the rest of the suite.
 func runMigrations(t *testing.T, dsn string) error {
 	t.Helper()
@@ -238,6 +254,18 @@ func runMigrations(t *testing.T, dsn string) error {
 	}
 	defer pool.Close()
 
+	// Strip an explicit leading BEGIN; and trailing COMMIT; from
+	// each file so the pgx Tx wrapper below owns the transaction
+	// boundary. The regex tolerates optional whitespace and a
+	// trailing semicolon. We only touch the very first BEGIN; and
+	// the very last COMMIT; in the file — anything in the middle
+	// is left alone.
+	stripTx := func(s string) string {
+		s = leadingTxRE.ReplaceAllString(s, "")
+		s = trailingTxRE.ReplaceAllString(s, "")
+		return s
+	}
+
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
@@ -246,8 +274,18 @@ func runMigrations(t *testing.T, dsn string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", e.Name(), err)
 		}
-		if _, err := pool.Exec(ctx, string(raw)); err != nil {
+		body := stripTx(string(raw))
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin tx for %s: %w", e.Name(), err)
+		}
+		if _, err := tx.Exec(ctx, body); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply %s: %w", e.Name(), err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit %s: %w", e.Name(), err)
 		}
 	}
 	return nil
