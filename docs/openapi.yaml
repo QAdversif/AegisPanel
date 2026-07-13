@@ -1,0 +1,232 @@
+openapi: 3.0.3
+info:
+  title: Aegis Panel API
+  version: 0.1.0
+  description: |
+    Aegis — self-hosted VPN control panel. Multi-core (sing-box / Xray /
+    Hysteria 2), BYO Node, Cascade Topology, MCP-driven, decoy sites,
+    port masquerading.
+
+    This document covers the Phase 1 surface — currently the auth
+    subrouter. Subsequent phases will add /nodes, /users,
+    /subscriptions, /cabinet, /webhooks.
+
+  license:
+    name: AGPL-3.0-or-later
+  contact:
+    name: Aegis Panel
+    url: https://github.com/QAdversif/AegisPanel
+
+servers:
+  - url: https://panel.example.com/api/v1
+    description: Production
+  - url: http://localhost:8080/api/v1
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Authenticate
+      description: |
+        Exchange username + password for an access token and a refresh
+        token. Wrong credentials always return 401 — the error never
+        distinguishes "unknown user" from "wrong password" so
+        attackers cannot enumerate.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Malformed body or missing fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh
+      description: |
+        Trade a refresh token for a fresh access+refresh pair. The
+        presented token is consumed (single-use). Reuse of a
+        consumed token is detected and triggers chain revocation:
+        every outstanding refresh for the user is invalidated,
+        the response is 401, and a `WARN` log line is emitted. This
+        is the most likely signal of token theft.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Malformed body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: |
+            Invalid or already-used refresh token; chain may have
+            been revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Who am I
+      description: |
+        Return the identity of the principal behind the bearer
+        access token.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        `Authorization: Bearer <jwt-access-token>`. Tokens are
+        HS256-signed by Aegis (`iss=aegis-panel`,
+        `aud=aegis-panel/v1`).
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: admin
+        password:
+          type: string
+          format: password
+          example: aegis-dev-password
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          example: 4f2a8b...64hex
+          description: |
+            Opaque 32-byte hex token (64 chars lowercase). Only the
+            SHA-256 hash is stored server-side.
+
+    LoginResponse:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_at, scopes]
+      properties:
+        access_token:
+          type: string
+          description: HS256 JWT access token. 15-min TTL.
+        refresh_token:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: |
+            Opaque refresh token. 30-day TTL. Single-use; rotation
+            on every refresh.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_at:
+          type: string
+          format: date-time
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [admin, read, write, nodes, users, subscriptions]
+
+    MeResponse:
+      type: object
+      required: [user_id, username, scopes]
+      properties:
+        user_id:
+          type: string
+          example: u-bootstrap
+        username:
+          type: string
+          example: admin
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [admin, read, write, nodes, users, subscriptions]
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: |
+            Human-readable error message. Note that for security
+            reasons the auth endpoints collapse several
+            failure modes into a single generic message; do
+            not branch on the message text.
