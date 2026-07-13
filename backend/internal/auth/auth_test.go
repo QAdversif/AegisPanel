@@ -94,6 +94,49 @@ func TestRefresh_BadFormat(t *testing.T) {
 	}
 }
 
+// TestRefresh_ReuseRevokesChain simulates the most likely
+// theft scenario: an attacker obtains a refresh token that
+// the legitimate user already used. We do exactly what the
+// attacker would — call Refresh twice with the same token. The
+// second call must fail (good) and must also invalidate every
+// other refresh token the user has, so the attacker cannot
+// pivot to a sibling token the user might still be holding.
+func TestRefresh_ReuseRevokesChain(t *testing.T) {
+	svc := newTestService(t)
+
+	// Legitimate user logs in twice. Each login yields its own
+	// refresh token. The first is a "spent" chain (we will
+	// reuse it below), the second is a "live" chain that must
+	// be killed by the revocation.
+	res1, err := svc.Login(context.Background(), "admin", "hunter2-correct-horse")
+	if err != nil {
+		t.Fatalf("login 1: %v", err)
+	}
+	res2, err := svc.Login(context.Background(), "admin", "hunter2-correct-horse")
+	if err != nil {
+		t.Fatalf("login 2: %v", err)
+	}
+	if res1.RefreshToken == res2.RefreshToken {
+		t.Fatal("logins produced identical refresh tokens; expected distinct")
+	}
+
+	// Normal refresh on res1 — succeeds, issues a new pair.
+	if _, err := svc.Refresh(context.Background(), res1.RefreshToken); err != nil {
+		t.Fatalf("first refresh of res1: %v", err)
+	}
+
+	// Replay res1 — must fail AND must revoke res2.
+	if _, err := svc.Refresh(context.Background(), res1.RefreshToken); err == nil {
+		t.Fatal("replay of res1 was accepted; expected ErrInvalidToken")
+	}
+
+	// res2 must now be revoked too. The legitimate user's
+	// next refresh attempt fails; they have to log in again.
+	if _, err := svc.Refresh(context.Background(), res2.RefreshToken); err == nil {
+		t.Fatal("res2 was not revoked after reuse of res1; expected ErrInvalidToken")
+	}
+}
+
 func TestVerify_RoundTrip(t *testing.T) {
 	svc := newTestService(t)
 	svc.signer.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
