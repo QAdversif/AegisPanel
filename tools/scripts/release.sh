@@ -111,8 +111,6 @@ declare -A BUCKETS=(
     ["style"]="Chore"
     ["revert"]="Removed"
 )
-declare -A SECTIONS=()
-
 # Build a temp file per bucket.
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT

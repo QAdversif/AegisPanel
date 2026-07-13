@@ -90,8 +90,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile=false
@@ -125,7 +123,7 @@ jobs:
       - name: Install sqlfluff
         run: pip install sqlfluff==3.0.3
       - name: Lint
-        run: sqlfluff lint backend/migrations
+        run: sqlfluff lint backend/migrations --dialect postgres
 
   # -----------------------------------------------------------------------
   # Ansible (ansible-lint on the deploy/ roles)
