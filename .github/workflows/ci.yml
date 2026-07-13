@@ -35,6 +35,28 @@ jobs:
         os: [ubuntu-latest]
         go: ['1.26']
 
+    # `services: postgres` is what makes the integration suite possible
+    # without testcontainers. The image is pinned to a specific Postgres
+    # major — `postgres:16-alpine` — and the credentials / db name are
+    # passed to the test step via INTEGRATION_DATABASE_URL. We pre-create
+    # a healthcheck wait so the runner doesn't race the service boot
+    # (Go tests have a 30s retry loop in testutil, but a healthcheck
+    # gives a deterministic ready signal in the Actions log).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+          POSTGRES_DB: aegis_it
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis_it"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     defaults:
       run:
         working-directory: backend
@@ -58,8 +80,18 @@ jobs:
       - name: Build
         run: go build -trimpath ./...
 
-      - name: Run tests
+      - name: Run unit tests
         run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Run integration tests
+        # `INTEGRATION_DATABASE_URL` is what the `testutil.MustNewPool`
+        # helper expects. The DSN points at the service container on
+        # `localhost:5432` (the port mapping above exposes 5432 from
+        # the service to the runner host). On every test run the
+        # helper drops & recreates the database for isolation.
+        env:
+          INTEGRATION_DATABASE_URL: postgres://aegis:aegis@localhost:5432/aegis_it?sslmode=disable
+        run: go test -race -count=1 -tags=integration ./...
 
       - name: Upload coverage
         if: matrix.go == '1.26'
@@ -70,6 +102,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: golangci-lint
+        # Lint the integration build too — the suite imports the
+        # production code via testutil and would otherwise escape the
+        # linter's view.
+        env:
+          GOFLAGS: -tags=integration
         working-directory: backend
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
