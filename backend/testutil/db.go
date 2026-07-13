@@ -26,7 +26,6 @@ package testutil
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -38,7 +37,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver
 )
 
 // EnvIntegrationDSN is the connection string the integration tests
@@ -108,16 +106,17 @@ func pingWithRetry(t *testing.T, dsn string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		db, err := sql.Open("pgx", dsn)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		pool, err := pgxpool.New(ctx, dsn)
 		if err != nil {
+			cancel()
 			lastErr = err
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err = db.PingContext(ctx)
+		err = pool.Ping(ctx)
+		pool.Close()
 		cancel()
-		_ = db.Close()
 		if err == nil {
 			return nil
 		}
@@ -174,24 +173,24 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 // lingering session.
 func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 	t.Helper()
-	db, err := sql.Open("pgx", adminDSN)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if _, err := db.ExecContext(ctx,
+	pool, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	if _, err := pool.Exec(ctx,
 		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName),
 	); err != nil {
 		return fmt.Errorf("terminate backends: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
 		return fmt.Errorf("drop database: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+	if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
 		return fmt.Errorf("create database: %w", err)
 	}
 	return nil
@@ -203,12 +202,14 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 // We deliberately bypass goose here. The production migrator
 // (`cmd/aegis/main.go`) uses `goose.UpContext`, but goose v3.27.2's
 // default parser rejects files that begin with an explicit
-// `BEGIN;` transaction wrapper, even when the same files parse
-// fine via `database/sql.Exec`. The integration suite only needs
-// the schema in place — not goose's version-tracking table —
-// so the simpler path is to read each migration and exec it as a
-// single multi-statement query. pgx supports that natively; no
-// SQL changes required.
+// `BEGIN;` transaction wrapper, even when pgx itself handles the
+// same file fine as a multi-statement Exec. The integration suite
+// only needs the schema in place — not goose's version-tracking
+// table — so the simpler path is to read each migration and exec
+// it as a single multi-statement query. We use `pgxpool.Pool.Exec`
+// directly (not `database/sql`) because the stdlib adapter splits
+// on `;` and would not honour explicit `BEGIN; ... COMMIT;`
+// boundaries in the migration file.
 //
 // If the project later adds a migration that depends on goose-only
 // features (e.g. `goose fix` data migrations, multi-version
@@ -228,14 +229,14 @@ func runMigrations(t *testing.T, dsn string) error {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
 
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
-	}
-	defer db.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("pgxpool: %w", err)
+	}
+	defer pool.Close()
 
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
@@ -245,7 +246,7 @@ func runMigrations(t *testing.T, dsn string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", e.Name(), err)
 		}
-		if _, err := db.ExecContext(ctx, string(raw)); err != nil {
+		if _, err := pool.Exec(ctx, string(raw)); err != nil {
 			return fmt.Errorf("apply %s: %w", e.Name(), err)
 		}
 	}
