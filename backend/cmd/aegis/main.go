@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,12 +37,10 @@ import (
 	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-
-	"database/sql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
@@ -69,7 +68,6 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load configuration")
 	}
-	defer cancelBoot()
 
 	// 2. Wire up observability (tracing, metrics, logging).
 	cleanup, err := obs.Init(cfg)
@@ -83,6 +81,10 @@ func main() {
 			log.Error().Err(err).Msg("observability shutdown failed")
 		}
 	}()
+
+	// All boot-time resources are now live — safe to register the
+	// signal-context cancel so graceful shutdown actually runs.
+	defer cancelBoot()
 
 	log.Info().
 		Str("version", "0.0.0-dev").
