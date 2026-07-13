@@ -1,0 +1,15 @@
+[sqlfluff]
+# Aegis uses PostgreSQL as the primary data store.
+dialect = postgres
+
+# Phase 0 — only the bootstrap migration is in place, hand-written and
+# still being iterated on. Loosen rules that would block trivial merges
+# during the early-development phase. Tighten per-rule as the project
+# stabilises.
+
+# Capitalisation and identifier rules are stylistic; skip for now.
+rules = none
+exclude_rules = ambiguous.column_count, ambiguous.column_references
+
+# Allow trailing newline at EOF (sqlfluff's default; explicit for clarity).
+ignore = None

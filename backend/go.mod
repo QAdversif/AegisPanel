@@ -7,7 +7,7 @@
 
 module github.com/QAdversif/AegisPanel
 
-go 1.25.7
+go 1.26.5
 
 require (
 	// Configuration from env / files
