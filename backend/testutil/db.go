@@ -12,11 +12,11 @@
 // the developer can do the same with a `docker run postgres` one-liner
 // and `INTEGRATION_DATABASE_URL=...`. The helper here treats the
 // connection as a black box — wherever it came from, we:
-//   1. ping the server;
-//   2. ensure no other suite is using the same database (DROP+CREATE
-//      on the configured DB so concurrent runs don't clobber each
-//      other when they share a Postgres instance);
-//   3. run every goose migration from `migrations/`.
+//  1. ping the server;
+//  2. ensure no other suite is using the same database (DROP+CREATE
+//     on the configured DB so concurrent runs don't clobber each
+//     other when they share a Postgres instance);
+//  3. run every goose migration from `migrations/`.
 //
 // The DROP+CREATE cycle is cheap (sub-second on a warm container) and
 // gives us full test isolation without needing a separate role per
@@ -153,7 +153,7 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 	const key = "dbname="
 	idx := strings.Index(dsn, key)
 	if idx < 0 {
-		return "", "", errors.New("keyword DSN must include dbname=...")
+		return "", "", errors.New("keyword DSN must include dbname")
 	}
 	rest := dsn[idx+len(key):]
 	end := len(rest)
@@ -270,10 +270,7 @@ func runMigrations(t *testing.T, dsn string) error {
 // returns the slice between the two markers (or the whole file
 // if no Down marker is present, which is the safe default).
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
-	body, err := upBodyOf(raw)
-	if err != nil {
-		return err
-	}
+	body := upBodyOf(raw)
 	cleaned := stripSQLLineComments(body)
 
 	tx, err := pool.Begin(ctx)
@@ -319,22 +316,22 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) e
 // (the regex-tolerant pgx will not flip a "BEGIN" inside an
 // already-open Tx into a savepoint, but the syntactic noise is
 // harmless either way).
-func upBodyOf(raw string) (string, error) {
+func upBodyOf(raw string) string {
 	upIdx := strings.Index(raw, "-- +migrate Up")
 	if upIdx < 0 {
 		// No Up marker — assume the whole file is the Up body.
 		// This matches goose's own behaviour for migrations that
 		// ship without explicit Up/Down split.
-		return raw, nil
+		return raw
 	}
 	// Walk forward from upIdx to find the first "-- +migrate Down"
-	// marker at line start. If absent, return the rest of the file.
+	// marker. If absent, return the rest of the file.
 	after := raw[upIdx+len("-- +migrate Up"):]
 	downIdx := strings.Index(after, "-- +migrate Down")
 	if downIdx < 0 {
-		return raw[upIdx:], nil
+		return raw[upIdx:]
 	}
-	return raw[upIdx : upIdx+len("-- +migrate Up")+downIdx], nil
+	return raw[upIdx : upIdx+len("-- +migrate Up")+downIdx]
 }
 
 // stripSQLLineComments removes any `-- ...` line from the input.
@@ -382,7 +379,7 @@ func findBackendDir() (string, error) {
 		return "", errors.New("could not determine test file path")
 	}
 	dir := filepath.Dir(thisFile) // backend/testutil
-	root := filepath.Dir(dir)      // backend
+	root := filepath.Dir(dir)     // backend
 	if _, err := os.Stat(filepath.Join(root, "migrations")); err != nil {
 		return "", fmt.Errorf("migrations dir not found at %s/migrations: %w", root, err)
 	}
