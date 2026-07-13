@@ -31,8 +31,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -201,13 +199,16 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 // runMigrations applies every `.sql` file in the project-root
 // `migrations/` directory. The `+migrate Up` annotation in each file
 // is what goose uses to decide which statements to run.
+//
+// We use a *relative* path (`migrations`) plus `goose.SetBaseFS` —
+// the same idiom the production `cmd/aegis/main.go` uses. Passing an
+// absolute path here makes goose v3.27.2 misparse files that start
+// with `BEGIN;` (it expects the migration body to begin with a
+// `+migrate Up` directive, then sees the transaction wrapper as
+// "unexpected state 0"). The relative-path + BaseFS combo is what
+// goose is designed for; the helper just delegates to it.
 func runMigrations(t *testing.T, dsn string) error {
 	t.Helper()
-
-	migrationsDir, err := findMigrationsDir()
-	if err != nil {
-		return err
-	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -215,31 +216,14 @@ func runMigrations(t *testing.T, dsn string) error {
 	}
 	defer db.Close()
 
+	goose.SetBaseFS(os.DirFS("."))
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
-	if err := goose.UpContext(context.Background(), db, migrationsDir); err != nil {
+	if err := goose.UpContext(context.Background(), db, "migrations"); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
 	return nil
-}
-
-// findMigrationsDir walks up from this test file's location to find
-// the project root that contains the `migrations/` directory. The
-// testutil package lives under `backend/`, so the migrations are at
-// `../migrations/` relative to the test file.
-func findMigrationsDir() (string, error) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("could not determine test file path")
-	}
-	dir := filepath.Dir(thisFile) // backend/testutil
-	root := filepath.Dir(dir)      // backend
-	mig := filepath.Join(root, "migrations")
-	if _, err := os.Stat(mig); err != nil {
-		return "", fmt.Errorf("migrations dir not found at %s: %w", mig, err)
-	}
-	return mig, nil
 }
 
 // maskDSN redacts the password component of a DSN so it is safe to
