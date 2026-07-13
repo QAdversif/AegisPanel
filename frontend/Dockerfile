@@ -25,6 +25,14 @@ RUN npm run build
 # ---- Runtime stage -------------------------------------------------------
 FROM caddy:2-alpine
 
+# Pull in the latest alpine package updates — `caddy:2-alpine` tracks
+# an Alpine base image and the pinned `c-ares` package picks up
+# CVE-2026-33630 (use-after-free) via this upgrade. The Go stdlib CVEs
+# flagged by trivy (CVE-2026-27145 / 39822 / 42504) are baked into the
+# upstream caddy binary itself and are not fixable here — see
+# `.trivyignore` for the documented baseline.
+RUN apk upgrade --no-cache
+
 # Copy the static bundle.
 COPY --from=build /src/dist /srv
 

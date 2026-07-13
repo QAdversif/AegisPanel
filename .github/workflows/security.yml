@@ -154,6 +154,11 @@ jobs:
           # by the maintainer — `ignore-unfixed` filters those out
           # so the gate only fires on actually fixable issues.
           ignore-unfixed: true
+          # `.trivyignore` carries a small, documented set of CVEs
+          # we accept (today: Caddy's stale Go stdlib). Every entry
+          # there has a re-evaluation plan — silence without context
+          # would just be debt.
+          ignorefile: '.trivyignore'
           exit-code: '1'
 
   # -----------------------------------------------------------------------
