@@ -72,7 +72,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.6
+          version: latest
           working-directory: backend
           args: --timeout=5m
 
@@ -146,7 +146,8 @@ jobs:
       - name: Install ansible-lint
         run: pip install ansible-lint==25.5.0
       - name: Lint
-        run: ansible-lint deploy/ansible
+        working-directory: deploy/ansible
+        run: ansible-lint
 
   # -----------------------------------------------------------------------
   # Docs (markdownlint)
