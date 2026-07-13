@@ -32,7 +32,7 @@
 | **Core** | Прокси-ядро, обрабатывающее пользовательский трафик. В MVP — sing-box, далее возможно Xray, Hysteria-2, TUIC, и т. п. |
 | **Node** | Сервер (VPS / dedicated / VM), на котором развёрнут Core + Agent. |
 | **Agent** | Лёгкий компонент на ноде: связь с Panel, применение конфигурации, сбор метрик, life-cycle Core. |
-| **Host** | Логическая «точка входа» для клиента = пара (Node, Inbound) с публичным адресом + набор override'ов параметров inbound'а (sni, security, transport, format variables). То, что попадает в подписку. Типы: `direct` / `balancer` / `chain`. |
+| **Host** | Бандл endpoint'ов = бандл пар `(Node, Inbound)` + override-слой + display name + format variables. **Endpoint** — то, что в конечном счёте попадает в подписку как одна строка (один URL). Типы: `direct` (1 endpoint) / `balancer` (N endpoint'ов + стратегия) / `chain` (Phase 2+). |
 | **Cascade / Chain** | Цепочка нод, где клиент подключается к одной (Portal), а трафик идёт через другую (Bridge), возможно через Relay. Режимы: `reverse` (bridge за NAT) и `forward` (все публичные). |
 | **MCP** | Model Context Protocol — стандарт для AI-ассистентов (Claude, Cursor) нативно вызывать tools панели (CRUD users/nodes, manage cascades, get stats). |
 | **Inbound** | Слушатель на ноде (VLESS/REality, Shadowsocks, Hysteria, и т. п.) со своими параметрами. |
@@ -467,9 +467,57 @@ ansible-playbook -i inventories/local/ deploy/ansible/install_agent.yml
 
 ## 10. Host manager
 
+### 10.0 Сущности (введено в v3)
+
+Три уровня абстракции — каждый со своей ответственностью:
+
+| Сущность | Что это | Сколько |
+|---|---|---|
+| **Node** | Железка в ДЦ: SSH-доступ, health (CPU/RAM/net), drain, IP, регион. Узел может иметь несколько `Inbound` (Hysteria 2 + VLESS параллельно на одной машине — обычное дело). | 1+ |
+| **Inbound** | Шаблон протокола на конкретной ноде (VLESS-Reality, Hysteria 2, Shadowsocks, …) + глобальные настройки (default port, default SNI). Хранится на ноде, apply-ится через CoreProvider. | 0+ на Node |
+| **Endpoint** | Пара `(Node, Inbound)` + **override-слой** (SNI, port, transport, format variables). То, что в конечном счёте попадает в подписку — один URL. | 1+ на Host |
+| **Host** | **Бандл endpoint'ов** с типом (`direct` / `balancer` / `chain`). То, что показывается в админ-UI и через что продукт продаётся пользователю. | 1+ |
+
+**Ключевое отличие от v2:** в v2 Host был `(Node, Inbound)`-парой. Не получалось выразить кейс "3 ноды × 2 протокола = 6 протоколов в одной подписке" без ручного склеивания. В v3 `Host` это **всегда** бандл `endpoints[]`; `type=direct` означает `endpoints.length == 1`, `type=balancer` — `endpoints.length > 1` + стратегия. Никакой специальной ветки для balancer в data model.
+
+**Пример — продукт "Латвия" с HY2 + VLESS на одной железке:**
+
+```yaml
+# В админке: один Host "Латвия", внутри 2 endpoint'а.
+Host:
+  id: uuid-lv
+  remark: "Латвия"            # общий display name (можно с format variables)
+  type: direct               # но endpoints.length = 2 — клиент увидит 2 строки
+  enabled: true
+  endpoints:
+    - { node_id: lv-01, inbound_id: hysteria2, sni: ["cdn.example"], port: 443 }
+    - { node_id: lv-01, inbound_id: vless,     sni: ["cdn.example"], port: 443 }
+```
+
+В подписке пользователь видит **2 строки** ("Латвия — Hysteria 2", "Латвия — VLESS"), что согласуется с UX реальных клиентов (Nekobox, Hiddify, V2Box): они показывают каждый endpoint как отдельный entry, и если на одной локации несколько протоколов — будет несколько строк с одним именем и разным протоколом.
+
+**Пример — продукт "Premium" с fail-over на 3 нодах × 2 протокола:**
+
+```yaml
+Host:
+  id: uuid-prem
+  remark: "Premium EU"
+  type: balancer
+  strategy: leastLoad
+  endpoints:
+    - { node_id: nl-01, inbound_id: hysteria2, weight: 3 }
+    - { node_id: nl-01, inbound_id: vless,     weight: 3 }
+    - { node_id: de-01, inbound_id: hysteria2, weight: 2 }
+    - { node_id: de-01, inbound_id: vless,     weight: 2 }
+    - { node_id: fr-01, inbound_id: hysteria2, weight: 1 }
+    - { node_id: fr-01, inbound_id: vless,     weight: 1 }
+```
+
+В подписке — 6 entries; клиент сам выбирает (или пробует все). Drain одной ноды или падение одного протокола = остальные 5 endpoints остаются рабочими.
+
 ### 10.1 Host — расширенная модель
 
-Host — это **точка подключения клиента к ноде** + набор override'ов над параметрами inbound'а. Публичный адрес не обязан совпадать с адресом ноды (типичный кейс — за Cloudflare).
+Host — это **бандл endpoint'ов** + набор override'ов над параметрами inbound'а каждого endpoint'а. Публичный адрес endpoint'а не обязан совпадать с адресом ноды (типичный кейс — за Cloudflare).
 
 **Маскировка под популярные веб-порты:** `port` хоста должен быть из списка `443`, `2053`, `2083`, `2087`, `2095`, `2096`, `8443` — это **реальный веб-трафик**, который DPI не может просто заблокировать. Caddy на ноде настраивается на listen на нескольких портах одновременно (см. раздел 19.4), что позволяет одному хосту отдаваться на разных портах. См. подробности в разделе 19.4.2.
 
@@ -485,22 +533,28 @@ Host:
   status_filter: [UserStatus]          # NEW: active | expired | limited | on_hold | disabled
 
   # === Direct & Balancer (общая база) ===
-  node_id: uuid                        # нода, на которой работает inbound
-  inbound_id: uuid                     # inbound на этой ноде
-  address: [string, ...]               # set: random selection per request
-  port: int | string                   # int или comma-list "8080,8443,9090"
-  sni: [string, ...]                   # set с wildcard `*` (см. 10.1.3)
-  host: [string, ...]                  # set для HTTP/WS Host header
-  path: string                         # path для WS / gRPC / XHTTP
+  # Каждый Host = бандл endpoint'ов. Endpoint = (Node, Inbound) + override-слой.
+  # v3: было (node_id, inbound_id) — пара, стало endpoints[] — массив.
+  endpoints:                            # 1+ endpoint'ов в подписке
+    - endpoint_id: uuid                  # server-side generated
+      node_id: uuid                      # железка
+      inbound_id: uuid                   # шаблон протокола на этой железке
+      address: [string, ...]             # override: set с random per request
+      port: int | string                 # override: int или "8080,8443,9090"
+      sni: [string, ...]                 # override: set с wildcard `*` (см. 10.1.3)
+      host: [string, ...]                # override: set для HTTP/WS Host header
+      path: string                       # override: path для WS / gRPC / XHTTP
+      weight: int                        # NEW: per-endpoint weight (default 1)
 
-  # === Security overrides (NEW) ===
+  # === Security overrides (NEW) — default для всех endpoint'ов ===
+  # Endpoint может override'нуть конкретное поле, иначе берётся это значение.
   security: inbound_default | none | tls | reality
   alpn: [h3, h2, http/1.1]             # auto-sorted по приоритету
   fingerprint: chrome | firefox | safari | edge | ios | android | none
   allow_insecure: bool
   ech_config_list: string
 
-  # === Transport overrides (NEW, per-protocol) ===
+  # === Transport overrides (NEW, per-protocol) — default для всех endpoint'ов ===
   transport_settings:
     websocket: { heartbeat_period, ... }
     grpc: { multi_mode, idle_timeout, health_check_timeout, ... }
@@ -517,7 +571,7 @@ Host:
     noise:
       xray: [{ type, packet, delay, apply_to }]
 
-  # === Advanced (NEW) ===
+  # === Advanced (NEW) — default для всех endpoint'ов ===
   use_sni_as_host: bool
   random_user_agent: bool
   http_headers: { Header-Name: value, ... }
@@ -528,27 +582,27 @@ Host:
   city: string
   latency_hint_ms: int                 # для geo-aware выдачи
   tags: [string]
-  weight: int                          # для weighted-round-robin (по умолчанию 1)
 
-  # === Balancer type (см. 10.2) ===
+  # === Balancer (см. 10.2) ===
+  # v3: target_host_ids убран — балансер выбирает из endpoints[].
+  # type=balancer с endpoints.length=1 трактуется как direct.
   balancer:
-    entry_node_id: uuid                # на какой edge-ноде живёт балансер
-    target_host_ids: [uuid, ...]       # backend-хосты
+    entry_node_id: uuid                # на какой edge-ноде живёт балансер (Phase 2)
     strategy: leastLoad | roundRobin | random | leastPing | urltest
     healthcheck: { url, interval, tolerance_ms }
-    failover_host_ids: [uuid, ...]     # запасные direct-хосты если все backend'и мертвы
+    failover_endpoint_ids: [uuid, ...]  # NEW: запасные endpoint'ы из этого же host
 
   # === Chain type (см. 10.3) ===
   chain:
     role: portal | relay | bridge
     mode: reverse | forward
-    upstream_node_id: uuid              # куда проксировать
+    upstream_endpoint_id: uuid         # куда проксировать (Phase 2+)
     tunnel_port: int
     tunnel_reality: { dest, server_names, private_key, public_key, short_ids }
     transport: tcp | xhttp | grpc
 ```
 
-**Приоритет значений (override chain):** `Host value → Inbound value → System default`. Например, если у inbound'а `sni=["example.com"]`, а у Host'а `sni=["cdn1.com", "cdn2.com"]` — в подписке будет host-список из хоста.
+**Приоритет значений (override chain):** `Endpoint value → Host value → Inbound value → System default`. Например, если у inbound'а `sni=["example.com"]`, у Host'а (по умолчанию для всех endpoint'ов) `sni=["cdn1.com", "cdn2.com"]`, а у конкретного endpoint'а `sni=["user-cdn.com"]` — в подписке именно этот endpoint получит `user-cdn.com`, остальные — `cdn1.com`/`cdn2.com`.
 
 ### 10.1.1 Format Variables (NEW)
 
