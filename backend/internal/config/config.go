@@ -55,6 +55,12 @@ type Config struct {
 	// Caddy admin API URL (used to reload Caddyfile at runtime).
 	CaddyAdminURL string `env:"AEGIS_CADDY_ADMIN_URL" envDefault:"http://127.0.0.1:2019"`
 
+	// AuthBackend selects the persistence layer for the auth
+	// service. "memory" (default) keeps users + refresh tokens
+	// in RAM — dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) and runs goose migrations on boot.
+	AuthBackend string `env:"AEGIS_AUTH_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 }
