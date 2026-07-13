@@ -42,7 +42,7 @@ func (s *PgStore) LookupUser(ctx context.Context, username string) (*User, error
 	var (
 		id           uuid.UUID
 		uname        string
-		passwordHash []byte
+		passwordHash string
 		role         string
 		enabled      bool
 	)

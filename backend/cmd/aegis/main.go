@@ -34,7 +34,6 @@ import (
 	_ "github.com/pressly/goose/v3"             // Phase 1.1 — SQL migrations
 	_ "github.com/redis/go-redis/v9"            // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                  // Phase 1 — OpenAPI generator
-	"golang.org/x/crypto/bcrypt"                // Phase 1 — password hashing (auth seeds)
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -170,10 +169,10 @@ func main() {
 	log.Info().Msg("aegis panel stopped")
 }
 
-// mustHash is a tiny panic-on-error wrapper around bcrypt for the
+// mustHash is a tiny panic-on-error wrapper around argon2id for the
 // Phase 0 dev seed. Phase 1+ reads hashes from the database.
-func mustHash(plaintext string) []byte {
-	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+func mustHash(plaintext string) string {
+	h, err := auth.HashPassword(plaintext)
 	if err != nil {
 		panic(fmt.Errorf("seed hash: %w", err))
 	}
