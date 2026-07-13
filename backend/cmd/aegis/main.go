@@ -43,6 +43,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
+	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
@@ -163,11 +164,16 @@ func main() {
 	// the persistence layer is added in Phase 1 when nodes
 	// actually start registering themselves.
 	nodesSvc := nodes.NewService(nodes.NewMemoryStore())
+	// The hosts service references nodes, so it is
+	// constructed after nodesSvc. The MemoryStore on
+	// both is Phase 0 / Phase 1; a pgx-backed HostStore
+	// lands with the broader Phase 1 pg migration.
+	hostsSvc := hosts.NewService(hosts.NewMemoryStore(), nodesSvc)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc)),
 	}
 
 	// 4. Run the server in a goroutine so we can listen for signals.
