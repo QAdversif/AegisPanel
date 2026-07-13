@@ -42,6 +42,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
+	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
