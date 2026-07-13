@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -200,15 +202,19 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 // `migrations/` directory. The `+migrate Up` annotation in each file
 // is what goose uses to decide which statements to run.
 //
-// We use a *relative* path (`migrations`) plus `goose.SetBaseFS` —
-// the same idiom the production `cmd/aegis/main.go` uses. Passing an
-// absolute path here makes goose v3.27.2 misparse files that start
-// with `BEGIN;` (it expects the migration body to begin with a
-// `+migrate Up` directive, then sees the transaction wrapper as
-// "unexpected state 0"). The relative-path + BaseFS combo is what
-// goose is designed for; the helper just delegates to it.
+// We use `runtime.Caller` to find the absolute path to this file,
+// then walk up two levels to land on `backend/`. The reason: `go test
+// ./...` re-cd's into each test package's directory before running
+// tests, so a relative path like `migrations` resolves to
+// `backend/internal/auth/migrations` from the auth test (which does
+// not exist). The absolute path is independent of cwd.
 func runMigrations(t *testing.T, dsn string) error {
 	t.Helper()
+
+	backendDir, err := findBackendDir()
+	if err != nil {
+		return err
+	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -216,7 +222,7 @@ func runMigrations(t *testing.T, dsn string) error {
 	}
 	defer db.Close()
 
-	goose.SetBaseFS(os.DirFS("."))
+	goose.SetBaseFS(os.DirFS(backendDir))
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
@@ -224,6 +230,24 @@ func runMigrations(t *testing.T, dsn string) error {
 		return fmt.Errorf("goose up: %w", err)
 	}
 	return nil
+}
+
+// findBackendDir returns the absolute path to the `backend/`
+// directory by walking up from this source file. The testutil package
+// is two levels deep (`backend/testutil/db.go`), so `..` twice lands
+// on `backend/`. We verify the expected layout (a `migrations/`
+// sibling) so a moved file fails fast with a useful message.
+func findBackendDir() (string, error) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("could not determine test file path")
+	}
+	dir := filepath.Dir(thisFile) // backend/testutil
+	root := filepath.Dir(dir)      // backend
+	if _, err := os.Stat(filepath.Join(root, "migrations")); err != nil {
+		return "", fmt.Errorf("migrations dir not found at %s/migrations: %w", root, err)
+	}
+	return root, nil
 }
 
 // maskDSN redacts the password component of a DSN so it is safe to
