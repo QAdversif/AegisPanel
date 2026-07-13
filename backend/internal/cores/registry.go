@@ -118,8 +118,22 @@ func (r *Registry) Names() []string {
 // Default-register / Get / List are package-level shortcuts
 // for the common case of the process-global registry.
 
-func Register(p CoreProvider) error         { return Default.Register(p) }
+// Register adds p to the process-global registry. See
+// Registry.Register for the full contract.
+func Register(p CoreProvider) error { return Default.Register(p) }
+
+// Get looks up a provider by name in the process-global
+// registry. See Registry.Get for the full contract.
 func Get(name string) (CoreProvider, error) { return Default.Get(name) }
-func List() []CoreProvider                  { return Default.List() }
-func Names() []string                       { return Default.Names() }
-func Unregister(name string) error          { return Default.Unregister(name) }
+
+// List returns every provider in the process-global
+// registry, sorted by name. See Registry.List.
+func List() []CoreProvider { return Default.List() }
+
+// Names returns the sorted list of provider names in the
+// process-global registry. See Registry.Names.
+func Names() []string { return Default.Names() }
+
+// Unregister removes a provider by name from the
+// process-global registry. See Registry.Unregister.
+func Unregister(name string) error { return Default.Unregister(name) }

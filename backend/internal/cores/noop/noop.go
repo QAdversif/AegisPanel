@@ -18,6 +18,7 @@
 package noop
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -93,7 +94,7 @@ func (p *Provider) ValidateConfig(_ context.Context, raw []byte) error {
 // configs differ. Tests that need a real diff should use a
 // real provider implementation.
 func (p *Provider) Diff(prev, next []byte) (string, error) {
-	if string(prev) == string(next) {
+	if bytes.Equal(prev, next) {
 		return "", nil
 	}
 	return fmt.Sprintf("--- prev\n+++ next\n%s vs %s", string(prev), string(next)), nil
