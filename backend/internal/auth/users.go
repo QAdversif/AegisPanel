@@ -7,33 +7,49 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	"github.com/alexedwards/argon2id"
 )
 
 // User is a panel principal. Phase 0 stores credentials in memory;
-// the same struct will be persisted in Phase 2 with bcrypt-hashed
-// passwords and pgx-backed scans.
+// the same struct is persisted by the pgx Store from Phase 1.1.
+// PasswordHash is the PHC-formatted argon2id string
+// (`$argon2id$v=19$m=...,t=...,p=...$salt$hash`) produced by
+// argon2id.CreateHash.
 type User struct {
 	ID           string
 	Username     string
-	PasswordHash []byte // bcrypt hash
+	PasswordHash string // argon2id PHC string
 	Scopes       Scopes
 	CreatedAt    time.Time
 }
 
 // VerifyPassword reports whether the given plaintext matches the
-// user's bcrypt hash. The work factor is whatever the hash was
-// generated with (default 10); the cost is paid only on the slow
-// path of a login attempt.
+// user's argon2id hash. The work factors (memory, iterations,
+// parallelism) are baked into the hash itself, so this call is
+// slow by design — the cost is paid only on the slow path of a
+// login attempt.
+//
+// Note: ComparePasswordAndHash returns (match bool, err error).
+// We map "match=false, err=nil" — the most common path on a wrong
+// password — to ErrUnauthorised, so the caller does not have to
+// remember to check both return values.
 func (u *User) VerifyPassword(plaintext string) error {
-	return bcrypt.CompareHashAndPassword(u.PasswordHash, []byte(plaintext))
+	match, err := argon2id.ComparePasswordAndHash(plaintext, u.PasswordHash)
+	if err != nil {
+		return err
+	}
+	if !match {
+		return ErrUnauthorised
+	}
+	return nil
 }
 
-// HashPassword bcrypt-hashes a plaintext password at the default
-// cost (10). Helper for tests and the seed-data path; the canonical
-// place to mint a user is via Store.CreateUser (Phase 2).
-func HashPassword(plaintext string) ([]byte, error) {
-	return bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+// HashPassword returns an argon2id-encoded PHC string for the
+// plaintext. Uses DefaultParams: m=64 MiB, t=1, p=4. Helper for
+// tests and the seed-data path; the canonical place to mint a
+// user is via Store.CreateUser (Phase 2).
+func HashPassword(plaintext string) (string, error) {
+	return argon2id.CreateHash(plaintext, argon2id.DefaultParams)
 }
 
 // MemoryStore is an in-memory implementation of Store for Phase 0.
