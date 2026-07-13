@@ -147,6 +147,12 @@ jobs:
           image-ref: ${{ matrix.target.tag }}
           format: 'sarif'
           output: 'trivy-${{ matrix.target.name }}.sarif'
+          # Mirror the same scan as a plain-text report so the
+          # failure log shows *which* CVEs tripped the gate — the
+          # SARIF upload is great for the Security tab, useless for
+          # reading a CI run.
+          format2: 'table'
+          output2: 'trivy-${{ matrix.target.name }}.txt'
           severity: 'HIGH,CRITICAL'
           # Distroless / Alpine base layers churn with upstream
           # package updates that may not yet have a fix published
@@ -154,6 +160,15 @@ jobs:
           # so the gate only fires on actually fixable issues.
           ignore-unfixed: true
           exit-code: '1'
+
+      - name: Show table report on failure
+        if: failure()
+        run: |
+          if [ -f "trivy-${{ matrix.target.name }}.txt" ]; then
+            echo "::group::trivy findings (HIGH+CRITICAL, fixable)"
+            cat "trivy-${{ matrix.target.name }}.txt"
+            echo "::endgroup::"
+          fi
 
       - name: Upload SARIF
         # Skip when build/scan failed — there's no SARIF to upload, and
