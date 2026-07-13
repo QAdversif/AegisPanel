@@ -15,8 +15,6 @@ linters:
     - unused         # unused identifiers
     - gosec          # security-focused checks
     - gocritic       # opinionated style + perf hints
-    - gofmt          # canonical formatting
-    - goimports      # import grouping
     - misspell       # common typos
     - bodyclose      # http body close
     - contextcheck   # ctx propagation
@@ -62,3 +60,8 @@ linters:
         linters:
           - gosec
           - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
