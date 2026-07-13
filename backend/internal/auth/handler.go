@@ -4,7 +4,6 @@ package auth
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -138,7 +137,3 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-
-// errInternal is a sentinel for tests; production code branches on
-// errUnauthorisedFor and the response is determined by that.
-var errInternal = errors.New("auth: internal error")
