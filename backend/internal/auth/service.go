@@ -17,9 +17,9 @@ import (
 // and the Store, and is the only thing main.go (and tests) need to
 // talk to.
 type Service struct {
-	signer  *Signer
-	store   Store
-	now     func() time.Time
+	signer *Signer
+	store  Store
+	now    func() time.Time
 }
 
 // NewService wires a Service from a Signer and a Store. The store

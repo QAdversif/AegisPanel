@@ -58,9 +58,9 @@ func HashPassword(plaintext string) (string, error) {
 // The zero value is NOT ready — call NewMemoryStore or initialise
 // the mutex explicitly. Seed users via WithUser.
 type MemoryStore struct {
-	mu       sync.RWMutex
-	users    map[string]*User // keyed by username
-	refresh  map[string]refreshEntry
+	mu      sync.RWMutex
+	users   map[string]*User // keyed by username
+	refresh map[string]refreshEntry
 }
 
 // refreshEntry binds a refresh-token hash to its owner and expiry.
