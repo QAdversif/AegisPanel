@@ -126,9 +126,10 @@ func (m *MemoryStore) ConsumeRefresh(_ context.Context, tokenHash string) (strin
 		return "", ErrInvalidToken
 	}
 	if entry.used {
-		// Reuse of a consumed token is treated as a possible
-		// theft: the safer behaviour is to revoke the whole
-		// chain. For Phase 0 we just reject.
+		// Reuse of a consumed token is treated as possible
+		// theft. The caller (Service.Refresh) is expected to
+		// call RevokeChain on the user when this happens.
+		// For Phase 0 we just reject the consume.
 		return "", ErrInvalidToken
 	}
 	if time.Now().UTC().After(entry.expiresAt) {
@@ -137,5 +138,43 @@ func (m *MemoryStore) ConsumeRefresh(_ context.Context, tokenHash string) (strin
 	}
 	entry.used = true
 	m.refresh[tokenHash] = entry
+	return entry.userID, nil
+}
+
+// RevokeChain implements Store. It marks every still-valid refresh
+// token for the user as used, so a stolen token (already used)
+// cannot be replayed, and any sibling token from the same chain
+// is also invalidated. Idempotent: revoking an already-revoked
+// chain is a no-op.
+func (m *MemoryStore) RevokeChain(_ context.Context, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	for hash, entry := range m.refresh {
+		if entry.userID != userID {
+			continue
+		}
+		if entry.used {
+			continue
+		}
+		if now.After(entry.expiresAt) {
+			continue
+		}
+		entry.used = true
+		m.refresh[hash] = entry
+	}
+	return nil
+}
+
+// FindRefreshUser implements Store. Returns the userID bound to
+// a refresh token hash WITHOUT changing the row. Returns
+// ErrInvalidToken if the hash is unknown.
+func (m *MemoryStore) FindRefreshUser(_ context.Context, tokenHash string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.refresh[tokenHash]
+	if !ok {
+		return "", ErrInvalidToken
+	}
 	return entry.userID, nil
 }

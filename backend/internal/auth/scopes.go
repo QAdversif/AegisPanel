@@ -95,4 +95,20 @@ type Store interface {
 	// and returns the owning userID. Returns ErrInvalidToken
 	// if the token is unknown, already consumed, or expired.
 	ConsumeRefresh(ctx context.Context, tokenHash string) (userID string, err error)
+
+	// FindRefreshUser returns the userID bound to a refresh
+	// token hash WITHOUT marking it consumed. Used by the
+	// service to detect token reuse: if ConsumeRefresh
+	// returns ErrInvalidToken but FindRefreshUser returns a
+	// non-empty userID, the token was already consumed —
+	// the most likely cause is theft, and the service then
+	// calls RevokeChain.
+	FindRefreshUser(ctx context.Context, tokenHash string) (userID string, err error)
+
+	// RevokeChain marks every still-valid refresh token belonging
+	// to the given user as used. Called when reuse of a
+	// consumed token is detected — the most likely cause is
+	// token theft, in which case the safest response is to
+	// invalidate every outstanding refresh for that user.
+	RevokeChain(ctx context.Context, userID string) error
 }
