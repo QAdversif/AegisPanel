@@ -53,7 +53,7 @@
 - Host manager: ручное и автоматическое формирование пулов хостов, выдача в подписки.
 - Конфигурация протоколов на уровне панели (inbound-шаблоны, JSON-валидация, dry-run).
 - Стабильный API для внешнего ЛК (CRUD пользователей, планы, трафик, вебхуки оплаты).
-- Минимальный admin-UI на базе серверного рендера (HTMX / Vue) для базовых операций.
+- Admin-UI на **Vue 3 + TypeScript + Vite** для базовых операций.
 
 **Что НЕ входит в MVP (явно out of scope)**
 
@@ -151,7 +151,7 @@
 ```
                         ┌──────────────────────────────────┐
                         │             Admin UI             │
-                        │  (SPA/HTMX, server-rendered OK)  │
+                        │   (SPA: Vue 3 + TypeScript)      │
                         └──────────────┬───────────────────┘
                                        │ HTTPS
                                        ▼
@@ -837,7 +837,7 @@ Cache-Control: public, max-age=60
 - [remnawave/subscription-page](https://github.com/remnawave/subscription-page) — современный
 - [Marzban sub-page templates](https://github.com/Gozargah/Marzban) — есть встроенные
 
-В MVP — **простая HTML-страница на HTMX** + один из open-source шаблонов как референс. В Phase 2 — кастомизируемый sub-page с темами и per-user branding.
+В MVP — **простая статическая HTML-страница** + один из open-source шаблонов как референс (Vue 3 SPA-бандл с минимальным shell'ом). В Phase 2 — кастомизируемый sub-page с темами и per-user branding.
 
 #### 10.4.6 Особенности форматов (для разработчиков)
 
@@ -1348,7 +1348,7 @@ AI вызывает tools в нужной последовательности: 
 | DB | **PostgreSQL 16** | Надёжность, расширения, JSONB для шаблонов. |
 | Метрики БД | **ClickHouse** | Дешёвые агрегации по user-traffic. Альтернатива: TimescaleDB (проще, но дороже на объёмах). |
 | Кеш/очереди | **Redis 7** + **NATS JetStream** | Redis — кеш, NATS — durable очереди, retry, DLQ. Альтернатива: Redis Streams для всего. |
-| UI (admin) | **HTMX + Alpine + Tailwind** на MVP, **Vue 3** при росте | Серверный рендер = меньше рантайма, проще деплой. |
+| UI (admin) | **Vue 3 + TypeScript + Vite + Tailwind** | SPA, единый стек, простой деплой как статический бандл. |
 | Observability | **Prometheus + Grafana + Loki + Tempo** | Стандарт, всё self-host. |
 | **Edge proxy (panel + nodes)** | **Caddy** | Auto HTTPS из коробки (Let's Encrypt / ZeroSSL, ACME встроенный), HTTP/3, читаемый Caddyfile, hot-reload API, Cloudflare DNS-01 для wildcard. **Заменяет nginx + certbot.** |
 | **Brute-force protection** | **fail2ban** | SSH + Panel login (кастомный jail). |
@@ -1596,7 +1596,7 @@ ignoreip = 1.2.3.4 5.6.7.8
 - Cabinet API: все эндпоинты, идемпотентность, scopes.
 - **Webhook с HMAC-SHA256** подписью (раздел 13.4).
 - **Disk alerts с hysteresis** (раздел 13.5).
-- UI на HTMX: пользователи, ноды, хосты, подписки, dashboard.
+- UI на Vue 3: пользователи, ноды, хосты, подписки, dashboard.
 
 **Phase 3 — Онбординг нод через SSH (1–2 нед.)**
 - **BYO Node flow** (раздел 9): регистрация существующей ноды в панели, SSH-probe, Ansible-based install.
@@ -1654,7 +1654,7 @@ ignoreip = 1.2.3.4 5.6.7.8
 ## 23. Открытые вопросы (нужны от тебя)
 
 1. **Стек бэкенда.** Принимаем Go как дефолт или предпочтёшь Python/FastAPI для скорости прототипа?
-2. **Язык/фреймворк UI.** HTMX на MVP, Vue 3 на росте — ок, или сразу полноценный SPA?
+2. **Язык/фреймворк UI.** ~~HTMX на MVP, Vue 3 на росте — ок, или сразу полноценный SPA?~~ — **РЕШЕНО**: Vue 3 + TypeScript + Vite как основной стек UI (admin и cabinet). Скелет уже в репо (`frontend/`, см. CHANGELOG 0.0.1).
 3. **Managed или self-host БД** на проде? (влияет на бэкап-стратегию)
 4. **Целевая география нод** в первом релизе: только РФ, RU+EU+Asia, глобально?
 5. ~~**Provider для авто-развёртывания в первую очередь**: Hetzner, Selectel, AWS, другое?~~ — **неактуально**, BYO Node (см. раздел 9). Оператор сам выбирает провайдера.
@@ -1677,7 +1677,7 @@ ignoreip = 1.2.3.4 5.6.7.8
 - Авто-развертывание — **BYO Node через SSH** + Ansible-роли. Панель не создаёт VPS, работает только с тем, что прислал оператор.
 - Cabinet API — версионированный, идемпотентный, с вебхуками в обе стороны.
 - Мониторинг, безопасность, бэкапы — встроены, а не «потом».
-- Стек — Go + PostgreSQL + ClickHouse + Redis + NATS + HTMX/Vue + Prometheus/Grafana/Loki/Tempo.
+- Стек — Go + PostgreSQL + ClickHouse + Redis + NATS + Vue 3 + Prometheus/Grafana/Loki/Tempo.
 
 После твоего фидбэка по открытым вопросам — двигаемся к детальному тех-дизайну модулей и контрактам (proto/JSON-схемы), без старта реализации.
 
