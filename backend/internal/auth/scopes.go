@@ -41,6 +41,14 @@ const (
 	// ScopeSubscriptions lets a principal issue/revoke subscription
 	// tokens and view traffic stats.
 	ScopeSubscriptions Scope = "subscriptions"
+
+	// ScopeHosts lets a principal manage hosts (bundles of
+	// endpoints exposed to end-user VPN clients). Hosts are
+	// the product-level entity — a "Latvia / VLESS+HY2"
+	// entry in the admin UI is one host with two endpoints.
+	// Distinct from ScopeNodes: a node is the server
+	// itself, a host is the product the operator sells.
+	ScopeHosts Scope = "hosts"
 )
 
 // Scopes is a non-empty set of Scope values.
