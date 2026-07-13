@@ -15,6 +15,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
@@ -42,6 +43,11 @@ func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service) h
 		// Auth surface: login, refresh, me. Mounted unconditionally
 		// in Phase 0 — Phase 1+ will mount it conditionally on cfg.AuthEnabled.
 		r.Mount("/auth", authSvc.Mount())
+
+		// Cores catalog — public, no auth. The UI and any
+		// client integration need to know which providers are
+		// wired in and what each one supports before login.
+		cores.Mount(r)
 
 		// Nodes CRUD — Phase 0. All routes are protected by the
 		// auth middleware + ScopeNodes requirement (applied
