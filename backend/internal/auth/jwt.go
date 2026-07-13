@@ -91,6 +91,7 @@ func (s *Signer) Verify(tokenString string) (*Claims, error) {
 		jwt.WithAudience(JWTAudience),
 		jwt.WithLeeway(30*time.Second),
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithTimeFunc(s.now),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
