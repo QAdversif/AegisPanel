@@ -260,20 +260,21 @@ func runMigrations(t *testing.T, dsn string) error {
 }
 
 // applyMigration runs every statement in `raw` inside a single
-// `pgx.Tx`, with full-line SQL comments stripped before splitting.
-// See runMigrations for the rationale behind the manual split.
+// `pgx.Tx`. See runMigrations for the broader rationale.
 //
-// We strip `-- ...` *lines* (not just leading comments) before
-// splitting on `;`. Without this, a statement that starts with a
-// `-- +migrate Up` comment — as every goose-style migration does —
-// would either be skipped as a comment (no-op: tables never get
-// created) or sent to Postgres with a dangling comment that
-// depends on the parser being lenient. Stripping whole lines is
-// unambiguous and matches what `psql --filter-comments` does.
+// Each goose-style migration file interleaves an "Up" body and a
+// "Down" body, separated by `-- +migrate Up` and `-- +migrate Down`
+// markers. We only want the Up half — running both means a fresh
+// database would be created and immediately dropped, which is
+// what bit us on the first attempt at this helper. `upBodyOf`
+// returns the slice between the two markers (or the whole file
+// if no Down marker is present, which is the safe default).
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
-	cleaned := stripSQLLineComments(raw)
-	stmts := splitSQL(cleaned)
-	fmt.Fprintf(os.Stderr, "DEBUG applyMigration %s: %d statements\n", name, len(stmts))
+	body, err := upBodyOf(raw)
+	if err != nil {
+		return err
+	}
+	cleaned := stripSQLLineComments(body)
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -283,34 +284,57 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, name, raw string) e
 		_ = tx.Rollback(ctx)
 	}()
 
-	for i, stmt := range stmts {
+	for _, stmt := range splitSQL(cleaned) {
 		trimmed := strings.TrimSpace(stmt)
 		if trimmed == "" {
 			continue
 		}
 		if _, err := tx.Exec(ctx, trimmed); err != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG   stmt %d failed: %s\n", i, truncate(trimmed, 80))
 			return fmt.Errorf("apply %s (stmt: %s...): %w", name, truncate(trimmed, 60), err)
 		}
-		fmt.Fprintf(os.Stderr, "DEBUG   stmt %d ok: %s\n", i, truncate(trimmed, 80))
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit %s: %w", name, err)
 	}
-	fmt.Fprintf(os.Stderr, "DEBUG applyMigration %s: committed\n", name)
-
-	// Sanity: after commit, verify the schema is visible to a
-	// fresh connection from the pool. If this check ever fails
-	// we'll know whether the issue is the commit itself or a
-	// connection-state quirk on the next migration.
-	var n int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_tables WHERE schemaname='public'").Scan(&n); err != nil {
-		fmt.Fprintf(os.Stderr, "DEBUG   post-commit verify failed: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "DEBUG   post-commit tables: %d\n", n)
-	}
 	return nil
+}
+
+// upBodyOf extracts the Up body of a goose-style migration file.
+// The file may look like:
+//
+//	BEGIN;
+//	-- +migrate Up
+//	CREATE TABLE ...;
+//	-- +migrate Down
+//	DROP TABLE ...;
+//	COMMIT;
+//
+// We return the slice from the first `-- +migrate Up` marker to
+// the first `-- +migrate Down` marker (or to end of file if no
+// Down marker is present). `BEGIN;` / `COMMIT;` outside the
+// marked region are kept; `tx.Begin` / `tx.Commit` in
+// applyMigration will own the transaction boundary, so the
+// file-level BEGIN/COMMIT are ignored as separate statements
+// (the regex-tolerant pgx will not flip a "BEGIN" inside an
+// already-open Tx into a savepoint, but the syntactic noise is
+// harmless either way).
+func upBodyOf(raw string) (string, error) {
+	upIdx := strings.Index(raw, "-- +migrate Up")
+	if upIdx < 0 {
+		// No Up marker — assume the whole file is the Up body.
+		// This matches goose's own behaviour for migrations that
+		// ship without explicit Up/Down split.
+		return raw, nil
+	}
+	// Walk forward from upIdx to find the first "-- +migrate Down"
+	// marker at line start. If absent, return the rest of the file.
+	after := raw[upIdx+len("-- +migrate Up"):]
+	downIdx := strings.Index(after, "-- +migrate Down")
+	if downIdx < 0 {
+		return raw[upIdx:], nil
+	}
+	return raw[upIdx : upIdx+len("-- +migrate Up")+downIdx], nil
 }
 
 // stripSQLLineComments removes any `-- ...` line from the input.
