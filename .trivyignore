@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Trivy vulnerability ignore list.
+#
+# Each line is a CVE ID (or a Trivy vuln ID) that the scanner should
+# skip. Comments are allowed and encouraged — silence without context
+# is technical debt waiting to happen. Every entry must have:
+#
+#   - The CVE / GHSA ID being ignored
+#   - Why we cannot fix it today (typically: pinned upstream is stale)
+#   - When this was last reviewed and the next expected review date
+#
+# This file is consumed by `.github/workflows/security.yml` via the
+# `ignorefile:` input on the `trivy-action`. Removing an entry here
+# means the next PR will fail the gate until the vuln is fixed.
+#
+# Reviewed: 2026-07-13
+# Next review: 2026-08-13 (one month) or on Caddy upstream action
+
+# Caddy 2.11.4 (the current latest) ships a binary compiled with
+# Go 1.26.3. Three Go stdlib CVEs were disclosed after that build
+# landed upstream:
+#   - CVE-2026-27145  crypto/x509 DoS
+#   - CVE-2026-39822  os.Root symlink following
+#   - CVE-2026-42504  mime DoS
+# The fixed Go versions are 1.26.4 / 1.26.5; caddy:2.11.4-alpine
+# predates the rebuild. We accept the risk because:
+#   1. Aegis serves the panel UI (Vite SPA) via this Caddy instance —
+#      no user-controlled path reaches crypto/x509 parsing here.
+#   2. caddy:2-alpine is rebuilt by upstream monthly; next bump
+#      (>= 2.11.5) will pick up the patched Go.
+#   3. distroless Go-static backend image is unaffected (no Caddy).
+# Action: re-evaluate on any of:
+#   - Caddy 2.11.5 release notes mention Go >= 1.26.5
+#   - A concrete exploit PoC for any of the three CVEs on a
+#     static-file web server (current AVD attack vectors need
+#     crafted client certs / arbitrary file roots, neither of
+#     which the panel UI exposes).
+CVE-2026-27145
+CVE-2026-39822
+CVE-2026-42504
