@@ -15,9 +15,10 @@ skip_list:
   - name[play]
   - name[role]
   - name[task]       # handler/task names use lowercase (role-internal)
+  - name[casing]     # same: handler/task names start with lowercase by convention
   - var-naming[no-reserved]
-  - var-naming[pattern]  # variables use aegis_* / role_ prefix, not enforced
-  - syntax-check[false]
+  - var-naming[no-role-prefix]  # defaults shared across multiple roles (aegis_* prefix is intentional)
+  - var-naming[pattern]        # variables use aegis_* / role_ prefix, not enforced
   - yaml[octal-values]
 
 use_default_rules: true

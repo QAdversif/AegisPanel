@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,19 +30,17 @@ import (
 	// cache → redis; validation → validator; migrations → goose; openapi → swag).
 	_ "github.com/go-playground/validator/v10" // Phase 1 — input validation
 	_ "github.com/golang-jwt/jwt/v5"           // Phase 1 — JWT (access + refresh tokens)
-	_ "github.com/google/uuid"                  // Phase 1 — UUIDv4 generation
-	_ "github.com/jackc/pgx/v5/stdlib"          // Phase 1.1 — sql driver for goose
-	_ "github.com/nats-io/nats.go"              // Phase 1 — event bus / JetStream
-	_ "github.com/pressly/goose/v3"             // Phase 1.1 — SQL migrations
-	_ "github.com/redis/go-redis/v9"            // Phase 1 — Redis client
-	_ "github.com/swaggo/swag"                  // Phase 1 — OpenAPI generator
+	_ "github.com/google/uuid"                 // Phase 1 — UUIDv4 generation
+	_ "github.com/jackc/pgx/v5/stdlib"         // Phase 1.1 — sql driver for goose
+	_ "github.com/nats-io/nats.go"             // Phase 1 — event bus / JetStream
+	_ "github.com/pressly/goose/v3"            // Phase 1.1 — SQL migrations
+	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
+	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-
-	"database/sql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
@@ -58,9 +57,11 @@ func main() {
 
 	// Top-level context for boot-time operations. Cancelled when
 	// the process receives SIGINT / SIGTERM (see signal.NotifyContext
-	// below).
+	// below). The cancel is registered as a defer *after* the early
+	// log.Fatal() call sites so that exitAfterDefer (gocritic) does
+	// not flag the boot sequence — log.Fatal calls os.Exit, which
+	// skips defers anyway, so it is safe to register later.
 	ctx, cancelBoot := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancelBoot()
 
 	// 1. Load configuration from environment + .env file.
 	cfg, err := config.Load()
@@ -80,6 +81,10 @@ func main() {
 			log.Error().Err(err).Msg("observability shutdown failed")
 		}
 	}()
+
+	// All boot-time resources are now live — safe to register the
+	// signal-context cancel so graceful shutdown actually runs.
+	defer cancelBoot()
 
 	log.Info().
 		Str("version", "0.0.0-dev").
@@ -110,11 +115,14 @@ func main() {
 		if err != nil {
 			log.Fatal().Err(err).Msg("sql.Open: failed to open migration connection")
 		}
+		// Close is best-effort: the connection lives only for the
+		// duration of the migration run, and at that point we are
+		// either shutting down cleanly (defer runs) or exiting via
+		// log.Fatal (defer skipped, OS reclaims the handle).
+		defer func() { _ = migDB.Close() }()
 		if err := runMigrations(ctx, migDB, "migrations"); err != nil {
-			migDB.Close()
 			log.Fatal().Err(err).Msg("migrations: failed to apply")
 		}
-		migDB.Close()
 		authStore = auth.NewPgStore(pool)
 		log.Info().Msg("auth: using pgx-backed store (PgStore)")
 	default:
