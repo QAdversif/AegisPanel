@@ -199,7 +199,7 @@ jobs:
         with:
           context: .
           file: backend/Dockerfile
-          tags: QAdversif/AegisPanel:dev-${{ github.sha }}
+          tags: qadversif/aegispanel:dev-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           push: false
@@ -210,7 +210,7 @@ jobs:
         with:
           context: .
           file: frontend/Dockerfile
-          tags: QAdversif/AegisPanel-ui:dev-${{ github.sha }}
+          tags: qadversif/aegispanel-ui:dev-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           push: false
