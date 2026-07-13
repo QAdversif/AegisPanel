@@ -39,7 +39,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver
-	"github.com/pressly/goose/v3"
 )
 
 // EnvIntegrationDSN is the connection string the integration tests
@@ -199,15 +198,22 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 }
 
 // runMigrations applies every `.sql` file in the project-root
-// `migrations/` directory. The `+migrate Up` annotation in each file
-// is what goose uses to decide which statements to run.
+// `migrations/` directory in lexical order.
 //
-// We use `runtime.Caller` to find the absolute path to this file,
-// then walk up two levels to land on `backend/`. The reason: `go test
-// ./...` re-cd's into each test package's directory before running
-// tests, so a relative path like `migrations` resolves to
-// `backend/internal/auth/migrations` from the auth test (which does
-// not exist). The absolute path is independent of cwd.
+// We deliberately bypass goose here. The production migrator
+// (`cmd/aegis/main.go`) uses `goose.UpContext`, but goose v3.27.2's
+// default parser rejects files that begin with an explicit
+// `BEGIN;` transaction wrapper, even when the same files parse
+// fine via `database/sql.Exec`. The integration suite only needs
+// the schema in place — not goose's version-tracking table —
+// so the simpler path is to read each migration and exec it as a
+// single multi-statement query. pgx supports that natively; no
+// SQL changes required.
+//
+// If the project later adds a migration that depends on goose-only
+// features (e.g. `goose fix` data migrations, multi-version
+// downgrades, or a custom Go migrator), we'll need to revisit
+// this and align goose's behaviour with the rest of the suite.
 func runMigrations(t *testing.T, dsn string) error {
 	t.Helper()
 
@@ -216,18 +222,32 @@ func runMigrations(t *testing.T, dsn string) error {
 		return err
 	}
 
+	migDir := filepath.Join(backendDir, "migrations")
+	entries, err := os.ReadDir(migDir)
+	if err != nil {
+		return fmt.Errorf("read migrations dir: %w", err)
+	}
+
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
 	defer db.Close()
 
-	goose.SetBaseFS(os.DirFS(backendDir))
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("goose dialect: %w", err)
-	}
-	if err := goose.UpContext(context.Background(), db, "migrations"); err != nil {
-		return fmt.Errorf("goose up: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(migDir, e.Name()))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", e.Name(), err)
+		}
+		if _, err := db.ExecContext(ctx, string(raw)); err != nil {
+			return fmt.Errorf("apply %s: %w", e.Name(), err)
+		}
 	}
 	return nil
 }
