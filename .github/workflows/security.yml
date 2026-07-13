@@ -103,9 +103,6 @@ jobs:
   trivy:
     name: trivy (${{ matrix.target.name }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -145,14 +142,12 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ matrix.target.tag }}
-          format: 'sarif'
-          output: 'trivy-${{ matrix.target.name }}.sarif'
-          # Mirror the same scan as a plain-text report so the
-          # failure log shows *which* CVEs tripped the gate — the
-          # SARIF upload is great for the Security tab, useless for
-          # reading a CI run.
-          format2: 'table'
-          output2: 'trivy-${{ matrix.target.name }}.txt'
+          # Table output streams the finding list straight into the
+          # Actions log — much more useful for triage than digging
+          # through a SARIF file. (The action doesn't accept multiple
+          # formats, so SARIF upload to the Security tab is dropped
+          # here; Dependabot still covers that surface for deps.)
+          format: 'table'
           severity: 'HIGH,CRITICAL'
           # Distroless / Alpine base layers churn with upstream
           # package updates that may not yet have a fix published
@@ -160,24 +155,6 @@ jobs:
           # so the gate only fires on actually fixable issues.
           ignore-unfixed: true
           exit-code: '1'
-
-      - name: Show table report on failure
-        if: failure()
-        run: |
-          if [ -f "trivy-${{ matrix.target.name }}.txt" ]; then
-            echo "::group::trivy findings (HIGH+CRITICAL, fixable)"
-            cat "trivy-${{ matrix.target.name }}.txt"
-            echo "::endgroup::"
-          fi
-
-      - name: Upload SARIF
-        # Skip when build/scan failed — there's no SARIF to upload, and
-        # `always()` would print a noisy "Path does not exist" error.
-        if: hashFiles('trivy-${{ matrix.target.name }}.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-${{ matrix.target.name }}.sarif'
-          category: 'trivy-${{ matrix.target.name }}'
 
   # -----------------------------------------------------------------------
   # 4. Frontend dependency CVEs
