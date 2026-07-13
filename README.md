@@ -58,7 +58,7 @@ make lint         # golangci-lint, eslint, prettier
 ## Repository hosting
 
 This project is being developed **locally** at this stage. It will be
-published to GitHub (target name `aegispanel/aegis`) once the MVP skeleton
+published to GitHub (target name `QAdversif/AegisPanel`) once the MVP skeleton
 is ready. Documentation is **not** published until the first release —
 the local `docs/` directory is the source of truth.
 

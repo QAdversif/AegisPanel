@@ -55,4 +55,4 @@ clean: ## Remove build artefacts.
 docker: docker-build ## Alias for docker-build.
 
 docker-build: ## Build the panel Docker image.
-	@docker build -t aegispanel/aegis:dev -f Dockerfile ..
+	@docker build -t QAdversif/AegisPanel:dev -f Dockerfile ..

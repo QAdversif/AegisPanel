@@ -45,4 +45,4 @@ clean: ## Remove dist, coverage, and caches.
 docker: docker-build ## Alias for docker-build.
 
 docker-build: ## Build the UI production image (served via Caddy).
-	@docker build -t aegispanel/aegis-ui:dev -f Dockerfile ..
+	@docker build -t QAdversif/AegisPanel-ui:dev -f Dockerfile ..

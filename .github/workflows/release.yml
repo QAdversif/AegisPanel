@@ -46,7 +46,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/aegispanel/aegis
+          images: ghcr.io/QAdversif/AegisPanel
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -71,7 +71,7 @@ jobs:
           context: .
           file: frontend/Dockerfile
           push: ${{ github.event_name == 'push' }}
-          tags: ghcr.io/aegispanel/aegis-ui:${{ github.ref_name }}
+          tags: ghcr.io/QAdversif/AegisPanel-ui:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false

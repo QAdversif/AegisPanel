@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
-	"github.com/aegispanel/aegis/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/config"
 )
 
 // Build returns the v1 http.Handler for Aegis.

@@ -5,7 +5,7 @@
 // Aegis is a self-hosted VPN control panel (multi-core: sing-box / Xray /
 // Hysteria 2). See ../ARCHITECTURE.md for the full design.
 
-module github.com/aegispanel/aegis
+module github.com/QAdversif/AegisPanel
 
 go 1.22
 

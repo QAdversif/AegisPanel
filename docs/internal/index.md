@@ -7,7 +7,7 @@ title: Internal notes
 > 🚧 Under construction. This section captures design decisions,
 > trade-offs, and rationale that don't belong in the user-facing
 > docs. The primary source for architectural decisions is
-> [`ARCHITECTURE.md`](https://github.com/aegispanel/aegis/blob/main/ARCHITECTURE.md) §22 ("Added value")
+> [`ARCHITECTURE.md`](https://github.com/QAdversif/AegisPanel/blob/main/ARCHITECTURE.md) §22 ("Added value")
 > and §25 ("History of changes").
 
 ## Topics to come

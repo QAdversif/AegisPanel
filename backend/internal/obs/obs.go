@@ -14,7 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 
-	"github.com/aegispanel/aegis/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/config"
 )
 
 // CleanupFunc releases observability resources (flush, close, etc.).

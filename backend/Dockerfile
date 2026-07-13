@@ -3,8 +3,8 @@
 # Aegis panel — multi-stage Docker build.
 # Produces a static binary on distroless base for a tiny attack surface.
 #
-# Build:   docker build -t aegispanel/aegis:dev -f backend/Dockerfile .
-# Run:     docker run --rm -p 8080:8080 --env-file .env aegispanel/aegis:dev
+# Build:   docker build -t QAdversif/AegisPanel:dev -f backend/Dockerfile .
+# Run:     docker run --rm -p 8080:8080 --env-file .env QAdversif/AegisPanel:dev
 
 # ---- Build stage ---------------------------------------------------------
 FROM golang:1.22-alpine AS build
@@ -26,8 +26,8 @@ ARG BUILD_TIME=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
         -ldflags "-s -w \
-            -X github.com/aegispanel/aegis/internal/config.GitCommit=${GIT_COMMIT} \
-            -X github.com/aegispanel/aegis/internal/config.BuildTime=${BUILD_TIME}" \
+            -X github.com/QAdversif/AegisPanel/internal/config.GitCommit=${GIT_COMMIT} \
+            -X github.com/QAdversif/AegisPanel/internal/config.BuildTime=${BUILD_TIME}" \
         -o /out/aegis \
         ./cmd/aegis
 

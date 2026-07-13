@@ -75,7 +75,7 @@ chore(deploy): bump Caddy to 2.8
 - Each release is a `git tag` annotated with the date and a generated
   CHANGELOG section.
 - The release pipeline lives in `.github/workflows/release.yml` and
-  builds the panel / UI container images into `ghcr.io/aegispanel/`.
+  builds the panel / UI container images into `ghcr.io/QAdversif/`.
 
 To cut a release locally (does not push):
 

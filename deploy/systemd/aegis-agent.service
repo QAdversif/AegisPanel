@@ -5,7 +5,7 @@
 
 [Unit]
 Description=Aegis node agent
-Documentation=https://github.com/aegispanel/aegis
+Documentation=https://github.com/QAdversif/AegisPanel
 After=network-online.target caddy.service
 Wants=network-online.target
 StartLimitIntervalSec=120

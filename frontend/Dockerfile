@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Aegis UI production image — Vite build served by Caddy.
-# Build:   docker build -t aegispanel/aegis-ui:dev -f frontend/Dockerfile .
-# Run:     docker run --rm -p 8080:8080 aegispanel/aegis-ui:dev
+# Build:   docker build -t QAdversif/AegisPanel-ui:dev -f frontend/Dockerfile .
+# Run:     docker run --rm -p 8080:8080 QAdversif/AegisPanel-ui:dev
 
 # ---- Build stage ---------------------------------------------------------
 FROM node:20-alpine AS build

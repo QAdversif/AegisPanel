@@ -4,7 +4,7 @@ title: Architecture
 
 # Architecture
 
-The full design lives in [`ARCHITECTURE.md`](https://github.com/aegispanel/aegis/blob/main/ARCHITECTURE.md)
+The full design lives in [`ARCHITECTURE.md`](https://github.com/QAdversif/AegisPanel/blob/main/ARCHITECTURE.md)
 in the repository root. The in-repo version is the source of truth and
 should be edited in lockstep with the code.
 

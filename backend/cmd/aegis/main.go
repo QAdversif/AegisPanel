@@ -23,9 +23,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/aegispanel/aegis/internal/config"
-	"github.com/aegispanel/aegis/internal/obs"
-	"github.com/aegispanel/aegis/internal/router"
+	"github.com/QAdversif/AegisPanel/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/obs"
+	"github.com/QAdversif/AegisPanel/internal/router"
 )
 
 func main() {

@@ -17,10 +17,10 @@ backported to the latest minor only.
 channels instead:
 
 1. **GitHub Security Advisories:** open a
-   [private security advisory](https://github.com/aegispanel/aegis/security/advisories/new)
+   [private security advisory](https://github.com/QAdversif/AegisPanel/security/advisories/new)
    on the repository. This is the preferred channel — it lets us
    coordinate a fix and a coordinated disclosure timeline.
-2. **Email:** `security@aegispanel.example` (replace with the
+2. **Email:** `security@QAdversif.example` (replace with the
    real address once the public repo is set up). Encrypted reports
    are welcome; the PGP fingerprint will be published alongside the
    address.
@@ -63,7 +63,7 @@ Out of scope (please report to upstream):
 ## Recognition
 
 We follow a
-[hall of fame](https://github.com/aegispanel/aegis/security/hall-of-fame)
+[hall of fame](https://github.com/QAdversif/AegisPanel/security/hall-of-fame)
 model. Reporters who follow responsible disclosure are credited (with
 their consent) in the corresponding GitHub Security Advisory.
 
