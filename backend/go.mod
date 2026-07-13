@@ -30,6 +30,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nats-io/nats.go v1.52.0
+	github.com/pmezard/go-difflib v1.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/swaggo/swag v1.16.6
 )
