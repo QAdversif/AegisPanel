@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# golangci-lint configuration for Aegis backend.
-# Docs: https://golangci-lint.run/usage/configuration/
+# golangci-lint v2 configuration for Aegis backend.
+# Docs: https://golangci-lint.run/product/migration-guide/
 
-run:
-  timeout: 5m
-  tests: true
-  modules-download-mode: readonly
+version: "2"
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck       # unchecked errors
     - govet          # standard vet checks
@@ -30,49 +27,38 @@ linters:
     - prealloc       # slice prealloc hints
     - unconvert      # unnecessary conversions
     - unparam        # unused function params
-
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-    disabled-checks:
-      - dupImport     # too noisy with multi-package
-      - ifElseChain
-      - hugeParam
-      - rangeValCopy
-  gosec:
-    excludes:
-      - G304  # file inclusion via variable — needed for our config templates
-  revive:
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - dupImport     # too noisy with multi-package
+        - ifElseChain
+        - hugeParam
+        - rangeValCopy
+    gosec:
+      excludes:
+        - G304  # file inclusion via variable — needed for our config templates
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: error-strings
+        - name: error-naming
+        - name: error-return
+  exclusions:
     rules:
-      - name: exported
-        disabled: false
-      - name: package-comments
-      - name: var-naming
-      - name: indent-error-flow
-      - name: error-strings
-      - name: error-naming
-      - name: error-return
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
-        - gocritic
-    - path: migrations/
-      linters:
-        - gosec
-        - revive
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
-
-severity:
-  default: error
-  rules:
-    - linters: [gosec]
-      severity: high
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - gocritic
+      - path: migrations/
+        linters:
+          - gosec
+          - revive
