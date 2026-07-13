@@ -116,3 +116,6 @@ logs/
 *.key
 *.p12
 *.pfx
+
+# --- Aegis safety bundles ---
+backups/
