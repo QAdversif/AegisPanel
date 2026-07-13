@@ -237,7 +237,7 @@ func findBackendDir() (string, error) {
 		return "", errors.New("could not determine test file path")
 	}
 	dir := filepath.Dir(thisFile) // backend/testutil
-	root := filepath.Dir(dir)      // backend
+	root := filepath.Dir(dir)     // backend
 	if _, err := os.Stat(filepath.Join(root, "migrations")); err != nil {
 		return "", fmt.Errorf("migrations dir not found at %s/migrations: %w", root, err)
 	}
