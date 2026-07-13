@@ -20,6 +20,21 @@ import (
 	"syscall"
 	"time"
 
+	// Aegis Phase 1 — pre-declared runtime dependencies. These are pulled in
+	// as blank imports so that `go mod tidy` keeps the corresponding
+	// requirements in go.mod. They will be wired into real modules in
+	// upcoming phases (auth/users → pgx, jwt, crypto, uuid; events → nats;
+	// cache → redis; validation → validator; migrations → goose; openapi → swag).
+	_ "github.com/go-playground/validator/v10" // Phase 1 — input validation
+	_ "github.com/golang-jwt/jwt/v5"           // Phase 1 — JWT (access + refresh tokens)
+	_ "github.com/google/uuid"                  // Phase 1 — UUIDv4 generation
+	_ "github.com/jackc/pgx/v5"                 // Phase 1 — PostgreSQL driver
+	_ "github.com/nats-io/nats.go"              // Phase 1 — event bus / JetStream
+	_ "github.com/pressly/goose/v3"             // Phase 1 — SQL migrations
+	_ "github.com/redis/go-redis/v9"            // Phase 1 — Redis client
+	_ "github.com/swaggo/swag"                  // Phase 1 — OpenAPI generator
+	_ "golang.org/x/crypto/bcrypt"              // Phase 1 — password hashing
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
