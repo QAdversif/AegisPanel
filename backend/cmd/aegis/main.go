@@ -41,6 +41,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
+	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/router"
 )
@@ -129,10 +130,16 @@ func main() {
 	authSvc := auth.NewService(authSigner, authStore)
 
 	// 4. Build the HTTP server with the v1 router.
+	//
+	// The nodes service uses an in-memory store in Phase 0;
+	// the persistence layer is added in Phase 1 when nodes
+	// actually start registering themselves.
+	nodesSvc := nodes.NewService(nodes.NewMemoryStore())
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc)),
 	}
 
 	// 4. Run the server in a goroutine so we can listen for signals.
