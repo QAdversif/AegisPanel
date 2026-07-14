@@ -45,6 +45,23 @@ BEGIN;
 -- port per host; v3 has many endpoints with their own
 -- node/inbound/port), so the cleanest path is DROP +
 -- CREATE rather than ALTER.
+--
+-- PostgreSQL refuses to DROP a table that other
+-- objects depend on (SQLSTATE 2BP01). The v2 hosts
+-- table has inbound references from:
+--
+--   - host_pool_members.host_id (FK ON DELETE CASCADE,
+--     from migration 0001)
+--   - hosts_node_id_idx, hosts_enabled_idx (indexes
+--     from 0001; auto-drop with the table, but listed
+--     here for clarity)
+--
+-- We drop host_pool_members first (it is empty in
+-- Phase 0 anyway), then the table. The Down body
+-- restores the v2 chain in reverse.
+DROP TABLE IF EXISTS host_pool_members;
+DROP INDEX IF EXISTS hosts_enabled_idx;
+DROP INDEX IF EXISTS hosts_node_id_idx;
 DROP TABLE IF EXISTS hosts;
 
 CREATE TABLE hosts (
@@ -116,6 +133,58 @@ DROP TABLE IF EXISTS host_endpoints;
 DROP INDEX IF EXISTS hosts_priority_idx;
 DROP INDEX IF EXISTS hosts_enabled_idx;
 DROP TABLE IF EXISTS hosts;
+
+-- Restore the v2 `hosts` table and its dependents
+-- from migration 0001. The chain is host_pool_members
+-- → host_pools → nodes (host_pools.node_id); restoring
+-- the dependent tables first keeps PostgreSQL happy
+-- on the way back. The FKs are ON DELETE CASCADE from
+-- host_pool_members to hosts and host_pools, so the
+-- reverse order is host_pool_members → host_pools →
+-- hosts.
+CREATE TABLE hosts (
+    id              UUID PRIMARY KEY,
+    remark          TEXT NOT NULL,
+    type            TEXT NOT NULL DEFAULT 'direct',
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    priority        INTEGER NOT NULL DEFAULT 100,
+    status_filter   JSONB NOT NULL DEFAULT '[]'::JSONB,
+    node_id         UUID NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
+    inbound_id      UUID,
+    address         JSONB NOT NULL DEFAULT '[]'::JSONB,
+    port            INTEGER,
+    sni             JSONB NOT NULL DEFAULT '[]'::JSONB,
+    host            JSONB NOT NULL DEFAULT '[]'::JSONB,
+    path            TEXT,
+    security        TEXT,
+    alpn            JSONB NOT NULL DEFAULT '[]'::JSONB,
+    fingerprint     TEXT,
+    transport_settings JSONB NOT NULL DEFAULT '{}'::JSONB,
+    http_headers    JSONB NOT NULL DEFAULT '{}'::JSONB,
+    balancer        JSONB,
+    chain           JSONB,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (type IN ('direct', 'balancer', 'chain'))
+);
+CREATE INDEX hosts_node_id_idx ON hosts (node_id);
+CREATE INDEX hosts_enabled_idx  ON hosts (enabled);
+
+CREATE TABLE host_pools (
+    id              UUID PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    strategy        TEXT NOT NULL DEFAULT 'all',
+    antiaffinity    BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE host_pool_members (
+    pool_id         UUID NOT NULL REFERENCES host_pools(id) ON DELETE CASCADE,
+    host_id         UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    weight          INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (pool_id, host_id)
+);
 
 -- Restore the v2 `hosts` table from migration 0001.
 -- This is the verbatim block that 0001 had; the
