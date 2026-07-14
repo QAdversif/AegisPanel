@@ -109,7 +109,7 @@ func (s *PgStore) Create(ctx context.Context, h *Host) error {
 func (s *PgStore) GetByID(ctx context.Context, id uuid.UUID) (*Host, error) {
 	const q = hostWithEndpointsSelect + `
 		WHERE h.id = $1
-		ORDER BY e.id`
+		ORDER BY e.created_at, e.id`
 	rows, err := s.pool.Query(ctx, q, id)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -130,7 +130,7 @@ func (s *PgStore) GetByID(ctx context.Context, id uuid.UUID) (*Host, error) {
 func (s *PgStore) GetByRemark(ctx context.Context, remark string) (*Host, error) {
 	const q = hostWithEndpointsSelect + `
 		WHERE h.remark = $1
-		ORDER BY e.id`
+		ORDER BY e.created_at, e.id`
 	rows, err := s.pool.Query(ctx, q, remark)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -148,10 +148,11 @@ func (s *PgStore) GetByRemark(ctx context.Context, remark string) (*Host, error)
 
 // List returns every host, sorted by Priority ascending
 // then CreatedAt ascending. Endpoints are populated
-// alongside each host in a single JOIN query.
+// alongside each host in a single JOIN query, in
+// insertion order (e.created_at, e.id).
 func (s *PgStore) List(ctx context.Context) ([]*Host, error) {
 	const q = hostWithEndpointsSelect + `
-		ORDER BY h.priority, h.created_at, e.id`
+		ORDER BY h.priority, h.created_at, e.created_at, e.id`
 	rows, err := s.pool.Query(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
