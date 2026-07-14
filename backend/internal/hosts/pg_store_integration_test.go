@@ -442,6 +442,13 @@ func TestPgStore_Update_RenameCollision(t *testing.T) {
 	store := NewPgStore(pool)
 	f1 := newHostFixture(t, pool)
 	f2 := newHostFixture(t, pool)
+	// The fixture defaults to remark "Latvia"; without
+	// the override below the second Create would trip
+	// the UNIQUE(hosts.remark) constraint before we
+	// even reach the Update path. Give f2 a unique
+	// starting remark so the rename collision happens
+	// at the Update step, where this test lives.
+	f2.host.Remark = "Lithuania"
 	ctx := context.Background()
 	if err := store.Create(ctx, f1.host); err != nil {
 		t.Fatalf("f1: %v", err)
@@ -449,7 +456,7 @@ func TestPgStore_Update_RenameCollision(t *testing.T) {
 	if err := store.Create(ctx, f2.host); err != nil {
 		t.Fatalf("f2: %v", err)
 	}
-	f2.host.Remark = f1.host.Remark // collide
+	f2.host.Remark = f1.host.Remark // collide on Update
 	err := store.Update(ctx, f2.host)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("err = %v, want ErrDuplicate", err)
