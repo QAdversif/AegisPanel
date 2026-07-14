@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
@@ -193,12 +194,33 @@ func validateEndpointNode(ctx context.Context, svc *nodes.Service, id uuid.UUID)
 	return nil
 }
 
-func validateEndpointProtocol(p string) error {
-	if p == "" {
-		return &ValidationError{Field: "endpoints[].protocol", Message: "must not be empty"}
+// validateEndpointInbound is the post-PR-#35 cross-entity
+// check. The Endpoint references an inbound by InboundID;
+// the inbound must exist AND belong to the same node as
+// the Endpoint. PostgreSQL cannot express the
+// cross-table invariant as a CHECK (no subqueries), so
+// the application-side guard is canonical.
+//
+// The error messages reference the offending
+// Endpoint's NodeID for diagnosability: an operator
+// reading a panel log should see which two UUIDs the
+// panel was trying to wire together.
+func validateEndpointInbound(ctx context.Context, svc *inbounds.Service, nodeID, inboundID uuid.UUID) error {
+	if inboundID == uuid.Nil {
+		return &ValidationError{Field: "endpoints[].inbound_id", Message: "must be a non-zero UUID"}
 	}
-	if !isAllowedProtocol(p) {
-		return &ValidationError{Field: "endpoints[].protocol", Message: "unsupported protocol: " + p}
+	inb, err := svc.Get(ctx, inboundID)
+	if err != nil {
+		return &ValidationError{
+			Field:   "endpoints[].inbound_id",
+			Message: fmt.Sprintf("inbound %s does not exist", inboundID),
+		}
+	}
+	if inb.NodeID != nodeID {
+		return &ValidationError{
+			Field:   "endpoints[].inbound_id",
+			Message: fmt.Sprintf("inbound %s belongs to node %s, not %s", inboundID, inb.NodeID, nodeID),
+		}
 	}
 	return nil
 }
