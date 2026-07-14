@@ -21,10 +21,9 @@
 // inbounds as needed) and exercises one PgStore method.
 // The store is per-test, the database is shared across
 // tests (created fresh by MustNewPool with full
-// migrations). Tests that need isolation use the
-// transaction helper `inTx(t, pool, …)` to wrap their
-// inserts and roll back at the end — keeps the test data
-// set deterministic when the assertion order matters.
+// migrations). The fixtures use unique UUIDs and
+// remarks so a per-test fresh DB is enough for
+// isolation — no transaction wrapper is needed.
 package hosts
 
 import (
@@ -33,7 +32,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/QAdversif/AegisPanel/testutil"
@@ -493,21 +491,4 @@ func TestPgStore_Delete_NotFound(t *testing.T) {
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
-}
-
-// --- Test-only helpers --------------------------------------------------
-
-// inTx is a thin test helper that runs fn inside a
-// transaction and rolls back at the end. Not used by the
-// store; included so future tests can stage isolated
-// data without polluting the test database.
-//
-// The unused `f` parameter would trip `unused` lint if
-// inlined; keep `f` in the signature to mirror the
-// intended use, and drop the param when the first
-// consumer lands. Until then, the `f` parameter is the
-// placeholder for the future call sites.
-func inTx(t *testing.T, pool *pgxpool.Pool, _ func(pgx.Tx)) {
-	t.Helper()
-	_ = pool
 }

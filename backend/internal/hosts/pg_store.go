@@ -507,18 +507,37 @@ func mustMarshal(v any) []byte {
 // JSON `null` (4 bytes) and round-trip as a non-nil
 // empty struct, which the tests catch. The reflect
 // branch unboxes typed nils to a true nil.
+//
+// Note: Go 1.26+ marks `reflect.Ptr` with
+// `//go:fix inline` (it points to the canonical
+// `reflect.Pointer`). The `inline` analyzer of
+// `go vet` flags the old name; we use the new one
+// directly to satisfy it.
 func mustMarshalOrNil(v any) any {
 	if v == nil {
 		return nil
 	}
 	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func:
-		if rv.IsNil() {
-			return nil
-		}
+	if isNilableReflectValue(rv) {
+		return nil
 	}
 	return mustMarshal(v)
+}
+
+// isNilableReflectValue reports whether rv is a
+// nilable kind (pointer, interface, slice, map,
+// chan, func) AND is nil.
+func isNilableReflectValue(rv reflect.Value) bool {
+	k := rv.Kind()
+	if k != reflect.Pointer &&
+		k != reflect.Interface &&
+		k != reflect.Slice &&
+		k != reflect.Map &&
+		k != reflect.Chan &&
+		k != reflect.Func {
+		return false
+	}
+	return rv.IsNil()
 }
 
 // unmarshalInto decodes raw JSONB bytes into *dst. The
