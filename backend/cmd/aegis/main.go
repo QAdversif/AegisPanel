@@ -44,6 +44,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
 	"github.com/QAdversif/AegisPanel/internal/hosts"
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
@@ -169,11 +170,18 @@ func main() {
 	// both is Phase 0 / Phase 1; a pgx-backed HostStore
 	// lands with the broader Phase 1 pg migration.
 	hostsSvc := hosts.NewService(hosts.NewMemoryStore(), nodesSvc)
+	// The inbounds service also references nodes (every
+	// inbound belongs to a node). The MemoryStore is the
+	// Phase 0 default; a pgx-backed InboundStore lands
+	// with the broader Phase 1 pg migration. The
+	// underlying `inbounds` table is created by
+	// migration 0003_node_inbounds.sql.
+	inboundsSvc := inbounds.NewService(inbounds.NewMemoryStore(), nodesSvc)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc)),
 	}
 
 	// 4. Run the server in a goroutine so we can listen for signals.

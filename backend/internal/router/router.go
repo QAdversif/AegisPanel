@@ -17,6 +17,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
@@ -25,7 +26,7 @@ import (
 // auth.Service.Middleware() and surface the verified Claims on the
 // request context for downstream handlers. Other module routers
 // (nodes, …) are mounted here too — see comments inline.
-func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, hostsSvc *hosts.Service) http.Handler {
+func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, hostsSvc *hosts.Service, inboundsSvc *inbounds.Service) http.Handler {
 	r := chi.NewRouter()
 
 	// Built-in middlewares (recover, real IP, request ID, logger).
@@ -54,6 +55,14 @@ func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, h
 		// auth middleware + ScopeNodes requirement (applied
 		// inside nodes.Router itself).
 		r.Mount("/nodes", nodes.Router(nodesSvc, authSvc.Middleware()))
+
+		// Per-node inbounds — Phase 1. The inbounds router
+		// is mounted under the nodeId URL parameter so
+		// every inbound is naturally scoped to a node.
+		// The {nodeId} path parameter is set by the parent
+		// route and read inside inbounds.Router via
+		// chi.URLParam.
+		r.Mount("/nodes/{nodeId}/inbounds", inbounds.Router(inboundsSvc, authSvc.Middleware()))
 
 		// Hosts CRUD — Phase 1. Hosts reference nodes by id,
 		// so the hosts service is constructed in main.go with
