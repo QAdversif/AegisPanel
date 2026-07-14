@@ -2,8 +2,8 @@
 
 Closes the v3 Host model realisation: an Endpoint is a
 `(Node, Inbound)` pair, not a `(Node, Protocol)` pair.
-The protocol family moves entirely onto the Inbound (PR
-#34); the Endpoint carries only an `InboundID` and the
+The protocol family moves entirely onto the Inbound (PR 34);
+the Endpoint carries only an `InboundID` and the
 per-endpoint override layer.
 
 ## What it does
