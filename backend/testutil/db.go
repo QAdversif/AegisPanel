@@ -171,12 +171,31 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 	return serverDSN, dbName, nil
 }
 
-// recreateDatabase force-recreates the target database. We terminate
-// any existing connections first so the DROP doesn't block on a
-// lingering session.
+// recreateDatabase force-recreates the target database. We
+// terminate any existing connections first so the DROP
+// doesn't block on a lingering session.
+//
+// # Race with the previous test
+//
+// `pg_terminate_backend` is non-blocking — it sends a
+// SIGTERM and returns; the backend may still be tearing
+// down. If the next test calls recreateDatabase while the
+// previous test's pool is still releasing connections, the
+// DROP can fail with "database is being accessed by
+// other users" OR the subsequent CREATE can fail with
+// SQLSTATE 23505 on pg_database_datname_index because
+// the DB still appears in pg_database. The integration
+// test packages share one database, so the race shows up
+// as soon as we have more than one test package running
+// in the same `go test ./...` invocation.
+//
+// The fix is a small retry loop on drop+create. pgxpool's
+// Close is synchronous, so this is just belt-and-braces
+// against the small window between SIGTERM and the
+// postmaster actually forgetting the backend.
 func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	pool, err := pgxpool.New(ctx, adminDSN)
@@ -185,18 +204,33 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 	}
 	defer pool.Close()
 
+	// Terminate once. Even if a backend escapes this
+	// query, the retry loop below will eventually catch
+	// the still-closing connection on a subsequent
+	// drop+create attempt.
 	if _, err := pool.Exec(ctx,
 		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName),
 	); err != nil {
 		return fmt.Errorf("terminate backends: %w", err)
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
-		return fmt.Errorf("drop database: %w", err)
+
+	const maxAttempts = 10
+	const backoff = 100 * time.Millisecond
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+			lastErr = fmt.Errorf("drop database: %w", err)
+			time.Sleep(backoff)
+			continue
+		}
+		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+			lastErr = fmt.Errorf("create database: %w", err)
+			time.Sleep(backoff)
+			continue
+		}
+		return nil
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
-		return fmt.Errorf("create database: %w", err)
-	}
-	return nil
+	return fmt.Errorf("recreate database after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // runMigrations opens a transient pool, points it at the
