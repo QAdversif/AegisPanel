@@ -10,46 +10,78 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
 // --- helpers ------------------------------------------------------------
 
-// makeNodeSvc returns a *nodes.Service pre-seeded with the
-// given node IDs. We need real nodes in the store so the
-// host service's cross-entity validation has something to
-// resolve against.
-func makeNodeSvc(t *testing.T, nodeIDs ...uuid.UUID) *nodes.Service {
+// testEnv wires a *Service with the given node IDs and
+// one inbound per node. The map is the inbounds seeded
+// for each node, indexed by node ID. Tests that need a
+// second inbound on the same node (or that need a
+// specific inbound name / port) seed it explicitly.
+type testEnv struct {
+	svc           *Service
+	nodes         *nodes.Service
+	inboundByNode map[uuid.UUID]uuid.UUID
+}
+
+func (e *testEnv) inboundFor(nodeID uuid.UUID) uuid.UUID {
+	id, ok := e.inboundByNode[nodeID]
+	if !ok {
+		panic("no inbound seeded for node " + nodeID.String())
+	}
+	return id
+}
+
+// makeSvc seeds N nodes, one inbound per node, and
+// returns a testEnv with the wired Service and the
+// (node → inbound) lookup. The same in-memory node
+// store backs both the nodes and inbounds services so
+// the cross-entity validation in the host Service can
+// resolve both nodes and inbounds.
+func makeSvc(t *testing.T, nodeIDs ...uuid.UUID) *testEnv {
 	t.Helper()
-	store := nodes.NewMemoryStore()
-	svc := nodes.NewService(store)
+	env := &testEnv{
+		nodes:         nodes.NewService(nodes.NewMemoryStore()),
+		inboundByNode: make(map[uuid.UUID]uuid.UUID, len(nodeIDs)),
+	}
+	inbStore := inbounds.NewMemoryStore()
+	env.svc = NewService(NewMemoryStore(), env.nodes, inbounds.NewService(inbStore, env.nodes))
 	ctx := context.Background()
 	for _, id := range nodeIDs {
-		_, err := svc.Create(ctx, nodes.CreateInput{
+		if _, err := env.nodes.Create(ctx, nodes.CreateInput{
 			ID:      id,
 			Name:    "node-" + id.String()[:8],
 			Region:  "eu",
 			State:   nodes.StateOnline,
 			Address: "1.2.3.4:22",
-		})
-		if err != nil {
+		}); err != nil {
 			t.Fatalf("seed node %s: %v", id, err)
 		}
+		inbID := uuid.New()
+		if err := inbStore.Create(ctx, &inbounds.Inbound{
+			ID:         inbID,
+			NodeID:     id,
+			Name:       "vless-main",
+			Protocol:   inbounds.ProtocolVLESS,
+			Listen:     "::",
+			ListenPort: 443,
+		}); err != nil {
+			t.Fatalf("seed inbound for node %s: %v", id, err)
+		}
+		env.inboundByNode[id] = inbID
 	}
-	return svc
+	return env
 }
 
-func makeSvc(t *testing.T, nodeIDs ...uuid.UUID) *Service {
-	t.Helper()
-	return NewService(NewMemoryStore(), makeNodeSvc(t, nodeIDs...))
-}
-
-func validCreateInput(nodeID uuid.UUID) CreateInput {
+func validCreateInput(nodeID, inboundID uuid.UUID) CreateInput {
 	return CreateInput{
 		Remark: "Latvia",
 		Type:   HostTypeDirect,
 		Endpoints: []Endpoint{
-			{NodeID: nodeID, Protocol: "vless", Weight: 1},
+			{NodeID: nodeID, InboundID: inboundID, Weight: 1},
 		},
 	}
 }
@@ -60,10 +92,10 @@ func ptrFalse() *bool { b := false; return &b }
 
 func TestService_Create_Direct_Success(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	h, err := svc.Create(ctx, validCreateInput(nodeID))
+	h, err := env.svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -93,19 +125,19 @@ func TestService_Create_Direct_Success(t *testing.T) {
 func TestService_Create_Balancer_Success(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "Premium EU",
 		Type:   HostTypeBalancer,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 3},
-			{NodeID: nodeB, Protocol: "hysteria2", Weight: 2},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 3},
+			{NodeID: nodeB, InboundID: env.inboundFor(nodeB), Weight: 2},
 		},
 		Balancer: &Balancer{Strategy: StrategyRoundRobin},
 	}
-	h, err := svc.Create(ctx, in)
+	h, err := env.svc.Create(ctx, in)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -116,13 +148,13 @@ func TestService_Create_Balancer_Success(t *testing.T) {
 
 func TestService_Create_AssignsPriorityAndEnabled(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Enabled = ptrFalse()
 	in.Priority = ptrInt(5)
-	h, err := svc.Create(ctx, in)
+	h, err := env.svc.Create(ctx, in)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -138,12 +170,12 @@ func TestService_Create_AssignsPriorityAndEnabled(t *testing.T) {
 
 func TestService_Create_RejectsEmptyRemark(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Remark = "   "
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -155,12 +187,12 @@ func TestService_Create_RejectsEmptyRemark(t *testing.T) {
 
 func TestService_Create_RejectsUnknownType(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Type = HostType("chain")
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -173,18 +205,18 @@ func TestService_Create_RejectsUnknownType(t *testing.T) {
 func TestService_Create_RejectsDirectWithMultipleEndpoints(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "x",
 		Type:   HostTypeDirect,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 1},
-			{NodeID: nodeB, Protocol: "hysteria2", Weight: 1},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 1},
+			{NodeID: nodeB, InboundID: env.inboundFor(nodeB), Weight: 1},
 		},
 	}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -196,18 +228,18 @@ func TestService_Create_RejectsDirectWithMultipleEndpoints(t *testing.T) {
 
 func TestService_Create_RejectsBalancerWithSingleEndpoint(t *testing.T) {
 	nodeA := uuid.New()
-	svc := makeSvc(t, nodeA)
+	env := makeSvc(t, nodeA)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "x",
 		Type:   HostTypeBalancer,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 1},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 1},
 		},
 		Balancer: &Balancer{Strategy: StrategyRoundRobin},
 	}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -220,19 +252,19 @@ func TestService_Create_RejectsBalancerWithSingleEndpoint(t *testing.T) {
 func TestService_Create_RejectsBalancerWithoutBalancer(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "x",
 		Type:   HostTypeBalancer,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 1},
-			{NodeID: nodeB, Protocol: "hysteria2", Weight: 1},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 1},
+			{NodeID: nodeB, InboundID: env.inboundFor(nodeB), Weight: 1},
 		},
 		// no Balancer
 	}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -244,12 +276,12 @@ func TestService_Create_RejectsBalancerWithoutBalancer(t *testing.T) {
 
 func TestService_Create_RejectsDirectWithBalancer(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Balancer = &Balancer{Strategy: StrategyRoundRobin}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -260,11 +292,11 @@ func TestService_Create_RejectsDirectWithBalancer(t *testing.T) {
 }
 
 func TestService_Create_RejectsEndpointWithUnknownNode(t *testing.T) {
-	svc := makeSvc(t) // no nodes seeded
+	env := makeSvc(t) // no nodes seeded
 	ctx := context.Background()
 
-	in := validCreateInput(uuid.New())
-	_, err := svc.Create(ctx, in)
+	in := validCreateInput(uuid.New(), uuid.New())
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -274,31 +306,66 @@ func TestService_Create_RejectsEndpointWithUnknownNode(t *testing.T) {
 	}
 }
 
-func TestService_Create_RejectsEndpointWithUnknownProtocol(t *testing.T) {
+func TestService_Create_RejectsEndpointWithZeroInboundID(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
-	in.Endpoints[0].Protocol = "wireguard"
-	_, err := svc.Create(ctx, in)
+	in := validCreateInput(nodeID, uuid.Nil)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
 	}
-	if vErr.Field != "endpoints[].protocol" {
-		t.Errorf("Field = %q, want endpoints[].protocol", vErr.Field)
+	if vErr.Field != "endpoints[].inbound_id" {
+		t.Errorf("Field = %q, want endpoints[].inbound_id", vErr.Field)
+	}
+}
+
+func TestService_Create_RejectsEndpointWithUnknownInbound(t *testing.T) {
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	ctx := context.Background()
+
+	in := validCreateInput(nodeID, uuid.New()) // inbound not seeded
+	_, err := env.svc.Create(ctx, in)
+	var vErr *ValidationError
+	if !errors.As(err, &vErr) {
+		t.Fatalf("err = %v, want ValidationError", err)
+	}
+	if vErr.Field != "endpoints[].inbound_id" {
+		t.Errorf("Field = %q, want endpoints[].inbound_id", vErr.Field)
+	}
+}
+
+func TestService_Create_RejectsInboundOnWrongNode(t *testing.T) {
+	nodeA := uuid.New()
+	nodeB := uuid.New()
+	env := makeSvc(t, nodeA, nodeB)
+	ctx := context.Background()
+
+	// Reference nodeA's inbound from an endpoint
+	// claiming to be on nodeB. The cross-entity check
+	// must reject.
+	in := validCreateInput(nodeB, env.inboundFor(nodeA))
+	_, err := env.svc.Create(ctx, in)
+	var vErr *ValidationError
+	if !errors.As(err, &vErr) {
+		t.Fatalf("err = %v, want ValidationError", err)
+	}
+	if vErr.Field != "endpoints[].inbound_id" {
+		t.Errorf("Field = %q, want endpoints[].inbound_id", vErr.Field)
 	}
 }
 
 func TestService_Create_RejectsNegativeWeight(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Endpoints[0].Weight = -1
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -314,12 +381,12 @@ func TestService_Create_DefaultsZeroWeightToOne(t *testing.T) {
 	// it on common single-protocol endpoints. A
 	// negative weight is a real error.
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Endpoints[0].Weight = 0
-	h, err := svc.Create(ctx, in)
+	h, err := env.svc.Create(ctx, in)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -330,12 +397,12 @@ func TestService_Create_DefaultsZeroWeightToOne(t *testing.T) {
 
 func TestService_Create_RejectsUnknownStatusFilter(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.StatusFilter = []UserStatus{UserStatus("paused")}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -348,19 +415,19 @@ func TestService_Create_RejectsUnknownStatusFilter(t *testing.T) {
 func TestService_Create_RejectsUnknownBalancerStrategy(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "x",
 		Type:   HostTypeBalancer,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 1},
-			{NodeID: nodeB, Protocol: "hysteria2", Weight: 1},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 1},
+			{NodeID: nodeB, InboundID: env.inboundFor(nodeB), Weight: 1},
 		},
 		Balancer: &Balancer{Strategy: BalancerStrategy("mystery")},
 	}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -373,15 +440,15 @@ func TestService_Create_RejectsUnknownBalancerStrategy(t *testing.T) {
 func TestService_Create_RejectsInvalidHealthcheckURL(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	in := CreateInput{
 		Remark: "x",
 		Type:   HostTypeBalancer,
 		Endpoints: []Endpoint{
-			{NodeID: nodeA, Protocol: "vless", Weight: 1},
-			{NodeID: nodeB, Protocol: "hysteria2", Weight: 1},
+			{NodeID: nodeA, InboundID: env.inboundFor(nodeA), Weight: 1},
+			{NodeID: nodeB, InboundID: env.inboundFor(nodeB), Weight: 1},
 		},
 		Balancer: &Balancer{
 			Strategy:               StrategyRoundRobin,
@@ -389,7 +456,7 @@ func TestService_Create_RejectsInvalidHealthcheckURL(t *testing.T) {
 			HealthcheckIntervalSec: 30,
 		},
 	}
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -398,12 +465,12 @@ func TestService_Create_RejectsInvalidHealthcheckURL(t *testing.T) {
 
 func TestService_Create_RejectsOutOfRangePriority(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	in := validCreateInput(nodeID)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
 	in.Priority = ptrInt(100000)
-	_, err := svc.Create(ctx, in)
+	_, err := env.svc.Create(ctx, in)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -415,14 +482,14 @@ func TestService_Create_RejectsOutOfRangePriority(t *testing.T) {
 
 func TestService_Create_RejectsDuplicateRemark(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	if _, err := svc.Create(ctx, validCreateInput(nodeID)); err != nil {
+	if _, err := env.svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID))); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	in := validCreateInput(nodeID)
-	_, err := svc.Create(ctx, in)
+	in := validCreateInput(nodeID, env.inboundFor(nodeID))
+	_, err := env.svc.Create(ctx, in)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("err = %v, want ErrDuplicate", err)
 	}
@@ -432,17 +499,17 @@ func TestService_Create_RejectsDuplicateRemark(t *testing.T) {
 
 func TestService_Update_PartialFields(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	h, err := svc.Create(ctx, validCreateInput(nodeID))
+	h, err := env.svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	enabled := false
 	displayName := "🇳🇱 Netherlands"
-	upd, err := svc.Update(ctx, h.ID, UpdateInput{
+	upd, err := env.svc.Update(ctx, h.ID, UpdateInput{
 		Enabled:     &enabled,
 		DisplayName: &displayName,
 	})
@@ -463,20 +530,19 @@ func TestService_Update_PartialFields(t *testing.T) {
 func TestService_Update_TypeChangeEnforcesNewEndpointCount(t *testing.T) {
 	nodeA := uuid.New()
 	nodeB := uuid.New()
-	svc := makeSvc(t, nodeA, nodeB)
+	env := makeSvc(t, nodeA, nodeB)
 	ctx := context.Background()
 
 	// Start as direct.
-	in := validCreateInput(nodeA)
-	in.Endpoints[0].NodeID = nodeA
-	h, err := svc.Create(ctx, in)
+	in := validCreateInput(nodeA, env.inboundFor(nodeA))
+	h, err := env.svc.Create(ctx, in)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	// Change type to balancer — should fail because
 	// only 1 endpoint.
 	t2 := HostTypeBalancer
-	_, err = svc.Update(ctx, h.ID, UpdateInput{Type: &t2})
+	_, err = env.svc.Update(ctx, h.ID, UpdateInput{Type: &t2})
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -487,8 +553,8 @@ func TestService_Update_TypeChangeEnforcesNewEndpointCount(t *testing.T) {
 }
 
 func TestService_Update_NotFound(t *testing.T) {
-	svc := makeSvc(t)
-	_, err := svc.Update(context.Background(), uuid.New(), UpdateInput{})
+	env := makeSvc(t)
+	_, err := env.svc.Update(context.Background(), uuid.New(), UpdateInput{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -498,24 +564,24 @@ func TestService_Update_NotFound(t *testing.T) {
 
 func TestService_Delete_Success(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	ctx := context.Background()
 
-	h, err := svc.Create(ctx, validCreateInput(nodeID))
+	h, err := env.svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := svc.Delete(ctx, h.ID); err != nil {
+	if err := env.svc.Delete(ctx, h.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := svc.Get(ctx, h.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := env.svc.Get(ctx, h.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("after delete err = %v, want ErrNotFound", err)
 	}
 }
 
 func TestService_Delete_ZeroID_Rejected(t *testing.T) {
-	svc := makeSvc(t)
-	err := svc.Delete(context.Background(), uuid.Nil)
+	env := makeSvc(t)
+	err := env.svc.Delete(context.Background(), uuid.Nil)
 	var vErr *ValidationError
 	if !errors.As(err, &vErr) {
 		t.Fatalf("err = %v, want ValidationError", err)
@@ -526,10 +592,10 @@ func TestService_Delete_ZeroID_Rejected(t *testing.T) {
 
 func TestService_SetClock_PropagatesToStore(t *testing.T) {
 	nodeID := uuid.New()
-	svc := makeSvc(t, nodeID)
+	env := makeSvc(t, nodeID)
 	fixed := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	svc.SetClock(func() time.Time { return fixed })
-	h, err := svc.Create(context.Background(), validCreateInput(nodeID))
+	env.svc.SetClock(func() time.Time { return fixed })
+	h, err := env.svc.Create(context.Background(), validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -537,3 +603,5 @@ func TestService_SetClock_PropagatesToStore(t *testing.T) {
 		t.Errorf("CreatedAt = %s, want %s", h.CreatedAt, fixed)
 	}
 }
+
+// end of file

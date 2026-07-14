@@ -165,11 +165,6 @@ func main() {
 	// the persistence layer is added in Phase 1 when nodes
 	// actually start registering themselves.
 	nodesSvc := nodes.NewService(nodes.NewMemoryStore())
-	// The hosts service references nodes, so it is
-	// constructed after nodesSvc. The MemoryStore on
-	// both is Phase 0 / Phase 1; a pgx-backed HostStore
-	// lands with the broader Phase 1 pg migration.
-	hostsSvc := hosts.NewService(hosts.NewMemoryStore(), nodesSvc)
 	// The inbounds service also references nodes (every
 	// inbound belongs to a node). The MemoryStore is the
 	// Phase 0 default; a pgx-backed InboundStore lands
@@ -177,6 +172,14 @@ func main() {
 	// underlying `inbounds` table is created by
 	// migration 0003_node_inbounds.sql.
 	inboundsSvc := inbounds.NewService(inbounds.NewMemoryStore(), nodesSvc)
+	// The hosts service references nodes AND inbounds
+	// (every endpoint is a (Node, Inbound) pair), so it is
+	// constructed after both. The MemoryStore on all
+	// three is Phase 0 / Phase 1; a pgx-backed HostStore
+	// lands with the broader Phase 1 pg migration. The
+	// `hosts` and `host_endpoints` tables are created by
+	// migration 0004_hosts_v3.sql.
+	hostsSvc := hosts.NewService(hosts.NewMemoryStore(), nodesSvc, inboundsSvc)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
