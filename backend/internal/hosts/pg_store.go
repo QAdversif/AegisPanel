@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -483,11 +484,26 @@ func mustMarshal(v any) []byte {
 }
 
 // mustMarshalOrNil returns the marshaled bytes for v, or
-// nil if v is the zero value (interface == nil or typed
-// nil). Used for nullable JSONB columns.
+// nil if v is the zero value (interface == nil or a
+// typed nil pointer). Used for nullable JSONB columns.
+//
+// The `v == nil` check alone is not enough for typed
+// nil pointers: `var p *Balancer; var v any = p; v == nil`
+// is false because v carries the type *Balancer. Without
+// the reflect check, a nil *Balancer would marshal as
+// JSON `null` (4 bytes) and round-trip as a non-nil
+// empty struct, which the tests catch. The reflect
+// branch unboxes typed nils to a true nil.
 func mustMarshalOrNil(v any) any {
 	if v == nil {
 		return nil
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Map, reflect.Chan, reflect.Func:
+		if rv.IsNil() {
+			return nil
+		}
 	}
 	return mustMarshal(v)
 }
