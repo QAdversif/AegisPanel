@@ -55,6 +55,25 @@ const EnvIntegrationDSN = "INTEGRATION_DATABASE_URL"
 //
 // If INTEGRATION_DATABASE_URL is empty, the test is skipped with a
 // message that points the reader at the Makefile target.
+//
+// # Cross-package serialisation
+//
+// `go test ./...` runs each package in a separate process, and
+// every package shares the same DSN. Without a cross-process
+// lock, two packages can interleave on the shared database:
+// one creates it, the other drops it, the first then sees
+// "database does not exist" on its next query. The fix is a
+// PostgreSQL session-scoped advisory lock (`pg_advisory_lock`)
+// held for the ENTIRE duration the test process owns the
+// database — from before the recreate through the migration
+// step. The lock is released by `t.Cleanup` when the test
+// process is done with the database.
+//
+// The lock is held on a single connection from the admin pool
+// (which points at the default `postgres` database, not the
+// target). All drop+create + migrate operations run while
+// the lock is held; other test processes calling
+// `pg_advisory_lock(42)` block until we release.
 func MustNewPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
@@ -77,16 +96,52 @@ func MustNewPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("parse DSN: %v", err)
 	}
 
-	if err := recreateDatabase(t, adminDSN, dbName); err != nil {
+	// 1. Acquire a single admin connection and hold a
+	//    session-scoped advisory lock for the rest of
+	//    the function. The lock prevents any other
+	//    test process from re-creating the database
+	//    while we are running migrations or while the
+	//    test itself is using the pool.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	adminPool, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatalf("admin pgxpool: %v", err)
+	}
+	t.Cleanup(adminPool.Close)
+
+	adminConn, err := adminPool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire admin connection: %v", err)
+	}
+	// 42 is an arbitrary constant; the lock is
+	// project-private. Two test processes picking the
+	// same DSN serialise on this.
+	const advisoryKey int64 = 42
+	if _, err := adminConn.Exec(ctx, "SELECT pg_advisory_lock($1)", advisoryKey); err != nil {
+		adminConn.Release()
+		t.Fatalf("advisory lock: %v", err)
+	}
+	// Best-effort unlock at test end. The connection
+	// close would also release the lock, but it pays
+	// to be explicit.
+	t.Cleanup(func() {
+		// Use a fresh context: the test's own context
+		// may already be cancelled at this point.
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		_, _ = adminConn.Exec(releaseCtx, "SELECT pg_advisory_unlock($1)", advisoryKey)
+		adminConn.Release()
+	})
+
+	if err := recreateDatabaseOnConn(ctx, adminConn, dbName); err != nil {
 		t.Fatalf("recreate database %q: %v", dbName, err)
 	}
 
-	if err := runMigrations(t, dsn); err != nil {
+	if err := runMigrationsOnConn(t, ctx, adminConn, dsn); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -171,41 +226,57 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 	return serverDSN, dbName, nil
 }
 
-// recreateDatabase force-recreates the target database. We terminate
-// any existing connections first so the DROP doesn't block on a
-// lingering session.
-func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, adminDSN)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
-
-	if _, err := pool.Exec(ctx,
+// recreateDatabaseOnConn is the per-conn version of
+// recreateDatabase. The caller passes a connection from
+// the admin pool that already holds the
+// `pg_advisory_lock(42)` session-scoped lock; we use
+// that connection for the terminate + drop + create
+// sequence so the lock continues to cover the operation.
+//
+// The 10-attempt retry on DROP catches the rare case of
+// a still-closing backend surviving the terminate query
+// (pg_terminate_backend is non-blocking). With the
+// advisory lock held, no other test process can interfere.
+func recreateDatabaseOnConn(ctx context.Context, conn *pgxpool.Conn, dbName string) error {
+	if _, err := conn.Exec(ctx,
 		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName),
 	); err != nil {
 		return fmt.Errorf("terminate backends: %w", err)
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
-		return fmt.Errorf("drop database: %w", err)
+
+	const maxAttempts = 10
+	const backoff = 100 * time.Millisecond
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+			lastErr = fmt.Errorf("drop database: %w", err)
+			time.Sleep(backoff)
+			continue
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+			lastErr = fmt.Errorf("create database: %w", err)
+			time.Sleep(backoff)
+			continue
+		}
+		return nil
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
-		return fmt.Errorf("create database: %w", err)
-	}
-	return nil
+	return fmt.Errorf("recreate database after %d attempts: %w", maxAttempts, lastErr)
 }
 
-// runMigrations opens a transient pool, points it at the
-// configured test database, and delegates to the production
-// migrator (`internal/migrations.Up`). Keeping the migration
-// path identical between dev/CI and tests means a fix to one is
-// a fix to the other — there is no second migrator to keep in
-// sync.
-func runMigrations(t *testing.T, dsn string) error {
+// runMigrationsOnConn delegates to the production migrator
+// (`internal/migrations.Up`). The caller holds a
+// `pg_advisory_lock(42)` on `_` (a connection from the
+// admin pool); we do not use that connection for the
+// migration itself because it points at the default
+// `postgres` database, not the target. Instead we open a
+// transient pool to the target DSN. The lock is still
+// held while we connect, so no other test process can
+// drop+create the database underneath us.
+//
+// Keeping the migration path identical between dev/CI
+// and tests means a fix to one is a fix to the other —
+// there is no second migrator to keep in sync.
+func runMigrationsOnConn(t *testing.T, ctx context.Context, _ *pgxpool.Conn, dsn string) error {
 	t.Helper()
 
 	backendDir, err := findBackendDir()
@@ -213,9 +284,6 @@ func runMigrations(t *testing.T, dsn string) error {
 		return err
 	}
 	migDir := filepath.Join(backendDir, "migrations")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {

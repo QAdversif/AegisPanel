@@ -61,6 +61,15 @@ type Config struct {
 	// (PgStore) and runs goose migrations on boot.
 	AuthBackend string `env:"AEGIS_AUTH_BACKEND" envDefault:"memory"`
 
+	// HostsBackend selects the persistence layer for the
+	// hosts service. "memory" (default) embeds endpoints
+	// in the Host struct — fine for dev / unit tests.
+	// "pg" uses the PostgreSQL backend (PgStore) which
+	// stores endpoints in a separate host_endpoints
+	// table. The broader Phase 1 pg migration runs on
+	// boot when this is "pg".
+	HostsBackend string `env:"AEGIS_HOSTS_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 }

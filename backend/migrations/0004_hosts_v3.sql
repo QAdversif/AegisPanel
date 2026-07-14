@@ -66,7 +66,7 @@ DROP TABLE IF EXISTS hosts;
 
 CREATE TABLE hosts (
     id              UUID PRIMARY KEY,
-    remark          TEXT NOT NULL,
+    remark          TEXT NOT NULL UNIQUE,
     type            TEXT NOT NULL DEFAULT 'direct',
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
     priority        INTEGER NOT NULL DEFAULT 0,
@@ -185,38 +185,5 @@ CREATE TABLE host_pool_members (
     weight          INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (pool_id, host_id)
 );
-
--- Restore the v2 `hosts` table from migration 0001.
--- This is the verbatim block that 0001 had; the
--- operator running `aegis migrate down 0004` is
--- expected to then `aegis migrate down 0003` (and
--- further) to fully reverse.
-CREATE TABLE hosts (
-    id              UUID PRIMARY KEY,
-    remark          TEXT NOT NULL,
-    type            TEXT NOT NULL DEFAULT 'direct',
-    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
-    priority        INTEGER NOT NULL DEFAULT 100,
-    status_filter   JSONB NOT NULL DEFAULT '[]'::JSONB,
-    node_id         UUID NOT NULL REFERENCES nodes(id) ON DELETE RESTRICT,
-    inbound_id      UUID,
-    address         JSONB NOT NULL DEFAULT '[]'::JSONB,
-    port            INTEGER,
-    sni             JSONB NOT NULL DEFAULT '[]'::JSONB,
-    host            JSONB NOT NULL DEFAULT '[]'::JSONB,
-    path            TEXT,
-    security        TEXT,
-    alpn            JSONB NOT NULL DEFAULT '[]'::JSONB,
-    fingerprint     TEXT,
-    transport_settings JSONB NOT NULL DEFAULT '{}'::JSONB,
-    http_headers    JSONB NOT NULL DEFAULT '{}'::JSONB,
-    balancer        JSONB,
-    chain           JSONB,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (type IN ('direct', 'balancer', 'chain'))
-);
-CREATE INDEX hosts_node_id_idx ON hosts (node_id);
-CREATE INDEX hosts_enabled_idx  ON hosts (enabled);
 
 COMMIT;
