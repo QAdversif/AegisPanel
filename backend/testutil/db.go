@@ -171,9 +171,12 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 	return serverDSN, dbName, nil
 }
 
-// recreateDatabase force-recreates the target database. We
-// terminate any existing connections first so the DROP
-// doesn't block on a lingering session.
+// recreateDatabase force-recreates the target database.
+// We terminate any existing connections first so the
+// DROP doesn't block on a lingering session, then hold a
+// PostgreSQL advisory lock for the duration of the
+// drop+create to serialise the integration test packages
+// that all share one database.
 //
 // # Race with the previous test
 //
@@ -184,15 +187,18 @@ func splitDSN(dsn string) (serverDSN, dbName string, err error) {
 // DROP can fail with "database is being accessed by
 // other users" OR the subsequent CREATE can fail with
 // SQLSTATE 23505 on pg_database_datname_index because
-// the DB still appears in pg_database. The integration
-// test packages share one database, so the race shows up
-// as soon as we have more than one test package running
-// in the same `go test ./...` invocation.
+// the DB still appears in pg_database.
 //
-// The fix is a small retry loop on drop+create. pgxpool's
-// Close is synchronous, so this is just belt-and-braces
-// against the small window between SIGTERM and the
-// postmaster actually forgetting the backend.
+// # Race with parallel test packages
+//
+// `go test ./...` runs each package in a separate
+// process, but they all share the same DSN and the same
+// target database. Without a cross-process lock, two
+// packages can interleave: one creates the database,
+// the other immediately drops it, the first then
+// observes "database does not exist" on Ping. The
+// advisory lock serialises the entire drop+create pair
+// across processes.
 func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -204,26 +210,56 @@ func recreateDatabase(t *testing.T, adminDSN, dbName string) error {
 	}
 	defer pool.Close()
 
-	// Terminate once. Even if a backend escapes this
-	// query, the retry loop below will eventually catch
-	// the still-closing connection on a subsequent
-	// drop+create attempt.
-	if _, err := pool.Exec(ctx,
+	// Acquire a single connection and hold it for the
+	// duration of the recreateDatabase call. The
+	// advisory lock is session-scoped, so we must use
+	// the SAME connection for acquire, drop, create,
+	// and release.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire admin connection: %w", err)
+	}
+	defer conn.Release()
+
+	// 42 is an arbitrary constant; the lock is
+	// project-private. Two test processes picking the
+	// same DSN will serialise on this.
+	const advisoryKey int64 = 42
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", advisoryKey); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
+	}
+	defer func() {
+		// Best-effort release; the connection close
+		// would also release the lock but it pays to
+		// be explicit.
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryKey)
+	}()
+
+	// Now that the lock is held, terminate and
+	// drop+create. The terminate is still best-effort
+	// (a still-closing backend might survive it), but
+	// because we own the only recreateDatabase call
+	// for this DB at this moment, the next call
+	// (after release) will get a clean state.
+	if _, err := conn.Exec(ctx,
 		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName),
 	); err != nil {
 		return fmt.Errorf("terminate backends: %w", err)
 	}
 
+	// Retry on the rare DROP failure (a backend
+	// survived the terminate; we are alone, so a
+	// small backoff is enough).
 	const maxAttempts = 10
 	const backoff = 100 * time.Millisecond
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if _, err := pool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
 			lastErr = fmt.Errorf("drop database: %w", err)
 			time.Sleep(backoff)
 			continue
 		}
-		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+		if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
 			lastErr = fmt.Errorf("create database: %w", err)
 			time.Sleep(backoff)
 			continue
