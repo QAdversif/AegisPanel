@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Package hosts implements the panel-side CRUD for the `hosts`
-// table that the operator-facing UI sells to end users.
+// and `host_endpoints` tables that the operator-facing UI
+// sells to end users.
 //
 // # v3 model (ARCHITECTURE.md §10)
 //
@@ -13,35 +14,48 @@
 //   - type=chain   → Phase 4+ (cascade / reverse / forward),
 //     explicitly not modelled in Phase 1
 //
-// Each Endpoint is a (Node, Protocol) pair + an override layer
-// that lets the operator tweak the rendered sing-box inbound
-// without touching the Node itself (typical case: same node
-// runs VLESS on 443 and HY2 on 8443 — one Host, two endpoints).
-//
-// # Phase 1 scope
-//
-// This PR delivers the structural model and the CRUD surface.
-// The full override chain (Endpoint → Host → Inbound → System
-// default), the security / transport / format-variable
-// resolution, the wildcard `*` salt expansion, and the
-// multi-port selection all live in the subscription service
-// that consumes the model. We only store what the operator
-// configures; the subscription service reads it back at
-// fetch time.
+// Each Endpoint is a (Node, Inbound) pair + an override
+// layer that lets the operator tweak the rendered sing-box
+// inbound without touching the Node itself (typical case:
+// the same node runs VLESS on 443 and HY2 on 8443 — one
+// Host, two endpoints, each pointing at a different
+// per-node Inbound).
 //
 // # Inbound reference
 //
-// The architecture calls for Endpoint to reference an Inbound
-// by `inbound_id` (a UUID into the not-yet-modelled `inbounds`
-// table). Phase 1 does not have that table — it lands in a
-// future PR together with the per-node inbound model. To keep
-// the model honest about this, Endpoint.Protocol is a free-form
-// string ("vless", "hysteria2", …) with a comment pointing at
-// the future migration that will replace it with an
-// `inbound_id` UUID. The Service layer enforces the same
-// allow-list today that the future Inbound model will enforce
-// at registration time, so a typo in a Host's endpoint
-// cannot leak through.
+// The Endpoint's protocol family — VLESS, Hysteria 2,
+// Shadowsocks, Trojan — lives on the referenced Inbound
+// (see the inbounds package; PR #34 added the `inbounds`
+// table). The Endpoint only carries an `InboundID`; the
+// protocol is read off the referenced Inbound at render
+// time. The Service layer enforces two invariants on
+// every Create / Update:
+//
+//  1. InboundID must resolve to an existing `inbounds`
+//     row (FK target).
+//  2. The referenced Inbound's NodeID must equal the
+//     Endpoint's NodeID. PostgreSQL cannot express this
+//     as a CHECK constraint (no subqueries); the
+//     application-side guard is canonical.
+//
+// # Phase 1 scope
+//
+// The full override chain (Endpoint → Host → Inbound →
+// System default), the security / transport /
+// format-variable resolution, the wildcard `*` salt
+// expansion, and the multi-port selection all live in
+// the subscription service that consumes the model.
+// We only store what the operator configures; the
+// subscription service reads it back at fetch time.
+//
+// # Persistence
+//
+// The MemoryStore in this package embeds the
+// `Endpoints` array on the Host struct (Phase 0
+// default). Migration 0004_hosts_v3.sql defines the
+// relational form (`hosts` + `host_endpoints`) for the
+// Phase 1.1 PgStore. The cross-entity validation in the
+// Service layer is the canonical guard either way.
 package hosts
 
 import (
@@ -152,18 +166,31 @@ type Host struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Endpoint is one (Node, Protocol) pair + a per-endpoint
+// Endpoint is one (Node, Inbound) pair + a per-endpoint
 // override layer. The override is applied at render time
 // by the subscription service; the Host model only stores
 // it.
 //
-// # Future migration
+// # Inbound reference
 //
-// Endpoint.Protocol will be replaced by Endpoint.InboundID
-// (uuid.UUID into `inbounds`) when the inbound model
-// lands. Until then, Protocol is validated against the
-// allow-list below so a typo cannot leak into a
-// subscription.
+// Endpoint.InboundID is a UUID into the `inbounds` table
+// (added in PR #34). The protocol family — VLESS,
+// Hysteria 2, Shadowsocks, Trojan — lives on the Inbound
+// itself; the Host's Endpoint does not duplicate it.
+// The Service layer enforces two invariants:
+//
+//  1. The InboundID must resolve to an existing
+//     `inbounds` row (FK target).
+//  2. The referenced Inbound's NodeID must equal the
+//     Endpoint's NodeID. PostgreSQL cannot express
+//     this as a CHECK constraint (no subqueries); the
+//     application-side guard is canonical.
+//
+// A pre-PR-#35 snapshot of this model used a free-form
+// `Protocol` string with a Service-side allow-list.
+// That field is gone; new endpoints carry an
+// InboundID, and the protocol is read off the
+// referenced Inbound at render time.
 type Endpoint struct {
 	// ID is a server-side generated UUID. Endpoints are
 	// addressed by ID in the subscription service
@@ -174,9 +201,13 @@ type Endpoint struct {
 	// Service layer rejects Endpoints whose NodeID does
 	// not resolve.
 	NodeID uuid.UUID `json:"node_id"`
-	// Protocol is the protocol family — "vless",
-	// "hysteria2", "shadowsocks", "trojan". See the
-	// package comment for the planned migration to
+	// InboundID is the FK into the `inbounds` table
+	// (PR #34). The protocol family, the listen port,
+	// the TLS / Reality / etc. knobs all live on the
+	// referenced Inbound; the Endpoint only carries
+	// per-endpoint overrides on top of the Inbound
+	// defaults.
+	InboundID uuid.UUID `json:"inbound_id"`
 	// InboundID.
 	Protocol string `json:"protocol"`
 	// Weight is the per-endpoint load-balancing
@@ -242,8 +273,9 @@ func (h *Host) IsValid() bool {
 }
 
 // isValid is the Endpoint equivalent of IsValid. The
-// protocol allow-list lives in service.go — IsValid only
-// checks structural rules.
+// Inbound resolution + cross-entity check (Endpoint.NodeID
+// must equal Inbound.NodeID) lives in service.go —
+// isValid only checks structural rules.
 func (e *Endpoint) isValid() bool {
 	if e == nil {
 		return false
@@ -251,7 +283,7 @@ func (e *Endpoint) isValid() bool {
 	if e.NodeID == uuid.Nil {
 		return false
 	}
-	if e.Protocol == "" {
+	if e.InboundID == uuid.Nil {
 		return false
 	}
 	if e.Weight < 0 {

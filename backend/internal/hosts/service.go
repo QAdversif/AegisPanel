@@ -11,17 +11,20 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
 // Service is the business-logic layer on top of Store. It
 // owns:
 //
-//   - input validation (remark, type, endpoint count, the
-//     protocol allow-list, weight bounds, balancer strategy,
-//     status filter values, failover endpoint references);
-//   - cross-entity validation (every Endpoint.NodeID must
-//     resolve to a known node);
+//   - input validation (remark, type, endpoint count, weight
+//     bounds, balancer strategy, status filter values,
+//     failover endpoint references);
+//   - cross-entity validation (every Endpoint.NodeID
+//     resolves to a known node, every Endpoint.InboundID
+//     resolves to a known inbound belonging to the same
+//     node);
 //   - ID / timestamp generation on Create;
 //   - the per-Endpoint ID and weight default.
 //
@@ -29,21 +32,28 @@ import (
 // rules stay in one place and the pgx migration in Phase 1
 // can swap the Store without touching validation.
 type Service struct {
-	store Store
-	nodes *nodes.Service
-	now   func() time.Time
+	store    Store
+	nodes    *nodes.Service
+	inbounds *inbounds.Service
+	now      func() time.Time
 }
 
 // NewService wires a Service around the given store. The
-// nodes service is required: every Endpoint must reference
-// a real node, and the only way to check that is via the
-// nodes.Service.
-func NewService(store Store, nodesSvc *nodes.Service) *Service {
-	return &Service{store: store, nodes: nodesSvc, now: time.Now}
+// nodes and inbounds services are both required: every
+// Endpoint must reference a real node AND a real
+// inbound, and the only way to check that is via the
+// corresponding Services.
+func NewService(store Store, nodesSvc *nodes.Service, inboundsSvc *inbounds.Service) *Service {
+	return &Service{
+		store:    store,
+		nodes:    nodesSvc,
+		inbounds: inboundsSvc,
+		now:      time.Now,
+	}
 }
 
-// SetClock swaps the time source. Intended for tests only;
-// the clock is propagated to any MemoryStore so the
+// SetClock swaps the time source. Intended for tests
+// only; the clock is propagated to any MemoryStore so the
 // timestamps stored in Create / Update are deterministic.
 func (s *Service) SetClock(now func() time.Time) {
 	s.now = now
@@ -278,38 +288,16 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 
 // --- internal helpers ---------------------------------------------------
 
-// allowedProtocols is the closed set of protocol families
-// an Endpoint may reference. The set matches the
-// per-protocol renderers in the sing-box provider so a
-// typo in a Host's endpoint cannot leak through to the
-// subscription service.
-//
-// # Future migration
-//
-// When the Inbound model lands, this allow-list moves
-// from "string check" to "FK exists in `inbounds` table".
-// See the package comment in host.go.
-var allowedProtocols = map[string]struct{}{
-	"vless":       {},
-	"hysteria2":   {},
-	"shadowsocks": {},
-	"trojan":      {},
-}
-
-func isAllowedProtocol(p string) bool {
-	_, ok := allowedProtocols[p]
-	return ok
-}
-
 // normaliseEndpoints walks the input slice, assigning an
 // ID and a default weight to each endpoint and validating
-// that the NodeID resolves and the protocol is allowed.
+// that the NodeID resolves, the InboundID resolves, and
+// the referenced Inbound belongs to the same node.
 func (s *Service) normaliseEndpoints(ctx context.Context, in []Endpoint) ([]Endpoint, error) {
 	if len(in) == 0 {
 		return nil, &ValidationError{Field: "endpoints", Message: "must contain at least one entry"}
 	}
 	out := make([]Endpoint, 0, len(in))
-	for i, ep := range in {
+	for _, ep := range in {
 		// Assign a server-side ID if the caller did not.
 		// Endpoints are addressed by ID in the
 		// subscription service (failover_endpoint_ids),
@@ -326,7 +314,7 @@ func (s *Service) normaliseEndpoints(ctx context.Context, in []Endpoint) ([]Endp
 		if err := validateEndpointNode(ctx, s.nodes, ep.NodeID); err != nil {
 			return nil, err
 		}
-		if err := validateEndpointProtocol(ep.Protocol); err != nil {
+		if err := validateEndpointInbound(ctx, s.inbounds, ep.NodeID, ep.InboundID); err != nil {
 			return nil, err
 		}
 		if err := validateWeight(ep.Weight); err != nil {
@@ -335,7 +323,6 @@ func (s *Service) normaliseEndpoints(ctx context.Context, in []Endpoint) ([]Endp
 		if err := validateEndpointOverrides(ep); err != nil {
 			return nil, err
 		}
-		_ = i
 		out = append(out, ep)
 	}
 	return out, nil

@@ -18,7 +18,7 @@ func TestHost_IsValid_AcceptsDirectSingleEndpoint(t *testing.T) {
 		Enabled:  true,
 		Priority: 0,
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
 		},
 	}
 	if !h.IsValid() {
@@ -34,8 +34,8 @@ func TestHost_IsValid_AcceptsBalancerMultiEndpoint(t *testing.T) {
 		Enabled:  true,
 		Priority: 0,
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: 1},
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "hysteria2", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
 		},
 		Balancer: &Balancer{Strategy: StrategyRoundRobin},
 	}
@@ -50,7 +50,7 @@ func TestHost_IsValid_RejectsEmptyRemark(t *testing.T) {
 		Type:   HostTypeDirect,
 		Remark: "",
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
 		},
 	}
 	if h.IsValid() {
@@ -64,7 +64,7 @@ func TestHost_IsValid_RejectsUnknownType(t *testing.T) {
 		Remark: "x",
 		Type:   HostType("chain"),
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
 		},
 	}
 	if h.IsValid() {
@@ -90,7 +90,7 @@ func TestHost_IsValid_RejectsEndpointWithZeroNodeID(t *testing.T) {
 		Remark: "x",
 		Type:   HostTypeDirect,
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.Nil, Protocol: "vless", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.Nil, InboundID: uuid.New(), Weight: 1},
 		},
 	}
 	if h.IsValid() {
@@ -98,17 +98,17 @@ func TestHost_IsValid_RejectsEndpointWithZeroNodeID(t *testing.T) {
 	}
 }
 
-func TestHost_IsValid_RejectsEndpointWithEmptyProtocol(t *testing.T) {
+func TestHost_IsValid_RejectsEndpointWithZeroInboundID(t *testing.T) {
 	h := &Host{
 		ID:     uuid.New(),
 		Remark: "x",
 		Type:   HostTypeDirect,
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.Nil, Weight: 1},
 		},
 	}
 	if h.IsValid() {
-		t.Fatal("empty protocol should be invalid")
+		t.Fatal("zero inbound_id should be invalid")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestHost_IsValid_RejectsNegativeWeight(t *testing.T) {
 		Remark: "x",
 		Type:   HostTypeDirect,
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: -1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: -1},
 		},
 	}
 	if h.IsValid() {
@@ -128,15 +128,15 @@ func TestHost_IsValid_RejectsNegativeWeight(t *testing.T) {
 
 func TestEndpoint_Clone_IsDeepEnough(t *testing.T) {
 	src := Endpoint{
-		ID:       uuid.New(),
-		NodeID:   uuid.New(),
-		Protocol: "vless",
-		Weight:   1,
-		Address:  []string{"a", "b"},
-		SNI:      []string{"s"},
-		Host:     []string{"h"},
-		Port:     ptrInt(443),
-		Path:     "/ws",
+		ID:        uuid.New(),
+		NodeID:    uuid.New(),
+		InboundID: uuid.New(),
+		Weight:    1,
+		Address:   []string{"a", "b"},
+		SNI:       []string{"s"},
+		Host:      []string{"h"},
+		Port:      ptrInt(443),
+		Path:      "/ws",
 	}
 	dst := cloneEndpoint(src)
 	// Mutate dst's slices; src must not change.
@@ -167,7 +167,7 @@ func TestHost_Clone_IsDeepEnough(t *testing.T) {
 		StatusFilter: []UserStatus{UserStatusActive, UserStatusOnHold},
 		Tags:         []string{"eu", "premium"},
 		Endpoints: []Endpoint{
-			{ID: uuid.New(), NodeID: uuid.New(), Protocol: "vless", Weight: 1},
+			{ID: uuid.New(), NodeID: uuid.New(), InboundID: uuid.New(), Weight: 1},
 		},
 		Balancer: &Balancer{
 			Strategy:            StrategyRoundRobin,
@@ -177,7 +177,7 @@ func TestHost_Clone_IsDeepEnough(t *testing.T) {
 	dst := cloneHost(src)
 	dst.StatusFilter[0] = UserStatusDisabled
 	dst.Tags[0] = "MUTATED"
-	dst.Endpoints[0].Protocol = "MUTATED"
+	dst.Endpoints[0].Address = []string{"MUTATED"}
 	dst.Balancer.FailoverEndpointIDs[0] = uuid.Nil
 	dst.Balancer.Strategy = StrategyRandom
 	if src.StatusFilter[0] != UserStatusActive {
@@ -186,8 +186,8 @@ func TestHost_Clone_IsDeepEnough(t *testing.T) {
 	if src.Tags[0] != "eu" {
 		t.Errorf("Tags clone is shallow")
 	}
-	if src.Endpoints[0].Protocol != "vless" {
-		t.Errorf("Endpoints clone is shallow")
+	if len(src.Endpoints[0].Address) != 0 {
+		t.Errorf("Endpoints clone is shallow: %v", src.Endpoints[0].Address)
 	}
 	if src.Balancer.Strategy != StrategyRoundRobin {
 		t.Errorf("Balancer clone is shallow")

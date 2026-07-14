@@ -65,15 +65,15 @@ type createRequest struct {
 // create body. The Service normalises the IDs and
 // weights; we accept zero values here.
 type createEndpoint struct {
-	ID       *uuid.UUID `json:"id,omitempty"`
-	NodeID   uuid.UUID  `json:"node_id"`
-	Protocol string     `json:"protocol"`
-	Weight   int        `json:"weight,omitempty"`
-	Address  []string   `json:"address,omitempty"`
-	Port     *int       `json:"port,omitempty"`
-	SNI      []string   `json:"sni,omitempty"`
-	Host     []string   `json:"host,omitempty"`
-	Path     string     `json:"path,omitempty"`
+	ID        *uuid.UUID `json:"id,omitempty"`
+	NodeID    uuid.UUID  `json:"node_id"`
+	InboundID uuid.UUID  `json:"inbound_id"`
+	Weight    int        `json:"weight,omitempty"`
+	Address   []string   `json:"address,omitempty"`
+	Port      *int       `json:"port,omitempty"`
+	SNI       []string   `json:"sni,omitempty"`
+	Host      []string   `json:"host,omitempty"`
+	Path      string     `json:"path,omitempty"`
 }
 
 type updateRequest struct {
@@ -91,15 +91,15 @@ type updateRequest struct {
 }
 
 type updateEndpoint struct {
-	ID       *uuid.UUID `json:"id,omitempty"`
-	NodeID   uuid.UUID  `json:"node_id"`
-	Protocol string     `json:"protocol"`
-	Weight   int        `json:"weight,omitempty"`
-	Address  []string   `json:"address,omitempty"`
-	Port     *int       `json:"port,omitempty"`
-	SNI      []string   `json:"sni,omitempty"`
-	Host     []string   `json:"host,omitempty"`
-	Path     string     `json:"path,omitempty"`
+	ID        *uuid.UUID `json:"id,omitempty"`
+	NodeID    uuid.UUID  `json:"node_id"`
+	InboundID uuid.UUID  `json:"inbound_id"`
+	Weight    int        `json:"weight,omitempty"`
+	Address   []string   `json:"address,omitempty"`
+	Port      *int       `json:"port,omitempty"`
+	SNI       []string   `json:"sni,omitempty"`
+	Host      []string   `json:"host,omitempty"`
+	Path      string     `json:"path,omitempty"`
 }
 
 // --- handlers -----------------------------------------------------------
@@ -250,14 +250,14 @@ func toServiceEndpointsFromUpdate(in []updateEndpoint) []Endpoint {
 
 func endpointFromCreate(e createEndpoint) Endpoint {
 	ep := Endpoint{
-		NodeID:   e.NodeID,
-		Protocol: e.Protocol,
-		Weight:   e.Weight,
-		Address:  e.Address,
-		Port:     e.Port,
-		SNI:      e.SNI,
-		Host:     e.Host,
-		Path:     e.Path,
+		NodeID:    e.NodeID,
+		InboundID: e.InboundID,
+		Weight:    e.Weight,
+		Address:   e.Address,
+		Port:      e.Port,
+		SNI:       e.SNI,
+		Host:      e.Host,
+		Path:      e.Path,
 	}
 	if e.ID != nil {
 		ep.ID = *e.ID
@@ -267,14 +267,14 @@ func endpointFromCreate(e createEndpoint) Endpoint {
 
 func endpointFromUpdate(e updateEndpoint) Endpoint {
 	ep := Endpoint{
-		NodeID:   e.NodeID,
-		Protocol: e.Protocol,
-		Weight:   e.Weight,
-		Address:  e.Address,
-		Port:     e.Port,
-		SNI:      e.SNI,
-		Host:     e.Host,
-		Path:     e.Path,
+		NodeID:    e.NodeID,
+		InboundID: e.InboundID,
+		Weight:    e.Weight,
+		Address:   e.Address,
+		Port:      e.Port,
+		SNI:       e.SNI,
+		Host:      e.Host,
+		Path:      e.Path,
 	}
 	if e.ID != nil {
 		ep.ID = *e.ID

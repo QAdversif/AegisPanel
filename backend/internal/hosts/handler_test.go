@@ -14,39 +14,17 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
-	"github.com/QAdversif/AegisPanel/internal/nodes"
 )
 
 // --- helpers ------------------------------------------------------------
 
-// makeNodeSvc returns a *nodes.Service with a single
-// pre-seeded node. The returned nodeID is what the test
-// uses to wire endpoints.
-func seedOneNode(t *testing.T) (svc *nodes.Service, id uuid.UUID) {
+// newTestServer wires a Router around the testEnv's
+// service. Auth middleware injects a claims set with
+// the hosts scope so the RequireScope guard does not
+// 403 every test; the one test that exercises the guard
+// swaps in its own auth middleware.
+func newTestServer(t *testing.T, env *testEnv) (*Service, http.Handler) {
 	t.Helper()
-	store := nodes.NewMemoryStore()
-	svc = nodes.NewService(store)
-	id = uuid.New()
-	if _, err := svc.Create(context.Background(), nodes.CreateInput{
-		ID:      id,
-		Name:    "node-" + id.String()[:8],
-		Region:  "eu",
-		State:   nodes.StateOnline,
-		Address: "1.2.3.4:22",
-	}); err != nil {
-		t.Fatalf("seed node: %v", err)
-	}
-	return svc, id
-}
-
-// newTestServer wires a Router around a Service. Auth
-// middleware injects a claims set with the hosts scope
-// so the RequireScope guard does not 403 every test;
-// the one test that exercises the guard swaps in its
-// own auth middleware.
-func newTestServer(t *testing.T, nodeSvc *nodes.Service) (*Service, http.Handler) {
-	t.Helper()
-	hostSvc := NewService(NewMemoryStore(), nodeSvc)
 	withScope := func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -56,9 +34,16 @@ func newTestServer(t *testing.T, nodeSvc *nodes.Service) (*Service, http.Handler
 			h.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-	r := Router(hostSvc, withScope)
-	return hostSvc, r
+	r := Router(env.svc, withScope)
+	return env.svc, r
 }
+
+// seedNodeAndInbound was a stub helper retained from an
+// earlier draft; the handler tests now use makeSvc
+// (defined in service_test.go) for the common case
+// and do not need it. Kept the function name as a
+// comment so the next reader who adds a test that
+// needs a different seed shape knows where to start.
 
 func do(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -87,7 +72,8 @@ func decode(t *testing.T, w *httptest.ResponseRecorder, v any) {
 // --- list ---------------------------------------------------------------
 
 func TestHandler_List_EmptyReturnsArrayNotNull(t *testing.T) {
-	_, h := newTestServer(t, nodes.NewService(nodes.NewMemoryStore()))
+	env := makeSvc(t) // no nodes seeded
+	_, h := newTestServer(t, env)
 	w := do(t, h, "GET", "/", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", w.Code)
@@ -107,13 +93,14 @@ func TestHandler_List_EmptyReturnsArrayNotNull(t *testing.T) {
 // --- create -------------------------------------------------------------
 
 func TestHandler_Create_Success(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	_, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	_, h := newTestServer(t, env)
 	body := createRequest{
 		Remark: "Latvia",
 		Type:   HostTypeDirect,
 		Endpoints: []createEndpoint{
-			{NodeID: nodeID, Protocol: "vless", Weight: 1},
+			{NodeID: nodeID, InboundID: env.inboundFor(nodeID), Weight: 1},
 		},
 	}
 	w := do(t, h, "POST", "/", body)
@@ -131,14 +118,15 @@ func TestHandler_Create_Success(t *testing.T) {
 }
 
 func TestHandler_Create_ValidationErrorReturns400(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	_, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	_, h := newTestServer(t, env)
 	// type=chain is not allowed in Phase 1.
 	body := createRequest{
 		Remark: "x",
 		Type:   HostType("chain"),
 		Endpoints: []createEndpoint{
-			{NodeID: nodeID, Protocol: "vless", Weight: 1},
+			{NodeID: nodeID, InboundID: env.inboundFor(nodeID), Weight: 1},
 		},
 	}
 	w := do(t, h, "POST", "/", body)
@@ -151,8 +139,8 @@ func TestHandler_Create_ValidationErrorReturns400(t *testing.T) {
 }
 
 func TestHandler_Create_MalformedBodyReturns400(t *testing.T) {
-	nodeSvc, _ := seedOneNode(t)
-	_, h := newTestServer(t, nodeSvc)
+	env := makeSvc(t, uuid.New())
+	_, h := newTestServer(t, env)
 	req := httptest.NewRequest("POST", "/", strings.NewReader("not json"))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -161,10 +149,28 @@ func TestHandler_Create_MalformedBodyReturns400(t *testing.T) {
 	}
 }
 
+func TestHandler_Create_UnknownInboundReturns400(t *testing.T) {
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	_, h := newTestServer(t, env)
+	body := createRequest{
+		Remark: "x",
+		Type:   HostTypeDirect,
+		Endpoints: []createEndpoint{
+			{NodeID: nodeID, InboundID: uuid.New(), Weight: 1},
+		},
+	}
+	w := do(t, h, "POST", "/", body)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400", w.Code)
+	}
+}
+
 // --- get ----------------------------------------------------------------
 
 func TestHandler_Get_NotFound(t *testing.T) {
-	_, h := newTestServer(t, nodes.NewService(nodes.NewMemoryStore()))
+	env := makeSvc(t)
+	_, h := newTestServer(t, env)
 	w := do(t, h, "GET", "/"+uuid.NewString(), nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("code = %d, want 404", w.Code)
@@ -172,7 +178,8 @@ func TestHandler_Get_NotFound(t *testing.T) {
 }
 
 func TestHandler_Get_BadIDReturns400(t *testing.T) {
-	_, h := newTestServer(t, nodes.NewService(nodes.NewMemoryStore()))
+	env := makeSvc(t)
+	_, h := newTestServer(t, env)
 	w := do(t, h, "GET", "/not-a-uuid", nil)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("code = %d, want 400", w.Code)
@@ -180,10 +187,11 @@ func TestHandler_Get_BadIDReturns400(t *testing.T) {
 }
 
 func TestHandler_Get_Found(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	svc, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	svc, h := newTestServer(t, env)
 	ctx := context.Background()
-	host, err := svc.Create(ctx, validCreateInput(nodeID))
+	host, err := svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -201,10 +209,11 @@ func TestHandler_Get_Found(t *testing.T) {
 // --- update -------------------------------------------------------------
 
 func TestHandler_Update_Success(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	svc, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	svc, h := newTestServer(t, env)
 	ctx := context.Background()
-	host, err := svc.Create(ctx, validCreateInput(nodeID))
+	host, err := svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -228,7 +237,8 @@ func TestHandler_Update_Success(t *testing.T) {
 }
 
 func TestHandler_Update_NotFoundReturns404(t *testing.T) {
-	_, h := newTestServer(t, nodes.NewService(nodes.NewMemoryStore()))
+	env := makeSvc(t)
+	_, h := newTestServer(t, env)
 	w := do(t, h, "PUT", "/"+uuid.NewString(), updateRequest{})
 	if w.Code != http.StatusNotFound {
 		t.Errorf("code = %d, want 404", w.Code)
@@ -236,10 +246,11 @@ func TestHandler_Update_NotFoundReturns404(t *testing.T) {
 }
 
 func TestHandler_Update_ValidationErrorReturns400(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	svc, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	svc, h := newTestServer(t, env)
 	ctx := context.Background()
-	host, err := svc.Create(ctx, validCreateInput(nodeID))
+	host, err := svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -255,10 +266,11 @@ func TestHandler_Update_ValidationErrorReturns400(t *testing.T) {
 // --- delete -------------------------------------------------------------
 
 func TestHandler_Delete_Success(t *testing.T) {
-	nodeSvc, nodeID := seedOneNode(t)
-	svc, h := newTestServer(t, nodeSvc)
+	nodeID := uuid.New()
+	env := makeSvc(t, nodeID)
+	svc, h := newTestServer(t, env)
 	ctx := context.Background()
-	host, err := svc.Create(ctx, validCreateInput(nodeID))
+	host, err := svc.Create(ctx, validCreateInput(nodeID, env.inboundFor(nodeID)))
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -272,7 +284,8 @@ func TestHandler_Delete_Success(t *testing.T) {
 }
 
 func TestHandler_Delete_NotFoundReturns404(t *testing.T) {
-	_, h := newTestServer(t, nodes.NewService(nodes.NewMemoryStore()))
+	env := makeSvc(t)
+	_, h := newTestServer(t, env)
 	w := do(t, h, "DELETE", "/"+uuid.NewString(), nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("code = %d, want 404", w.Code)
@@ -282,31 +295,18 @@ func TestHandler_Delete_NotFoundReturns404(t *testing.T) {
 // --- middleware ---------------------------------------------------------
 
 func TestHandler_RequiresScopeHosts(t *testing.T) {
-	// Auth middleware that asserts the request has
-	// the hosts scope. We craft a sub-handler that
-	// simply confirms the RequireScope middleware is
-	// in the chain.
-	nodeSvc, _ := seedOneNode(t)
-	hostSvc := NewService(NewMemoryStore(), nodeSvc)
-
-	// Build a fake auth middleware that injects
-	// claims with NO hosts scope. The RequireScope
-	// should reject the request.
+	env := makeSvc(t, uuid.New())
+	hostSvc := env.svc
 	denyAuth := func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := &auth.Claims{
 				Scopes: auth.Scopes{auth.ScopeRead},
 			}
-			// Attach to context the same way the
-			// real auth middleware does — but we
-			// don't have the helper exposed, so
-			// use the package's own type.
 			ctx := r.Context()
 			ctx = auth.WithClaims(ctx, claims)
 			h.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-
 	r := Router(hostSvc, denyAuth)
 	w := do(t, r, "GET", "/", nil)
 	if w.Code != http.StatusForbidden {
