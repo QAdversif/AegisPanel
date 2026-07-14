@@ -411,7 +411,7 @@ func scanHostsWithEndpoints(rows pgx.Rows) ([]*Host, error) {
 				CreatedAt: hCreatedAt,
 				UpdatedAt: hUpdatedAt,
 			}
-			if err := unmarshalInto(h.StatusFilter, hStatusFilterRaw); err != nil {
+			if err := unmarshalInto(&h.StatusFilter, hStatusFilterRaw); err != nil {
 				return nil, fmt.Errorf("status_filter: %w", err)
 			}
 			if err := unmarshalInto(&h.Tags, hTagsRaw); err != nil {
