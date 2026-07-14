@@ -304,12 +304,24 @@ func insertHost(ctx context.Context, tx pgx.Tx, h *Host) error {
 // insertEndpoint writes a single endpoint row. The
 // port is a nullable int (pointer in Go); the JSONB
 // slice fields are marshaled to []byte.
+//
+// `clock_timestamp()` is used for created_at and
+// updated_at instead of `NOW()` so the two endpoints
+// of a single host (inserted in the same transaction)
+// get distinct timestamps. `NOW()` returns the
+// transaction start time, which would collapse all
+// endpoint timestamps of a Create / Update into one
+// value and break the `ORDER BY e.created_at` read
+// path (the random-UUID tiebreaker would then
+// determine the order, which is not the insertion
+// order callers expect).
 func insertEndpoint(ctx context.Context, tx pgx.Tx, hostID uuid.UUID, ep *Endpoint) error {
 	const q = `
 		INSERT INTO host_endpoints (
 			id, host_id, node_id, inbound_id, weight,
-			address, port, sni, host, path
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+			address, port, sni, host, path,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp(), clock_timestamp())`
 	_, err := tx.Exec(ctx, q,
 		ep.ID,
 		hostID,
