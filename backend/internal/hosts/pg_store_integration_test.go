@@ -333,15 +333,21 @@ func TestPgStore_List_SortedByPriorityThenCreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// 4 hosts total. The "premium" host is priority 100,
-	// the rest priority 0 — so premium is last (higher
-	// priority value = lower in the rendered list per
-	// the v3 model).
-	if len(got) != 4 {
-		t.Fatalf("got %d hosts, want 4", len(got))
+	// 3 hosts total: alpha, bravo (priority 0, in
+	// insertion order), then premium (priority 100,
+	// last). Higher priority value sorts later in
+	// the rendered list per the v3 model.
+	if len(got) != 3 {
+		t.Fatalf("got %d hosts, want 3", len(got))
 	}
-	if got[3].Remark != "premium" {
-		t.Errorf("last remark = %q, want premium", got[3].Remark)
+	if got[0].Remark != "alpha" {
+		t.Errorf("first remark = %q, want alpha", got[0].Remark)
+	}
+	if got[1].Remark != "bravo" {
+		t.Errorf("second remark = %q, want bravo", got[1].Remark)
+	}
+	if got[2].Remark != "premium" {
+		t.Errorf("last remark = %q, want premium", got[2].Remark)
 	}
 }
 
