@@ -179,7 +179,25 @@ func main() {
 	// lands with the broader Phase 1 pg migration. The
 	// `hosts` and `host_endpoints` tables are created by
 	// migration 0004_hosts_v3.sql.
-	hostsSvc := hosts.NewService(hosts.NewMemoryStore(), nodesSvc, inboundsSvc)
+	var hostsStore hosts.Store
+	switch cfg.HostsBackend {
+	case "pg":
+		// Reuse the same pool the auth service opens.
+		// Migrations are applied at the top of main(); by
+		// the time we get here the `hosts` and
+		// `host_endpoints` tables exist.
+		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
+		if err != nil {
+			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for hosts")
+		}
+		defer pgPool.Close()
+		hostsStore = hosts.NewPgStore(pgPool)
+		log.Info().Msg("hosts: using pgx-backed store (PgStore)")
+	default:
+		hostsStore = hosts.NewMemoryStore()
+		log.Info().Msg("hosts: using in-memory store (MemoryStore, dev only)")
+	}
+	hostsSvc := hosts.NewService(hostsStore, nodesSvc, inboundsSvc)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
