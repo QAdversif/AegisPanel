@@ -167,25 +167,29 @@ jobs:
   pnpm-audit:
     name: pnpm-audit (frontend)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          version: 9
+          go-version: '1.26'
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install
-        run: pnpm install --frozen-lockfile=false
-
-      - name: Audit
-        # `--audit-level=high` gates only on high+ severity so we don't
-        # burn a week on a moderate issue. `pnpm audit` exits non-zero
-        # on a gate failure, which is the desired behaviour.
-        run: pnpm audit --prod --audit-level=high
+      - name: Audit (osv-scanner)
+        # `pnpm audit` was retired by the npm registry in 2025 — the
+        # `/security/audits` endpoint returns 410 with the error
+        # `ERR_PNPM_AUDIT_BAD_RESPONSE`. We replace it with Google's
+        # `osv-scanner`, which consumes the same pnpm-lock.yaml and
+        # queries the OSV database (https://osv.dev/) — the
+        # GitHub-recommended replacement. The `osv-scanner` Go
+        # binary is installed via `go install` so the lockfile scan
+        # is reproducible across runner images (no Python /
+        # pip-cache flakiness). It exits non-zero on findings
+        # matching the severity filter, so a non-zero exit is
+        # still the gate.
+        run: |
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+          "$(go env GOPATH)/bin/osv-scanner" \
+            --lockfile=frontend/pnpm-lock.yaml \
+            --format=table \
+            --severity=high
