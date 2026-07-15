@@ -6,15 +6,16 @@ Adds the PostgreSQL-backed Store implementation for the `inbounds` package, clos
 
 - `internal/inbounds/pg_store.go` — pgx-backed `Store` with `Create` / `GetByID` / `GetByNodeAndName` / `GetByNodeAndPort` / `ListByNode` / `ListByProtocol` / `Update` / `Delete`. The two JSONB columns (`tags`, `params`) are marshaled via a small inline `mustMarshal` / `mustMarshalOrNil` pair so the typed-nil-vs-nullable distinction is preserved through the round-trip.
 - `internal/inbounds/pg_store_integration_test.go` — 18 integration tests under the `integration` build tag. Cover round-trip, `(node_id, name)` and `(node_id, listen_port)` UNIQUE rejection, `nil` params round-trip, empty-tags round-trip, unknown-protocol CHECK rejection, all four get paths (incl. `NotFound`), `ListByNode` sorted by `listen_port`, `ListByProtocol` filter, `Update` field replacement plus name- and port-collision paths, and `Delete` (incl. `NotFound`).
+- `migrations/0007_inbounds_params_nullable.sql` — drops the `NOT NULL` constraint on `inbounds.params`. The Go model's `Params map[string]any \`json:"params,omitempty"\`` distinguishes "operator has not configured params" (nil map → `omitempty` → field absent) from "operator has explicitly configured an empty object" (`{}` map → field present, value `{}`). The original schema (`NOT NULL DEFAULT '{}'::JSONB`) was lossy on this distinction; the migration brings the constraint in line with the model's `omitempty` semantic. The DEFAULT is preserved, so existing INSERTs that omit the column still produce `'{}'::JSONB`. The only behaviour change: an explicit `params = $8` with `nil` (SQL NULL) is now accepted by the constraint.
 - `internal/config/config.go` — adds `InboundsBackend` (env var `AEGIS_INBOUNDS_BACKEND`, default `memory`).
 - `cmd/aegis/main.go` — wires the env switch into the boot sequence. When `=pg`, a fresh `pgxpool` is opened (migrations are applied at the top of `main`, so the `inbounds` table already exists by the time the store is constructed).
 
 ## Schema choices
 
-- `tags` is a non-nullable `JSONB` array, `params` is a nullable `JSONB` object. The two columns are marshaled differently so the typed-nil vs SQL `NULL` distinction survives a round-trip: a `*Balancer` field set to `nil` on the Go side becomes SQL `NULL` in the column (not `null` JSON), and reads back as a `nil` map on the Go side. A `*Balancer` set to a real value is JSON-marshaled as the object and unmarshaled back into a non-nil map.
+- `tags` is a non-nullable `JSONB` array, `params` is now a nullable `JSONB` object (see migration 0007). The two columns are marshaled differently so the typed-nil vs SQL `NULL` distinction survives a round-trip: a `*Balancer` field set to `nil` on the Go side becomes SQL `NULL` in the column (not `null` JSON), and reads back as a `nil` map on the Go side. A `*Balancer` set to a real value is JSON-marshaled as the object and unmarshaled back into a non-nil map.
 - The `protocol` and `listen_port` CHECK constraints in migration 0003 match the Go model allow-list and port range 1..65535; the integration test for `wireguard` (an unknown protocol) confirms the DB rejects it even if the Service is bypassed.
 - The `(node_id, name)` and `(node_id, listen_port)` UNIQUE constraints are mapped to `ErrDuplicate` for both Create and Update paths, with a context message that names the offending node, name, and port.
-- No new migrations are added — the schema in migration 0003 is already what `PgStore` needs.
+- No new tables are added — the schema in migration 0003 is already what `PgStore` needs. Migration 0007 only relaxes the `NOT NULL` constraint on `inbounds.params` so the model's `omitempty` semantic round-trips losslessly.
 
 ## Concurrency
 
@@ -48,5 +49,6 @@ Phase 1 stores are done. The natural next step is a shared `pgxpool.Pool` refact
 - [x] `golangci-lint` clean for new files
 - [x] MemoryStore unit tests still pass
 - [x] Integration tests follow the existing pattern
-- [x] No new migrations (schema already correct)
+- [x] No new tables; one migration to relax the `params` NOT NULL constraint
+- [x] Migration has a `Down` body
 - [x] Env-driven backend switch mirrors `AEGIS_AUTH_BACKEND` / `AEGIS_HOSTS_BACKEND` / `AEGIS_NODES_BACKEND`
