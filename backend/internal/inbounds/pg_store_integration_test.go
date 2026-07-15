@@ -394,21 +394,45 @@ func TestPgStore_Update_ReplacesFields(t *testing.T) {
 func TestPgStore_Update_NameCollision(t *testing.T) {
 	pool := testutil.MustNewPool(t)
 	store := NewPgStore(pool)
-	f1 := newInboundFixture(t, pool)
-	f2 := newInboundFixture(t, pool)
+	// Two inbounds on the SAME node, distinct names + ports.
+	// The Update path is intentionally scoped to one node —
+	// moving an inbound to a different node is a destructive
+	// operation handled by the Service layer (Delete + Create
+	// or a future Move method), not by Update.
+	nodeID := seedNode(t, pool)
+	f1 := &Inbound{
+		ID:         uuid.New(),
+		NodeID:     nodeID,
+		Name:       "f1-" + uuid.New().String()[:8],
+		Protocol:   ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 443,
+		Enabled:    true,
+		Tags:       []string{"f1"},
+		Params:     map[string]any{"a": "1"},
+	}
+	f2 := &Inbound{
+		ID:         uuid.New(),
+		NodeID:     nodeID,
+		Name:       "f2-" + uuid.New().String()[:8],
+		Protocol:   ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 8443,
+		Enabled:    true,
+		Tags:       []string{"f2"},
+		Params:     map[string]any{"b": "2"},
+	}
 	ctx := context.Background()
-	if err := store.Create(ctx, f1.inbound); err != nil {
+	if err := store.Create(ctx, f1); err != nil {
 		t.Fatalf("f1: %v", err)
 	}
-	if err := store.Create(ctx, f2.inbound); err != nil {
+	if err := store.Create(ctx, f2); err != nil {
 		t.Fatalf("f2: %v", err)
 	}
-	// Move f2 to f1's node and rename to f1's name; should
-	// collide on (node_id, name).
-	f2.inbound.NodeID = f1.nodeID
-	f2.inbound.ListenPort = f1.inbound.ListenPort + 1
-	f2.inbound.Name = f1.inbound.Name
-	err := store.Update(ctx, f2.inbound)
+	// Rename f2 to f1's name; should collide on
+	// (node_id, name).
+	f2.Name = f1.Name
+	err := store.Update(ctx, f2)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("err = %v, want ErrDuplicate", err)
 	}
@@ -417,26 +441,40 @@ func TestPgStore_Update_NameCollision(t *testing.T) {
 func TestPgStore_Update_PortCollision(t *testing.T) {
 	pool := testutil.MustNewPool(t)
 	store := NewPgStore(pool)
-	f1 := newInboundFixture(t, pool)
-	f2 := newInboundFixture(t, pool)
+	nodeID := seedNode(t, pool)
+	f1 := &Inbound{
+		ID:         uuid.New(),
+		NodeID:     nodeID,
+		Name:       "p1-" + uuid.New().String()[:8],
+		Protocol:   ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 443,
+		Enabled:    true,
+		Tags:       []string{"p1"},
+		Params:     map[string]any{"a": "1"},
+	}
+	f2 := &Inbound{
+		ID:         uuid.New(),
+		NodeID:     nodeID,
+		Name:       "p2-" + uuid.New().String()[:8],
+		Protocol:   ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 8443,
+		Enabled:    true,
+		Tags:       []string{"p2"},
+		Params:     map[string]any{"b": "2"},
+	}
 	ctx := context.Background()
-	if err := store.Create(ctx, f1.inbound); err != nil {
+	if err := store.Create(ctx, f1); err != nil {
 		t.Fatalf("f1: %v", err)
 	}
-	if err := store.Create(ctx, f2.inbound); err != nil {
+	if err := store.Create(ctx, f2); err != nil {
 		t.Fatalf("f2: %v", err)
 	}
-	// Move f2 to f1's node on a different port; should
-	// succeed. Then change port to f1's port; should
-	// collide.
-	f2.inbound.NodeID = f1.nodeID
-	f2.inbound.ListenPort = f1.inbound.ListenPort + 1
-	f2.inbound.Name = f1.inbound.Name + "-other"
-	if err := store.Update(ctx, f2.inbound); err != nil {
-		t.Fatalf("first Update: %v", err)
-	}
-	f2.inbound.ListenPort = f1.inbound.ListenPort
-	err := store.Update(ctx, f2.inbound)
+	// Move f2's port onto f1's port; should collide on
+	// (node_id, listen_port).
+	f2.ListenPort = f1.ListenPort
+	err := store.Update(ctx, f2)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("err = %v, want ErrDuplicate", err)
 	}
