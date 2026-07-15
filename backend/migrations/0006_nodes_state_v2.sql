@@ -42,14 +42,12 @@ BEGIN;
 
 ALTER TABLE nodes DROP CONSTRAINT IF EXISTS nodes_state_check;
 
-ALTER TABLE nodes ADD CONSTRAINT nodes_state_check
-    CHECK (state IN ('new', 'online', 'draining', 'offline', 'disabled'));
+ALTER TABLE nodes ADD CONSTRAINT nodes_state_check CHECK (state IN ('new', 'online', 'draining', 'offline', 'disabled'));
 
 -- +migrate Down
 
 ALTER TABLE nodes DROP CONSTRAINT IF EXISTS nodes_state_check;
 
-ALTER TABLE nodes ADD CONSTRAINT nodes_state_check
-    CHECK (state IN ('provisioning', 'active', 'degraded', 'suspended', 'decommissioned'));
+ALTER TABLE nodes ADD CONSTRAINT nodes_state_check CHECK (state IN ('provisioning', 'active', 'degraded', 'suspended', 'decommissioned'));
 
 COMMIT;

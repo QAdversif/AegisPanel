@@ -31,12 +31,10 @@ BEGIN;
 
 -- +migrate Up
 
-ALTER TABLE nodes
-    ADD COLUMN capacity_hint TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN capacity_hint TEXT NOT NULL DEFAULT '';
 
 -- +migrate Down
 
-ALTER TABLE nodes
-    DROP COLUMN capacity_hint;
+ALTER TABLE nodes DROP COLUMN capacity_hint;
 
 COMMIT;
