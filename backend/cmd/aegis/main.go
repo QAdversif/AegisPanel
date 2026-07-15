@@ -161,10 +161,30 @@ func main() {
 
 	// 4. Build the HTTP server with the v1 router.
 	//
-	// The nodes service uses an in-memory store in Phase 0;
-	// the persistence layer is added in Phase 1 when nodes
-	// actually start registering themselves.
-	nodesSvc := nodes.NewService(nodes.NewMemoryStore())
+	// The nodes service persistence layer is selected at
+	// startup: AEGIS_NODES_BACKEND=memory (default) uses
+	// the Phase 0 MemoryStore; =pg uses PgStore backed by
+	// the `nodes` and `node_tags` tables (migrations
+	// 0001 + 0005).
+	var nodesStore nodes.Store
+	switch cfg.NodesBackend {
+	case "pg":
+		// Reuse the same pool the auth service opens.
+		// Migrations are applied at the top of main();
+		// by the time we get here the `nodes` and
+		// `node_tags` tables exist.
+		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
+		if err != nil {
+			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for nodes")
+		}
+		defer pgPool.Close()
+		nodesStore = nodes.NewPgStore(pgPool)
+		log.Info().Msg("nodes: using pgx-backed store (PgStore)")
+	default:
+		nodesStore = nodes.NewMemoryStore()
+		log.Info().Msg("nodes: using in-memory store (MemoryStore, dev only)")
+	}
+	nodesSvc := nodes.NewService(nodesStore)
 	// The inbounds service also references nodes (every
 	// inbound belongs to a node). The MemoryStore is the
 	// Phase 0 default; a pgx-backed InboundStore lands

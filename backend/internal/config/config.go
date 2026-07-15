@@ -70,6 +70,15 @@ type Config struct {
 	// boot when this is "pg".
 	HostsBackend string `env:"AEGIS_HOSTS_BACKEND" envDefault:"memory"`
 
+	// NodesBackend selects the persistence layer for the
+	// nodes service. "memory" (default) keeps nodes in
+	// RAM — dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the `nodes` and `node_tags`
+	// tables (migrations 0001 and 0005). The broader
+	// Phase 1 pg migration runs on boot when this is
+	// "pg".
+	NodesBackend string `env:"AEGIS_NODES_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 }
