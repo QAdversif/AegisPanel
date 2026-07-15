@@ -43,6 +43,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
+	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
@@ -120,29 +121,46 @@ func main() {
 		Str("env", cfg.Env).
 		Msg("aegis panel starting")
 
-	// 3. Build the auth service. The backing store is selected
-	//    at startup:
+	// 3. Open the PostgreSQL pool. Every service that uses
+	//    AEGIS_*_BACKEND=pg shares the same pool; the
+	//    MemoryStore backends never touch it. Opening is
+	//    lazy: if no service is configured for pg, we skip
+	//    the connection entirely. A misconfigured DSN (or
+	//    an unreachable server) fails the boot here, not on
+	//    the first query, thanks to the Ping inside db.Open.
+	var (
+		pool    *pgxpool.Pool
+		needsPg = cfg.AuthBackend == "pg" ||
+			cfg.HostsBackend == "pg" ||
+			cfg.NodesBackend == "pg" ||
+			cfg.InboundsBackend == "pg"
+	)
+	if needsPg {
+		p, err := db.Open(ctx, cfg.PostgresDSN)
+		if err != nil {
+			log.Fatal().Err(err).Msg("db: failed to open postgres connection pool")
+		}
+		pool = p
+		defer pool.Close()
+		// Apply migrations on the same pool the runtime
+		// uses. We deliberately do NOT open a sibling
+		// *sql.DB through the pgx stdlib adapter: that
+		// adapter does not honour multi-statement
+		// transactions, and Aegis migrations rely on
+		// BEGIN; ... COMMIT; in each file.
+		if err := migrations.Up(ctx, pool, "migrations"); err != nil {
+			log.Fatal().Err(err).Msg("migrations: failed to apply")
+		}
+	}
+
+	// 4. Build the auth service. The backing store is
+	//    selected at startup:
 	//      AEGIS_AUTH_BACKEND=memory  -> MemoryStore (Phase 0 default)
-	//      AEGIS_AUTH_BACKEND=pg      -> PgStore backed by pgxpool
-	//    The pg backend also runs goose migrations on boot so a
-	//    fresh database is ready for /api/v1/auth/{login,refresh}.
+	//      AEGIS_AUTH_BACKEND=pg      -> PgStore backed by the shared pool
 	authSigner := auth.NewSigner(cfg.JWTSecret)
 	var authStore auth.Store
 	switch cfg.AuthBackend {
 	case "pg":
-		pool, err := pgxpool.New(ctx, cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection")
-		}
-		defer pool.Close()
-		// Apply migrations on the same pool the runtime uses. We
-		// deliberately do NOT open a sibling *sql.DB through the
-		// pgx stdlib adapter: that adapter does not honour
-		// multi-statement transactions, and Aegis migrations
-		// rely on BEGIN; ... COMMIT; in each file.
-		if err := migrations.Up(ctx, pool, "migrations"); err != nil {
-			log.Fatal().Err(err).Msg("migrations: failed to apply")
-		}
 		authStore = auth.NewPgStore(pool)
 		log.Info().Msg("auth: using pgx-backed store (PgStore)")
 	default:
@@ -159,79 +177,50 @@ func main() {
 	}
 	authSvc := auth.NewService(authSigner, authStore)
 
-	// 4. Build the HTTP server with the v1 router.
-	//
-	// The nodes service persistence layer is selected at
-	// startup: AEGIS_NODES_BACKEND=memory (default) uses
-	// the Phase 0 MemoryStore; =pg uses PgStore backed by
-	// the `nodes` and `node_tags` tables (migrations
-	// 0001 + 0005).
+	// 5. Nodes service persistence layer:
+	//    AEGIS_NODES_BACKEND=memory (default) uses the
+	//    Phase 0 MemoryStore; =pg uses PgStore backed by
+	//    the shared pool and the `nodes` / `node_tags`
+	//    tables (migrations 0001 + 0005).
 	var nodesStore nodes.Store
 	switch cfg.NodesBackend {
 	case "pg":
-		// Reuse the same pool the auth service opens.
-		// Migrations are applied at the top of main();
-		// by the time we get here the `nodes` and
-		// `node_tags` tables exist.
-		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for nodes")
-		}
-		defer pgPool.Close()
-		nodesStore = nodes.NewPgStore(pgPool)
+		nodesStore = nodes.NewPgStore(pool)
 		log.Info().Msg("nodes: using pgx-backed store (PgStore)")
 	default:
 		nodesStore = nodes.NewMemoryStore()
 		log.Info().Msg("nodes: using in-memory store (MemoryStore, dev only)")
 	}
 	nodesSvc := nodes.NewService(nodesStore)
-	// The inbounds service also references nodes (every
-	// inbound belongs to a node). The backend is selected
-	// the same way as the nodes / hosts services:
-	// AEGIS_INBOUNDS_BACKEND=memory (default) uses the
-	// Phase 0 MemoryStore; =pg uses PgStore backed by
-	// the `inbounds` table (migration 0003). The
-	// underlying table is created by
-	// migration 0003_node_inbounds.sql.
+
+	// 6. Inbounds service also references nodes (every
+	//    inbound belongs to a node). The backend is
+	//    selected the same way as the nodes / hosts
+	//    services: AEGIS_INBOUNDS_BACKEND=memory (default)
+	//    uses the Phase 0 MemoryStore; =pg uses PgStore
+	//    backed by the shared pool and the `inbounds`
+	//    table (migration 0003).
 	var inboundsStore inbounds.Store
 	switch cfg.InboundsBackend {
 	case "pg":
-		// Reuse the same pool the auth service opens.
-		// Migrations are applied at the top of main();
-		// by the time we get here the `inbounds` table
-		// exists.
-		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for inbounds")
-		}
-		defer pgPool.Close()
-		inboundsStore = inbounds.NewPgStore(pgPool)
+		inboundsStore = inbounds.NewPgStore(pool)
 		log.Info().Msg("inbounds: using pgx-backed store (PgStore)")
 	default:
 		inboundsStore = inbounds.NewMemoryStore()
 		log.Info().Msg("inbounds: using in-memory store (MemoryStore, dev only)")
 	}
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	// The hosts service references nodes AND inbounds
-	// (every endpoint is a (Node, Inbound) pair), so it is
-	// constructed after both. The MemoryStore on all
-	// three is Phase 0 / Phase 1; a pgx-backed HostStore
-	// lands with the broader Phase 1 pg migration. The
-	// `hosts` and `host_endpoints` tables are created by
-	// migration 0004_hosts_v3.sql.
+
+	// 7. Hosts service references nodes AND inbounds (every
+	//    endpoint is a (Node, Inbound) pair), so it is
+	//    constructed after both. AEGIS_HOSTS_BACKEND=pg
+	//    uses PgStore backed by the shared pool and the
+	//    `hosts` / `host_endpoints` tables (migration
+	//    0004).
 	var hostsStore hosts.Store
 	switch cfg.HostsBackend {
 	case "pg":
-		// Reuse the same pool the auth service opens.
-		// Migrations are applied at the top of main(); by
-		// the time we get here the `hosts` and
-		// `host_endpoints` tables exist.
-		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for hosts")
-		}
-		defer pgPool.Close()
-		hostsStore = hosts.NewPgStore(pgPool)
+		hostsStore = hosts.NewPgStore(pool)
 		log.Info().Msg("hosts: using pgx-backed store (PgStore)")
 	default:
 		hostsStore = hosts.NewMemoryStore()
@@ -245,7 +234,7 @@ func main() {
 		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc)),
 	}
 
-	// 4. Run the server in a goroutine so we can listen for signals.
+	// 8. Run the server in a goroutine so we can listen for signals.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Info().Str("addr", cfg.HTTPAddr).Msg("HTTP server listening")
@@ -255,7 +244,7 @@ func main() {
 		close(serverErr)
 	}()
 
-	// 5. Wait for SIGINT / SIGTERM or a fatal server error.
+	// 9. Wait for SIGINT / SIGTERM or a fatal server error.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	select {
@@ -267,7 +256,7 @@ func main() {
 		}
 	}
 
-	// 6. Graceful shutdown with a hard deadline.
+	// 10. Graceful shutdown with a hard deadline.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -316,9 +305,9 @@ func runMigrate(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := db.Open(ctx, dsn)
 	if err != nil {
-		log.Fatal().Err(err).Msg("migrate: pgxpool.New")
+		log.Fatal().Err(err).Msg("migrate: db.Open")
 	}
 	defer pool.Close()
 
