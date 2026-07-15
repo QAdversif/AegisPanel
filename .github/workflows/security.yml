@@ -167,8 +167,28 @@ jobs:
   pnpm-audit:
     name: pnpm-audit (frontend)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        # The Phase 0 frontend is a Vue 3 placeholder with only
+        # package.json committed (no pnpm-lock.yaml). `pnpm install`
+        # generates the lockfile on the fly so `osv-scanner` has
+        # something to scan. Once the frontend grows past Phase 0
+        # the lockfile should be committed and this step can move
+        # to `--frozen-lockfile=true`.
+        run: pnpm install --no-frozen-lockfile
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -184,11 +204,12 @@ jobs:
         # GitHub-recommended replacement. The `osv-scanner` Go
         # binary is installed via `go install` so the lockfile scan
         # is reproducible across runner images (no Python /
-        # pip-cache flakiness). It exits non-zero on findings
-        # matching the severity filter, so a non-zero exit is
-        # still the gate.
+        # pip-cache flakiness). It exits non-zero on findings, so a
+        # non-zero exit is still the gate.
+        # The path is relative to the runner's working directory
+        # (`frontend/`, set by the job-level `defaults.run.working-directory`).
         run: |
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
           "$(go env GOPATH)/bin/osv-scanner" \
-            --lockfile=frontend/pnpm-lock.yaml \
+            --lockfile=pnpm-lock.yaml \
             --format=table
