@@ -186,12 +186,32 @@ func main() {
 	}
 	nodesSvc := nodes.NewService(nodesStore)
 	// The inbounds service also references nodes (every
-	// inbound belongs to a node). The MemoryStore is the
-	// Phase 0 default; a pgx-backed InboundStore lands
-	// with the broader Phase 1 pg migration. The
-	// underlying `inbounds` table is created by
+	// inbound belongs to a node). The backend is selected
+	// the same way as the nodes / hosts services:
+	// AEGIS_INBOUNDS_BACKEND=memory (default) uses the
+	// Phase 0 MemoryStore; =pg uses PgStore backed by
+	// the `inbounds` table (migration 0003). The
+	// underlying table is created by
 	// migration 0003_node_inbounds.sql.
-	inboundsSvc := inbounds.NewService(inbounds.NewMemoryStore(), nodesSvc)
+	var inboundsStore inbounds.Store
+	switch cfg.InboundsBackend {
+	case "pg":
+		// Reuse the same pool the auth service opens.
+		// Migrations are applied at the top of main();
+		// by the time we get here the `inbounds` table
+		// exists.
+		pgPool, err := pgxpool.New(ctx, cfg.PostgresDSN)
+		if err != nil {
+			log.Fatal().Err(err).Msg("pgxpool: failed to open postgres connection for inbounds")
+		}
+		defer pgPool.Close()
+		inboundsStore = inbounds.NewPgStore(pgPool)
+		log.Info().Msg("inbounds: using pgx-backed store (PgStore)")
+	default:
+		inboundsStore = inbounds.NewMemoryStore()
+		log.Info().Msg("inbounds: using in-memory store (MemoryStore, dev only)")
+	}
+	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
 	// The hosts service references nodes AND inbounds
 	// (every endpoint is a (Node, Inbound) pair), so it is
 	// constructed after both. The MemoryStore on all
