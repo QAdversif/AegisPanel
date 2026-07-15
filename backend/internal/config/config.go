@@ -79,6 +79,14 @@ type Config struct {
 	// "pg".
 	NodesBackend string `env:"AEGIS_NODES_BACKEND" envDefault:"memory"`
 
+	// InboundsBackend selects the persistence layer for the
+	// inbounds service. "memory" (default) keeps inbounds
+	// in RAM — dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the `inbounds` table (migration
+	// 0003). The broader Phase 1 pg migration runs on
+	// boot when this is "pg".
+	InboundsBackend string `env:"AEGIS_INBOUNDS_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 }
