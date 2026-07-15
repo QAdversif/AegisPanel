@@ -43,12 +43,18 @@ import (
 // returns its id. The nodes package's Service would also
 // work but adds a layer of validation the host tests
 // do not need.
+//
+// The state value is one of the Go model lifecycle
+// tokens (new | online | draining | offline | disabled);
+// migration 0006 aligned the nodes_state_check CHECK
+// with the Go model, so any value outside that allow-list
+// would trip the constraint.
 func seedNode(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	const q = `
 		INSERT INTO nodes (id, name, region, state, address, ssh_port, ssh_user, core_kind, drain, health)
-		VALUES ($1, $2, 'eu', 'active', '1.2.3.4:22', 22, 'root', 'sing-box', FALSE, '{}'::JSONB)`
+		VALUES ($1, $2, 'eu', 'new', '1.2.3.4:22', 22, 'root', 'sing-box', FALSE, '{}'::JSONB)`
 	_, err := pool.Exec(context.Background(), q, id, "node-"+id.String()[:8])
 	if err != nil {
 		t.Fatalf("seed node: %v", err)
