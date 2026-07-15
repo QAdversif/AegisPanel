@@ -191,5 +191,4 @@ jobs:
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
           "$(go env GOPATH)/bin/osv-scanner" \
             --lockfile=frontend/pnpm-lock.yaml \
-            --format=table \
-            --severity=high
+            --format=table
