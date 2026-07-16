@@ -97,11 +97,25 @@ type Inbound struct {
 	// (IPv6 wildcard, dual-stack on every modern
 	// OS).
 	Listen string `json:"listen"`
-	// ListenPort is the TCP/UDP port. The DB
+	// ListenPort is the primary TCP/UDP port. The DB
 	// UNIQUE (node_id, listen_port) constraint
 	// enforces one-inbound-per-port-per-node at the
-	// storage layer.
+	// storage layer. The agent binds this port plus
+	// every entry in ListenPorts.
 	ListenPort int `json:"listen_port"`
+	// ListenPorts is the optional list of additional
+	// ports the same inbound also listens on. The
+	// subscription renderer picks one at random per
+	// fetch (defeating per-port DPI correlation);
+	// the agent binds every entry with the same
+	// protocol / params as the primary port. An
+	// entry that collides with another inbound's
+	// ListenPort on the same node is the operator's
+	// responsibility to avoid (the DB enforces
+	// ListenPort uniqueness, not the union of
+	// ListenPort and ListenPorts). Nil / empty =
+	// single-port mode (the historical default).
+	ListenPorts []int `json:"listen_ports,omitempty"`
 	// Enabled is a soft-disable. Disabled inbounds
 	// are kept in the database so the operator can
 	// re-enable them without re-entering the

@@ -86,15 +86,16 @@ func (s *Service) ListByProtocol(ctx context.Context, p Protocol) ([]*Inbound, e
 // assign one, or pre-assign if they have a
 // deterministic ID requirement.
 type CreateInput struct {
-	ID         uuid.UUID
-	NodeID     uuid.UUID
-	Name       string
-	Protocol   Protocol
-	Listen     string
-	ListenPort int
-	Enabled    *bool
-	Tags       []string
-	Params     map[string]any
+	ID          uuid.UUID
+	NodeID      uuid.UUID
+	Name        string
+	Protocol    Protocol
+	Listen      string
+	ListenPort  int
+	ListenPorts []int
+	Enabled     *bool
+	Tags        []string
+	Params      map[string]any
 }
 
 // Create validates the input, fills in defaults and
@@ -122,6 +123,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 	if err := validateListen(listen); err != nil {
 		return nil, err
 	}
+	extraPorts, err := normaliseListenPorts(in.ListenPorts)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateTags(in.Tags); err != nil {
 		return nil, err
 	}
@@ -134,15 +139,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 		id = uuid.New()
 	}
 	i := &Inbound{
-		ID:         id,
-		NodeID:     in.NodeID,
-		Name:       name,
-		Protocol:   in.Protocol,
-		Listen:     listen,
-		ListenPort: in.ListenPort,
-		Enabled:    enabled,
-		Tags:       normaliseTags(in.Tags),
-		Params:     cloneParams(in.Params),
+		ID:          id,
+		NodeID:      in.NodeID,
+		Name:        name,
+		Protocol:    in.Protocol,
+		Listen:      listen,
+		ListenPort:  in.ListenPort,
+		ListenPorts: extraPorts,
+		Enabled:     enabled,
+		Tags:        normaliseTags(in.Tags),
+		Params:      cloneParams(in.Params),
 	}
 	if err := s.store.Create(ctx, i); err != nil {
 		// ErrDuplicate is the only store-level error
@@ -161,13 +167,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 // unmarshal into. Pointer fields mean "leave
 // unchanged"; nil means "do not touch".
 type UpdateInput struct {
-	Name       *string
-	Protocol   *Protocol
-	Listen     *string
-	ListenPort *int
-	Enabled    *bool
-	Tags       *[]string
-	Params     *map[string]any
+	Name        *string
+	Protocol    *Protocol
+	Listen      *string
+	ListenPort  *int
+	ListenPorts *[]int
+	Enabled     *bool
+	Tags        *[]string
+	Params      *map[string]any
 }
 
 // Update applies the patch to the stored inbound. The
@@ -212,6 +219,13 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 			return nil, err
 		}
 		existing.ListenPort = *in.ListenPort
+	}
+	if in.ListenPorts != nil {
+		extraPorts, err := normaliseListenPorts(*in.ListenPorts)
+		if err != nil {
+			return nil, err
+		}
+		existing.ListenPorts = extraPorts
 	}
 	if in.Enabled != nil {
 		existing.Enabled = *in.Enabled

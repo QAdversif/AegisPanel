@@ -319,9 +319,9 @@ func insertEndpoint(ctx context.Context, tx pgx.Tx, hostID uuid.UUID, ep *Endpoi
 	const q = `
 		INSERT INTO host_endpoints (
 			id, host_id, node_id, inbound_id, weight,
-			address, port, sni, host, path,
+			address, port, sni, host, path, download_host_id,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp(), clock_timestamp())`
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, clock_timestamp(), clock_timestamp())`
 	_, err := tx.Exec(ctx, q,
 		ep.ID,
 		hostID,
@@ -333,6 +333,7 @@ func insertEndpoint(ctx context.Context, tx pgx.Tx, hostID uuid.UUID, ep *Endpoi
 		mustMarshal(ep.SNI),
 		mustMarshal(ep.Host),
 		ep.Path,
+		nullableUUID(ep.DownloadHostID),
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -358,6 +359,7 @@ const hostWithEndpointsSelect = `
 		h.created_at, h.updated_at,
 		e.id, e.node_id, e.inbound_id, e.weight,
 		e.address, e.port, e.sni, e.host, e.path,
+		e.download_host_id,
 		e.created_at, e.updated_at
 	FROM hosts h
 	LEFT JOIN host_endpoints e ON e.host_id = h.id`
@@ -388,17 +390,18 @@ func scanHostsWithEndpoints(rows pgx.Rows) ([]*Host, error) {
 			hCreatedAt       time.Time
 			hUpdatedAt       time.Time
 			// endpoint columns (NULL for the host-only row)
-			eID         *uuid.UUID
-			eNodeID     *uuid.UUID
-			eInboundID  *uuid.UUID
-			eWeight     *int
-			eAddressRaw []byte
-			ePort       *int
-			eSNIRaw     []byte
-			eHostRaw    []byte
-			ePath       *string
-			eCreatedAt  *time.Time
-			eUpdatedAt  *time.Time
+			eID              *uuid.UUID
+			eNodeID          *uuid.UUID
+			eInboundID       *uuid.UUID
+			eWeight          *int
+			eAddressRaw      []byte
+			ePort            *int
+			eSNIRaw          []byte
+			eHostRaw         []byte
+			ePath            *string
+			eDownloadHostID  *uuid.UUID
+			eCreatedAt       *time.Time
+			eUpdatedAt       *time.Time
 		)
 		if err := rows.Scan(
 			&hID, &hRemark, &hType, &hEnabled, &hPriority,
@@ -406,6 +409,7 @@ func scanHostsWithEndpoints(rows pgx.Rows) ([]*Host, error) {
 			&hCreatedAt, &hUpdatedAt,
 			&eID, &eNodeID, &eInboundID, &eWeight,
 			&eAddressRaw, &ePort, &eSNIRaw, &eHostRaw, &ePath,
+			&eDownloadHostID,
 			&eCreatedAt, &eUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
@@ -449,11 +453,12 @@ func scanHostsWithEndpoints(rows pgx.Rows) ([]*Host, error) {
 			continue
 		}
 		ep := Endpoint{
-			ID:        *eID,
-			NodeID:    *eNodeID,
-			InboundID: *eInboundID,
-			Weight:    *eWeight,
-			Port:      ePort,
+			ID:             *eID,
+			NodeID:         *eNodeID,
+			InboundID:      *eInboundID,
+			Weight:         *eWeight,
+			Port:           ePort,
+			DownloadHostID: eDownloadHostID,
 		}
 		if err := unmarshalInto(&ep.Address, eAddressRaw); err != nil {
 			return nil, fmt.Errorf("endpoint address: %w", err)
@@ -557,6 +562,17 @@ func unmarshalInto(dst any, raw []byte) error {
 // `*int` as a destination and stores NULL when the
 // pointer is nil.
 func nullableInt(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// nullableUUID returns the pointer (which may be nil)
+// for pgx to bind as a nullable UUID column. pgx
+// accepts `*uuid.UUID` as a destination and stores
+// NULL when the pointer is nil.
+func nullableUUID(p *uuid.UUID) any {
 	if p == nil {
 		return nil
 	}

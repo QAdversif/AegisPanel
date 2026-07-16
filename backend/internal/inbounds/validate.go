@@ -161,6 +161,52 @@ func isPrintableHost(s string) bool {
 	return true
 }
 
+// maxListenPorts caps the number of additional ports
+// an inbound may declare. The agent binds every entry
+// with the same protocol / params; the cap keeps the
+// resource cost (and the per-fetch random pick) sane.
+// 8 covers every realistic CDN-fronted deployment
+// (a single inbound binding 8 ports is already at the
+// edge of what any single protocol stack needs).
+const maxListenPorts = 8
+
+// normaliseListenPorts validates the additional-port
+// list and returns a deduped, sorted copy. The result
+// is nil when the input is empty / nil — the Go model
+// uses `omitempty` to round-trip "no additional ports"
+// as an absent JSON field. Each port must be in
+// [1, 65535] and must not equal the primary
+// ListenPort (the renderer picks one from the union,
+// so a duplicate makes the primary + the duplicate
+// indistinguishable from a single-port inbound).
+func normaliseListenPorts(in []int) ([]int, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	if len(in) > maxListenPorts {
+		return nil, &ValidationError{
+			Field:   "listen_ports",
+			Message: "at most 8 entries",
+		}
+	}
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, p := range in {
+		if err := validatePort(p); err != nil {
+			return nil, err
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 // --- tag normalisation / validation -----------------------------------
 
 func validateTags(in []string) error {

@@ -265,6 +265,10 @@ func cloneEndpoint(e Endpoint) Endpoint {
 		p := *e.Port
 		out.Port = &p
 	}
+	if e.DownloadHostID != nil {
+		id := *e.DownloadHostID
+		out.DownloadHostID = &id
+	}
 	return out
 }
 

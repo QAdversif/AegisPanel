@@ -63,9 +63,9 @@ func (s *PgStore) Create(ctx context.Context, i *Inbound) error {
 	}
 	const q = `
 		INSERT INTO inbounds (
-			id, node_id, name, protocol, listen, listen_port, enabled,
-			tags, params
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+			id, node_id, name, protocol, listen, listen_port,
+			listen_ports, enabled, tags, params
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 	_, err := s.pool.Exec(ctx, q,
 		i.ID,
 		i.NodeID,
@@ -73,6 +73,7 @@ func (s *PgStore) Create(ctx context.Context, i *Inbound) error {
 		string(i.Protocol),
 		i.Listen,
 		i.ListenPort,
+		nullableIntArray(i.ListenPorts),
 		i.Enabled,
 		mustMarshal(i.Tags),
 		mustMarshalOrNil(i.Params),
@@ -151,9 +152,10 @@ func (s *PgStore) Update(ctx context.Context, i *Inbound) error {
 			protocol = $3,
 			listen = $4,
 			listen_port = $5,
-			enabled = $6,
-			tags = $7,
-			params = $8,
+			listen_ports = $6,
+			enabled = $7,
+			tags = $8,
+			params = $9,
 			updated_at = NOW()
 		WHERE id = $1`
 	tag, err := s.pool.Exec(ctx, q,
@@ -162,6 +164,7 @@ func (s *PgStore) Update(ctx context.Context, i *Inbound) error {
 		string(i.Protocol),
 		i.Listen,
 		i.ListenPort,
+		nullableIntArray(i.ListenPorts),
 		i.Enabled,
 		mustMarshal(i.Tags),
 		mustMarshalOrNil(i.Params),
@@ -203,8 +206,8 @@ func (s *PgStore) Delete(ctx context.Context, id uuid.UUID) error {
 // matches the column list expected by scanInbound.
 const baseSelect = `
 	SELECT
-		id, node_id, name, protocol, listen, listen_port, enabled,
-		tags, params,
+		id, node_id, name, protocol, listen, listen_port, listen_ports,
+		enabled, tags, params,
 		created_at, updated_at
 	FROM inbounds`
 
@@ -240,6 +243,7 @@ func scanInbounds(rows pgx.Rows) ([]*Inbound, error) {
 			protocol   string
 			listen     string
 			listenPort int
+			listenPorts []int
 			enabled    bool
 			tagsRaw    []byte
 			paramsRaw  []byte
@@ -247,8 +251,8 @@ func scanInbounds(rows pgx.Rows) ([]*Inbound, error) {
 			updatedAt  time.Time
 		)
 		if err := rows.Scan(
-			&id, &nodeID, &name, &protocol, &listen, &listenPort, &enabled,
-			&tagsRaw, &paramsRaw,
+			&id, &nodeID, &name, &protocol, &listen, &listenPort, &listenPorts,
+			&enabled, &tagsRaw, &paramsRaw,
 			&createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan inbound: %w", err)
@@ -260,6 +264,7 @@ func scanInbounds(rows pgx.Rows) ([]*Inbound, error) {
 			Protocol:   Protocol(protocol),
 			Listen:     listen,
 			ListenPort: listenPort,
+			ListenPorts: listenPorts,
 			Enabled:    enabled,
 			CreatedAt:  createdAt,
 			UpdatedAt:  updatedAt,
@@ -360,4 +365,18 @@ func isUniqueViolation(err error) bool {
 		return pgErr.Code == "23505"
 	}
 	return false
+}
+
+// nullableIntArray returns the []int for pgx to bind
+// as an INTEGER[] column. A nil or empty slice is
+// passed through as a Go `nil` so pgx applies the
+// column DEFAULT ('{}'); a non-empty slice is bound
+// as the array literal. The Go model treats nil and
+// [] as "no additional ports", which the renderer's
+// pickPort handles by reading the primary port only.
+func nullableIntArray(in []int) any {
+	if len(in) == 0 {
+		return nil
+	}
+	return in
 }
