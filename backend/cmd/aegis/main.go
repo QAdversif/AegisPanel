@@ -50,6 +50,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/router"
+	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
 
 func main() {
@@ -227,6 +228,19 @@ func main() {
 		log.Info().Msg("hosts: using in-memory store (MemoryStore, dev only)")
 	}
 	hostsSvc := hosts.NewService(hostsStore, nodesSvc, inboundsSvc)
+
+	// 8. Subscription service. The Phase 0 package
+	//    ships a MemoryStore and a base64 renderer; the
+	//    HTTP handler lands with the next PR. The
+	//    service is constructed here so the boot path
+	//    validates the wiring (e.g. the cross-service
+	//    pointer dance does not nil-deref) and the
+	//    subsequent PRs can call into it without a
+	//    main.go change.
+	subscriptionStore := subscription.NewMemoryStore()
+	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
+	_ = subscriptionSvc
+	log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
