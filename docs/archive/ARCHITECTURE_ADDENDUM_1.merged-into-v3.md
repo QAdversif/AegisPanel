@@ -1,3 +1,27 @@
+> **⚠️ ARCHIVED — merged into `ARCHITECTURE.md` v3 / v8.**
+>
+> Этот аддендум был временным хранилищем патчей после анализа PasarGuard V5 и
+> Celerity. С тех пор его содержимое перенесено в основной документ:
+>
+> - **Override-слой Host'а** (раздел 1.1) → `ARCHITECTURE.md` §10.1.
+> - **Cascade Topology** (раздел 2) → `ARCHITECTURE.md` §10.3, §17.3.
+> - **MCP-интеграция** (раздел 3) → `ARCHITECTURE.md` §17.
+> - **CC Agent / dynamic user management** (раздел 4) →
+>   `ARCHITECTURE.md` §7, §8.2 + Unified Roadmap (Phase 1.5: Batched apply для
+>   sing-box).
+> - **Webhooks и HMAC** (раздел 5) → `ARCHITECTURE.md` §13.4.
+> - **ACL на ноде** (раздел 6) → Unified Roadmap (Phase 4+).
+> - **Кастомные протоколы** (раздел 7) → Unified Roadmap (Phase 4+).
+>
+> Файл сохранён для истории. **Не редактировать.** При появлении новых решений —
+> править основной `ARCHITECTURE.md` и при необходимости добавлять новый ADR в
+> `docs/adr/`.
+>
+> Решение об архивировании: PR «docs(architecture): rev8 — review-driven
+> fixes», 2026-07-17.
+
+---
+
 # ARCHITECTURE — Addendum #1: PasarGuard & Celerity analysis
 
 > Дополнение к основному `ARCHITECTURE.md`. Здесь — разбор того, что почерпнул
