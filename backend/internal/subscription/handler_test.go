@@ -186,6 +186,120 @@ func TestHandler_Render_HTML(t *testing.T) {
 	}
 }
 
+// TestHandler_Render_HTML_QRPresent — the page embeds
+// a QR code as a `data:image/png;base64,…` URL. The
+// data must be a real, decodable PNG that encodes the
+// base64 subscription URL. A client that scans the
+// page (Hiddify / Streisand / NekoBox / Karing /
+// V2Box) needs every part of this to work: the data
+// URL format must be valid, the PNG must decode,
+// and the encoded content must match the URL the
+// client will fetch.
+func TestHandler_Render_HTML_QRPresent(t *testing.T) {
+	hf := newHandlerFixture(t)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=html")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	// Locate the QR <img> tag.
+	prefix := `src="data:image/png;base64,`
+	idx := strings.Index(body, prefix)
+	if idx < 0 {
+		t.Fatalf("html body missing data:image/png base64 src; first 200 chars = %q", body[:min(len(body), 200)])
+	}
+	// Walk to the closing quote; the encoded data
+	// does not contain `"` (base64 alphabet is
+	// `[A-Za-z0-9+/=]`) so a literal `"` is the
+	// first non-base64 boundary.
+	end := strings.Index(body[idx+len(prefix):], `"`)
+	if end < 0 {
+		t.Fatalf("html body has unterminated data: URL")
+	}
+	encoded := body[idx+len(prefix) : idx+len(prefix)+end]
+	png, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	// PNG magic: 89 50 4E 47 0D 0A 1A 0A.
+	if len(png) < 8 || png[0] != 0x89 || png[1] != 0x50 || png[2] != 0x4E || png[3] != 0x47 {
+		t.Errorf("embedded data is not a valid PNG (got %x...)", png[:min(len(png), 8)])
+	}
+}
+
+// TestHandler_Render_HTML_PerClientURLs — the page
+// embeds three subscription URLs (base64, singbox,
+// clash) so the user can pick the one their client
+// understands. Each URL is in a copyable <input>
+// with a "copy" button (a `data-copy="<id>"`
+// attribute on the button targets the input by id).
+func TestHandler_Render_HTML_PerClientURLs(t *testing.T) {
+	hf := newHandlerFixture(t)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=html")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	for _, format := range []string{"base64", "singbox", "clash"} {
+		needle := "target=" + format
+		if !strings.Contains(body, needle) {
+			t.Errorf("html body missing per-client URL with %s", needle)
+		}
+	}
+	// Three copy buttons, one per row.
+	if got := strings.Count(body, `data-copy="u`); got != 3 {
+		t.Errorf("data-copy buttons = %d, want 3", got)
+	}
+}
+
+// TestHandler_Render_HTML_HostCount — the page shows
+// the entitled-host count in the "you have N hosts"
+// line. The test fixture (newHandlerFixture) seeds
+// exactly one host, so the line must read "1".
+func TestHandler_Render_HTML_HostCount(t *testing.T) {
+	hf := newHandlerFixture(t)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=html")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "<b>1</b> host line") {
+		t.Errorf("html body missing single-host count line; first 300 chars = %q", body[:min(len(body), 300)])
+	}
+}
+
+// TestHandler_Render_HTML_NoHosts — a user with no
+// entitled hosts gets a friendly "no hosts" line on
+// the page (instead of "you have 0 host line(s)"; the
+// grammar is wrong and confuses users).
+//
+// The fixture has one entitled user. We add a second
+// user with no plan via the MemoryStore's
+// chainable helper; the resolver returns zero hosts
+// for the new user, and the page renders the
+// "no hosts" branch.
+func TestHandler_Render_HTML_NoHosts(t *testing.T) {
+	hf := newHandlerFixture(t)
+	if ms, ok := hf.svc.store.(*MemoryStore); ok {
+		ms.WithUser(&User{
+			ID:       uuid.New(),
+			Username: "ghost",
+			Status:   UserStatusActive,
+			SubToken: "tok-ghost",
+		})
+	} else {
+		t.Skipf("subscription store is not a MemoryStore; cannot add a no-plan user from the test")
+	}
+	w := hf.do(t, http.MethodGet, "/sub/tok-ghost?target=html")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "no hosts") {
+		t.Errorf("html body missing no-hosts line; first 300 chars = %q", body[:min(len(body), 300)])
+	}
+}
+
 // --- auto-detect ----------------------------------------------------
 
 func TestDetectFormat_ExplicitTarget(t *testing.T) {
