@@ -58,6 +58,25 @@ type ResolvedEndpoint struct {
 	Endpoint hosts.Endpoint
 	Node     *nodes.Node
 	Inbound  *inbounds.Inbound
+	// Download is the XHTTP download-farm endpoint,
+	// populated when Endpoint.DownloadHostID is set.
+	// The Service picks a random endpoint of the
+	// referenced host at resolve time; the sing-box
+	// renderer emits a `download_settings` block on
+	// the outbound with this endpoint's address and
+	// port. Nil = no download_settings block.
+	Download *ResolvedDownload
+}
+
+// ResolvedDownload is the (address, port) pair for the
+// XHTTP download farm endpoint. We keep the bare
+// minimum rather than a full ResolvedEndpoint because
+// the renderer only needs the connection target; the
+// download host's protocol, params, and the rest of
+// the inbound stack are irrelevant.
+type ResolvedDownload struct {
+	Address string
+	Port    int
 }
 
 // Service is the subscription business-logic layer.
@@ -216,6 +235,10 @@ func (s *Service) ResolveHostsForUser(ctx context.Context, u *User) (out []*host
 // The result is the input the renderer wants: every
 // URL a subscription client should see, with the
 // display name, address, and protocol all pre-resolved.
+// Endpoints whose `DownloadHostID` is set have their
+// `Download` field populated with a random endpoint
+// of the referenced host; the XHTTP sing-box renderer
+// uses this to emit a `download_settings` block.
 func (s *Service) ResolveEndpointsForUser(ctx context.Context, u *User) (out []ResolvedEndpoint, err error) {
 	hs, err := s.ResolveHostsForUser(ctx, u)
 	if err != nil {
@@ -237,13 +260,76 @@ func (s *Service) ResolveEndpointsForUser(ctx context.Context, u *User) (out []R
 				}
 				return nil, fmt.Errorf("resolve inbound %s: %w", ep.InboundID, err)
 			}
-			out = append(out, ResolvedEndpoint{
+			re := ResolvedEndpoint{
 				Host:     h,
 				Endpoint: ep,
 				Node:     n,
 				Inbound:  inb,
-			})
+			}
+			// XHTTP download farm: look up the
+			// referenced host by id (the host is
+			// NOT in the user's pool — operator-
+			// controlled CDN) and pick a random
+			// endpoint of it. A missing or empty
+			// download host is silently skipped
+			// (fail-soft), which the sing-box
+			// renderer treats as "no
+			// download_settings block".
+			if ep.DownloadHostID != nil {
+				re.Download = s.resolveDownload(ctx, *ep.DownloadHostID)
+			}
+			out = append(out, re)
 		}
 	}
 	return out, nil
+}
+
+// resolveDownload picks a random endpoint of the
+// download host. The host is fetched directly by id
+// (NOT through the user's pool — the download farm
+// is operator-controlled). The endpoints' address
+// and port are what the sing-box renderer needs for
+// its `download_settings` block; we do not need the
+// full ResolvedEndpoint surface (no protocol, no
+// params, no display name).
+//
+// Returns nil when the host is missing, disabled, or
+// has no resolvable endpoints — the sing-box renderer
+// treats nil as "no download_settings block".
+func (s *Service) resolveDownload(ctx context.Context, hostID uuid.UUID) *ResolvedDownload {
+	dlHost, err := s.hosts.Get(ctx, hostID)
+	if err != nil {
+		return nil
+	}
+	if !dlHost.Enabled {
+		return nil
+	}
+	if len(dlHost.Endpoints) == 0 {
+		return nil
+	}
+	// Pick a random index. The picker is the same
+	// package-level one used by pickPort; the tests
+	// pin it once and every per-fetch selection
+	// uses the same deterministic function.
+	randPickerMu.Lock()
+	idx := randPicker(len(dlHost.Endpoints))
+	randPickerMu.Unlock()
+	dep := dlHost.Endpoints[idx]
+	dlNode, err := s.nodes.Get(ctx, dep.NodeID)
+	if err != nil {
+		return nil
+	}
+	dlInb, err := s.inbounds.Get(ctx, dep.InboundID)
+	if err != nil {
+		return nil
+	}
+	addr := dlNode.Address
+	if len(dep.Address) > 0 {
+		addr = dep.Address[0]
+	}
+	port := pickPort(dlInb)
+	if dep.Port != nil {
+		port = *dep.Port
+	}
+	return &ResolvedDownload{Address: addr, Port: port}
 }

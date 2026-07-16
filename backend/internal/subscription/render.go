@@ -189,13 +189,17 @@ func renderEndpointURI(ep ResolvedEndpoint) (uri string, err error) {
 
 // effectiveAddress returns the address and port that
 // the URI should advertise. Endpoint-level overrides
-// win over the node + inbound defaults.
+// win over the node + inbound defaults. The inbound
+// port is picked at random from `ListenPort ∪
+// ListenPorts` (multi-port anti-DPI) so two clients
+// that fetch within the same minute may see
+// different ports for the same endpoint.
 func effectiveAddress(ep ResolvedEndpoint) (addr string, port int) {
 	addr = ep.Node.Address
 	if len(ep.Endpoint.Address) > 0 {
 		addr = ep.Endpoint.Address[0]
 	}
-	port = ep.Inbound.ListenPort
+	port = pickPort(ep.Inbound)
 	if ep.Endpoint.Port != nil {
 		port = *ep.Endpoint.Port
 	}

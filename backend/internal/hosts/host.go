@@ -227,6 +227,17 @@ type Endpoint struct {
 	SNI  []string `json:"sni,omitempty"`
 	Host []string `json:"host,omitempty"`
 	Path string   `json:"path,omitempty"`
+	// DownloadHostID, when non-nil, references a
+	// separate Host whose endpoints are the
+	// "download farm" for the XHTTP transport. The
+	// sing-box renderer emits a `download_settings`
+	// block on the vless outbound whose
+	// `address` / `port` come from a random endpoint
+	// of the referenced host. The download host is
+	// operator-controlled and is NOT in the user's
+	// pool — the Service looks it up by id directly.
+	// Nil / zero = no download_settings block.
+	DownloadHostID *uuid.UUID `json:"download_host_id,omitempty"`
 }
 
 // Balancer is the per-Host configuration for type=balancer

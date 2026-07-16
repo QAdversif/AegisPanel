@@ -51,24 +51,26 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler) http.H
 // wire format. ID is optional: the service assigns a
 // UUID when the caller leaves it zero.
 type createRequest struct {
-	ID         *uuid.UUID     `json:"id,omitempty"`
-	Name       string         `json:"name"`
-	Protocol   Protocol       `json:"protocol"`
-	Listen     string         `json:"listen,omitempty"`
-	ListenPort int            `json:"listen_port"`
-	Enabled    *bool          `json:"enabled,omitempty"`
-	Tags       []string       `json:"tags,omitempty"`
-	Params     map[string]any `json:"params,omitempty"`
+	ID          *uuid.UUID     `json:"id,omitempty"`
+	Name        string         `json:"name"`
+	Protocol    Protocol       `json:"protocol"`
+	Listen      string         `json:"listen,omitempty"`
+	ListenPort  int            `json:"listen_port"`
+	ListenPorts []int          `json:"listen_ports,omitempty"`
+	Enabled     *bool          `json:"enabled,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
 }
 
 type updateRequest struct {
-	Name       *string         `json:"name,omitempty"`
-	Protocol   *Protocol       `json:"protocol,omitempty"`
-	Listen     *string         `json:"listen,omitempty"`
-	ListenPort *int            `json:"listen_port,omitempty"`
-	Enabled    *bool           `json:"enabled,omitempty"`
-	Tags       *[]string       `json:"tags,omitempty"`
-	Params     *map[string]any `json:"params,omitempty"`
+	Name        *string         `json:"name,omitempty"`
+	Protocol    *Protocol       `json:"protocol,omitempty"`
+	Listen      *string         `json:"listen,omitempty"`
+	ListenPort  *int            `json:"listen_port,omitempty"`
+	ListenPorts *[]int          `json:"listen_ports,omitempty"`
+	Enabled     *bool           `json:"enabled,omitempty"`
+	Tags        *[]string       `json:"tags,omitempty"`
+	Params      *map[string]any `json:"params,omitempty"`
 }
 
 // --- handlers ----------------------------------------------------------
@@ -161,15 +163,16 @@ func (s *Service) handleCreate() http.HandlerFunc {
 			return
 		}
 		in := CreateInput{
-			ID:         zeroOrValue(req.ID),
-			NodeID:     nodeID,
-			Name:       req.Name,
-			Protocol:   req.Protocol,
-			Listen:     req.Listen,
-			ListenPort: req.ListenPort,
-			Enabled:    req.Enabled,
-			Tags:       req.Tags,
-			Params:     req.Params,
+			ID:          zeroOrValue(req.ID),
+			NodeID:      nodeID,
+			Name:        req.Name,
+			Protocol:    req.Protocol,
+			Listen:      req.Listen,
+			ListenPort:  req.ListenPort,
+			ListenPorts: req.ListenPorts,
+			Enabled:     req.Enabled,
+			Tags:        req.Tags,
+			Params:      req.Params,
 		}
 		i, err := s.Create(r.Context(), in)
 		if err != nil {

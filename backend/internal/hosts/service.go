@@ -323,6 +323,9 @@ func (s *Service) normaliseEndpoints(ctx context.Context, in []Endpoint) ([]Endp
 		if err := validateEndpointOverrides(ep); err != nil {
 			return nil, err
 		}
+		if err := validateDownloadHostID(ep.DownloadHostID); err != nil {
+			return nil, err
+		}
 		out = append(out, ep)
 	}
 	return out, nil

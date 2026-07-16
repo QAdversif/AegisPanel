@@ -324,6 +324,10 @@ func cloneInbound(i *Inbound) *Inbound {
 		out.Tags = make([]string, len(i.Tags))
 		copy(out.Tags, i.Tags)
 	}
+	if i.ListenPorts != nil {
+		out.ListenPorts = make([]int, len(i.ListenPorts))
+		copy(out.ListenPorts, i.ListenPorts)
+	}
 	if i.Params != nil {
 		out.Params = make(map[string]any, len(i.Params))
 		for k, v := range i.Params {
