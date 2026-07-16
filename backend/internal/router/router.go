@@ -7,6 +7,7 @@
 package router
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
 
@@ -34,6 +36,7 @@ func Build(
 	hostsSvc *hosts.Service,
 	inboundsSvc *inbounds.Service,
 	subscriptionSvc *subscription.Service,
+	panelCfgSvc *panelcfg.Service,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -81,10 +84,12 @@ func Build(
 		// turns a sub_token into a base64 / sing-box /
 		// Clash / html payload. Mounted under /sub so
 		// the route is short for the operator's
-		// documentation. The sub-path rotation
-		// (e.g. /s3cr3t-sub-<hex>/<token>) lands
-		// with the panel_path_config table in a
-		// later PR.
+		// documentation. The default mount at
+		// /api/v1/sub/<token> stays live in parallel
+		// with the rotated mount at the top level
+		// (added below) so the panel always serves
+		// subscriptions, even when the operator has
+		// not yet rotated the sub_path.
 		r.Mount("/sub", subscription.Router(subscriptionSvc))
 
 		// OpenAPI spec + minimal self-contained index page.
@@ -98,6 +103,31 @@ func Build(
 		//   r.Mount("/webhooks",     webhooks.Router(cfg))
 	})
 
-	log.Info().Msg("v1 router initialised (auth + nodes mounted)")
+	// Rotated sub_path mount — sits at the top level
+	// of the router (NOT under /api/v1) because the
+	// sub_path itself is the operator's chosen
+	// top-level prefix. A rotated panel serves
+	// subscriptions at `https://panel/<sub_path>/sub/
+	// <token>`, where `<sub_path>` is the 16-char
+	// hex string the operator generated. The
+	// sub_path is read from the DB once at Build
+	// time; Phase 1 will add a TTL cache so a
+	// rotation takes effect without a router
+	// restart.
+	//
+	// The default mount at /api/v1/sub stays live
+	// in parallel so the panel always serves
+	// subscriptions, even if the active sub_path
+	// is the empty default. The empty default is
+	// a no-op (it would mount at `/sub/sub/<token>`,
+	// which is wrong; the router skips the mount
+	// when the path is empty).
+	if active, err := panelCfgSvc.GetActive(context.Background()); err == nil && active.SubPath != "" {
+		r.Mount("/"+active.SubPath+"/sub", subscription.Router(subscriptionSvc))
+	} else if err != nil {
+		log.Warn().Err(err).Msg("router: panelcfg read failed; rotated sub_path mount skipped")
+	}
+
+	log.Info().Msg("v1 router initialised (auth + nodes + subscription mounted)")
 	return r
 }
