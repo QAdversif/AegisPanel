@@ -66,6 +66,34 @@ const (
 // implemented.
 var ErrUnknownFormat = errors.New("subscription: unknown format")
 
+// newRenderContext is a thin Service-method wrapper
+// around BuildRenderContext that injects the
+// Service's clock. Returns nil when `u` is nil
+// (test-friendly baseline: no enrichment is
+// performed). The Service is the only place that
+// owns the clock; the rest of the package reads
+// `time.Now()` directly for one-off computations.
+//
+// The returned context has the per-user variable
+// map populated but the salt empty — the per-host
+// salt is computed in enrichEndpoint, where the
+// host id is in scope. This keeps salt per-host
+// (a user on two different hosts gets two
+// different salts) without forcing a per-user
+// global salt that the renderer would then have
+// to override.
+func (s *Service) newRenderContext(u *User) *RenderContext {
+	if u == nil {
+		return nil
+	}
+	// Build a partial context: per-user vars, no
+	// global salt. The per-host salt is computed
+	// per-endpoint in enrichEndpoint, which is
+	// where the host id (and the clock-driven
+	// minute bucket) come into scope.
+	return &RenderContext{Vars: buildUserVars(u)}
+}
+
 // RenderBase64 serialises `eps` as a base64-encoded
 // blob of one URI per line, per the base64 format
 // contract above. The result is suitable for serving
@@ -78,15 +106,35 @@ var ErrUnknownFormat = errors.New("subscription: unknown format")
 // store / clock wiring (e.g. for a future "include
 // last-fetch timestamp" header).
 //
+// Format variables and the wildcard `*` salt are
+// applied here, in the Service layer, before the
+// per-endpoint URI builder runs. The renderers
+// themselves are unchanged: they see pre-resolved
+// `displayName(host)` and `effectiveAddress(ep)`
+// values.
+//
 // Empty input returns an empty (non-nil) result and a
 // nil error; an empty subscription is a valid
 // subscription (the user is entitled to no hosts, so
 // we serve them no hosts).
-func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpoint) (out []byte, err error) {
-	_ = ctx // future: cache reads may consult ctx
-	_ = u   // future: format variables and headers will
+func (s *Service) RenderBase64(_ context.Context, u *User, eps []ResolvedEndpoint) (out []byte, err error) {
 	if len(eps) == 0 {
 		return []byte{}, nil
+	}
+	// Build the per-fetch RenderContext and apply it
+	// to every endpoint before sorting / rendering.
+	// A nil `u` is the test-friendly baseline: the
+	// context is empty, every substitution is a
+	// no-op, and the renderer falls back to the
+	// raw `displayName` / `effectiveAddress`
+	// behaviour.
+	rc := s.newRenderContext(u)
+	if rc != nil {
+		enriched := make([]ResolvedEndpoint, len(eps))
+		for i, ep := range eps {
+			enriched[i] = enrichEndpoint(ep, rc)
+		}
+		eps = enriched
 	}
 	// Deterministic order: priority is already on the
 	// host; stable secondary by (host ID, endpoint ID)
