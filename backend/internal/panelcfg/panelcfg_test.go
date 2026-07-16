@@ -32,12 +32,12 @@ func TestValidatePath(t *testing.T) {
 		// Invalid characters.
 		{"abc/def", true},
 		{"abc def", true},
-		{"ABC", true},        // uppercase
-		{"abc_def", true},    // underscore
-		{"abc.def", true},    // dot
-		{"абвг", true},        // non-ASCII
-		{"abc?", true},       // punctuation
-		{"abc\ndef", true},    // newline
+		{"ABC", true},      // uppercase
+		{"abc_def", true},  // underscore
+		{"abc.def", true},  // dot
+		{"абвг", true},     // non-ASCII
+		{"abc?", true},     // punctuation
+		{"abc\ndef", true}, // newline
 	}
 	for _, c := range cases {
 		err := ValidatePath(c.path)

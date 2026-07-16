@@ -105,22 +105,22 @@ const (
 // token first, then the prev token (when present and
 // not yet expired).
 type User struct {
-	ID                       uuid.UUID
-	Username                 string
-	Status                   UserStatus
-	PlanID                   *uuid.UUID
-	ExpireAt                 *time.Time
-	TrafficLimitBytes        int64
-	TrafficUsedBytes         int64
-	DeviceLimit              int
-	HostsAllowlist           []uuid.UUID
-	HostsBlocklist           []uuid.UUID
-	SubToken                 string
-	SubTokenRotatedAt        *time.Time
-	SubTokenPrev             string
-	SubTokenPrevExpiresAt    *time.Time
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
+	ID                    uuid.UUID
+	Username              string
+	Status                UserStatus
+	PlanID                *uuid.UUID
+	ExpireAt              *time.Time
+	TrafficLimitBytes     int64
+	TrafficUsedBytes      int64
+	DeviceLimit           int
+	HostsAllowlist        []uuid.UUID
+	HostsBlocklist        []uuid.UUID
+	SubToken              string
+	SubTokenRotatedAt     *time.Time
+	SubTokenPrev          string
+	SubTokenPrevExpiresAt *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // Plan is the panel-side view of a tariff. The fields
