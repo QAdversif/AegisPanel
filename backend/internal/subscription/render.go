@@ -51,12 +51,14 @@ import (
 // formats land as additional constants.
 type Format string
 
-// Supported formats. Phase 0 only ships FormatBase64;
-// the rest are placeholders for future PRs.
+// Supported formats. Phase 0 ships FormatBase64 and
+// FormatHTML (the minimal landing page); FormatSingbox
+// and FormatClash are placeholders for future PRs.
 const (
 	FormatBase64  Format = "base64"
 	FormatSingbox Format = "singbox"
 	FormatClash   Format = "clash"
+	FormatHTML    Format = "html"
 )
 
 // ErrUnknownFormat is returned by RenderBase64 when the
