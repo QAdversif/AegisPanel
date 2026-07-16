@@ -390,18 +390,18 @@ func scanHostsWithEndpoints(rows pgx.Rows) ([]*Host, error) {
 			hCreatedAt       time.Time
 			hUpdatedAt       time.Time
 			// endpoint columns (NULL for the host-only row)
-			eID              *uuid.UUID
-			eNodeID          *uuid.UUID
-			eInboundID       *uuid.UUID
-			eWeight          *int
-			eAddressRaw      []byte
-			ePort            *int
-			eSNIRaw          []byte
-			eHostRaw         []byte
-			ePath            *string
-			eDownloadHostID  *uuid.UUID
-			eCreatedAt       *time.Time
-			eUpdatedAt       *time.Time
+			eID             *uuid.UUID
+			eNodeID         *uuid.UUID
+			eInboundID      *uuid.UUID
+			eWeight         *int
+			eAddressRaw     []byte
+			ePort           *int
+			eSNIRaw         []byte
+			eHostRaw        []byte
+			ePath           *string
+			eDownloadHostID *uuid.UUID
+			eCreatedAt      *time.Time
+			eUpdatedAt      *time.Time
 		)
 		if err := rows.Scan(
 			&hID, &hRemark, &hType, &hEnabled, &hPriority,

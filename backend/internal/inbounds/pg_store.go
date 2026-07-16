@@ -237,18 +237,18 @@ func scanInbounds(rows pgx.Rows) ([]*Inbound, error) {
 	out := make([]*Inbound, 0)
 	for rows.Next() {
 		var (
-			id         uuid.UUID
-			nodeID     uuid.UUID
-			name       string
-			protocol   string
-			listen     string
-			listenPort int
+			id          uuid.UUID
+			nodeID      uuid.UUID
+			name        string
+			protocol    string
+			listen      string
+			listenPort  int
 			listenPorts []int
-			enabled    bool
-			tagsRaw    []byte
-			paramsRaw  []byte
-			createdAt  time.Time
-			updatedAt  time.Time
+			enabled     bool
+			tagsRaw     []byte
+			paramsRaw   []byte
+			createdAt   time.Time
+			updatedAt   time.Time
 		)
 		if err := rows.Scan(
 			&id, &nodeID, &name, &protocol, &listen, &listenPort, &listenPorts,
@@ -258,16 +258,16 @@ func scanInbounds(rows pgx.Rows) ([]*Inbound, error) {
 			return nil, fmt.Errorf("scan inbound: %w", err)
 		}
 		ib := &Inbound{
-			ID:         id,
-			NodeID:     nodeID,
-			Name:       name,
-			Protocol:   Protocol(protocol),
-			Listen:     listen,
-			ListenPort: listenPort,
+			ID:          id,
+			NodeID:      nodeID,
+			Name:        name,
+			Protocol:    Protocol(protocol),
+			Listen:      listen,
+			ListenPort:  listenPort,
 			ListenPorts: listenPorts,
-			Enabled:    enabled,
-			CreatedAt:  createdAt,
-			UpdatedAt:  updatedAt,
+			Enabled:     enabled,
+			CreatedAt:   createdAt,
+			UpdatedAt:   updatedAt,
 		}
 		// Tags: stored as JSONB array; round-trip via the same
 		// unmarshalInto helper the hosts store uses.
