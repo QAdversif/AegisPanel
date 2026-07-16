@@ -48,13 +48,26 @@ BEGIN;
 
 -- +migrate Up
 
--- The CREATE TABLE uses IF NOT EXISTS so a re-apply
--- of the migration (a flaky test setup, a hand-roll
--- replay) is a no-op rather than a hard error. The
--- tracking-table idempotency in the migrator handles
--- the common case (a re-run skips this file entirely);
--- the IF NOT EXISTS is the second line of defence.
-CREATE TABLE IF NOT EXISTS panel_path_config (
+-- The DROP + CREATE pattern is more aggressive than
+-- IF NOT EXISTS alone. The rationale: CI integration
+-- tests share a single Postgres container across
+-- parallel package runs; the testutil's per-test
+-- DROP DATABASE sometimes leaves tables behind (e.g.
+-- a test process that crashed between CREATE and the
+-- schema_migrations INSERT, or a partially-applied
+-- migration that aborted mid-statement). A stale
+-- panel_path_config with a partial schema is exactly
+-- the failure mode the CI hit on PR #47, where the
+-- table existed (from a previous run with a different
+-- schema) and IF NOT EXISTS silently skipped the
+-- CREATE — the subsequent INSERT then failed with
+-- "column is_active does not exist". An explicit
+-- DROP IF EXISTS at the start of the migration cleans
+-- up the partial state before the fresh CREATE.
+-- The DROP is a no-op on a clean DB.
+DROP TABLE IF EXISTS panel_path_config;
+
+CREATE TABLE panel_path_config (
     id          UUID PRIMARY KEY DEFAULT '00000000-0000-0000-0000-000000000001'::UUID,
     sub_path    TEXT NOT NULL UNIQUE,
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
@@ -67,11 +80,9 @@ CREATE TABLE IF NOT EXISTS panel_path_config (
     CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID)
 );
 
--- Seed the default row. ON CONFLICT DO NOTHING so
--- a re-apply does not duplicate the sentinel row.
+-- Seed the default row.
 INSERT INTO panel_path_config (sub_path, is_active)
-VALUES ('', TRUE)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('', TRUE);
 
 -- +migrate Down
 
