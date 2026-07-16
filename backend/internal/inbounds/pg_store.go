@@ -369,14 +369,19 @@ func isUniqueViolation(err error) bool {
 
 // nullableIntArray returns the []int for pgx to bind
 // as an INTEGER[] column. A nil or empty slice is
-// passed through as a Go `nil` so pgx applies the
-// column DEFAULT ('{}'); a non-empty slice is bound
-// as the array literal. The Go model treats nil and
-// [] as "no additional ports", which the renderer's
-// pickPort handles by reading the primary port only.
+// returned as `[]int{}` (a non-nil empty slice) so
+// pgx writes the empty array literal `'{}'` rather
+// than SQL NULL — the column is `NOT NULL DEFAULT
+// '{}'`, so a Go `nil` would trip the constraint
+// even though the Go model treats `nil` and `[]` as
+// the same value. The renderer's pickPort handles
+// either by reading the primary port only.
 func nullableIntArray(in []int) any {
+	if in == nil {
+		return []int{}
+	}
 	if len(in) == 0 {
-		return nil
+		return []int{}
 	}
 	return in
 }

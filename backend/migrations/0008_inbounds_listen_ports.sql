@@ -27,16 +27,22 @@
 --   - The set is small (typically 2–4 entries) and
 --     indexed linearly; an array GIN index is overkill.
 --
--- Why NOT NULL is left as default `NULL`:
+-- Why NOT NULL with `DEFAULT '{}'`:
 --
 --   The Go Inbound model's `ListenPorts []int` uses
 --   `omitempty` — a single-port inbound has no
---   `listen_ports` field in JSON. Storing `NULL` for
---   "not configured" is the natural SQL analogue. A
---   future PR may add a NOT NULL DEFAULT '{}' if a
---   single render-path can rely on the array always
---   being present; for now, the renderer treats `nil`
---   and `[]` identically.
+--   `listen_ports` field in JSON. The renderer
+--   treats `nil` and `[]` identically. We pick
+--   `NOT NULL DEFAULT '{}'` so the column always
+--   carries a typed empty array (the PgStore's
+--   `nullableIntArray` helper explicitly returns
+--   `[]int{}` for the empty case so pgx binds
+--   the array type rather than SQL NULL). A
+--   `NULL`-allowed column would also work; the
+--   tradeoff is that the typed-empty path makes
+--   the Go → SQL round-trip uniform (every read
+--   returns a `[]int`, never a nil that has to
+--   be re-coerced to `[]int{}` in the renderer).
 --
 -- Why we do NOT add a per-port uniqueness check:
 --

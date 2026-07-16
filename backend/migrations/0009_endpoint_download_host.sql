@@ -33,12 +33,9 @@ BEGIN;
 
 -- +migrate Up
 
-ALTER TABLE host_endpoints
-    ADD COLUMN download_host_id UUID NULL REFERENCES hosts(id) ON DELETE SET NULL;
+ALTER TABLE host_endpoints ADD COLUMN download_host_id UUID NULL REFERENCES hosts(id) ON DELETE SET NULL;
 
-CREATE INDEX host_endpoints_download_host_id_idx
-    ON host_endpoints (download_host_id)
-    WHERE download_host_id IS NOT NULL;
+CREATE INDEX host_endpoints_download_host_id_idx ON host_endpoints (download_host_id) WHERE download_host_id IS NOT NULL;
 
 -- +migrate Down
 
