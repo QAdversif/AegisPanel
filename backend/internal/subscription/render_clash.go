@@ -183,7 +183,7 @@ func buildClashVLESS(ep ResolvedEndpoint, addr string, port int, tag string) cla
 		out["tls"] = true
 	}
 	// alpn: emit only when set; otherwise omit.
-	if alpn := paramStringSlice(ep.Inbound.Params, "alpn"); len(alpn) > 0 {
+	if alpn := alpnFromParams(ep.Inbound.Params); len(alpn) > 0 {
 		out["alpn"] = alpn
 	}
 	// fingerprint: emit as `client-fingerprint` (Clash
@@ -243,7 +243,7 @@ func buildClashHysteria2(ep ResolvedEndpoint, addr string, port int, tag string)
 		out["sni"] = sni
 		out["tls"] = true
 	}
-	if alpn := paramStringSlice(ep.Inbound.Params, "alpn"); len(alpn) > 0 {
+	if alpn := alpnFromParams(ep.Inbound.Params); len(alpn) > 0 {
 		out["alpn"] = alpn
 	}
 	if obfs := paramString(ep.Inbound.Params, "obfs_type"); obfs != "" {
@@ -300,7 +300,7 @@ func buildClashTrojan(ep ResolvedEndpoint, addr string, port int, tag string) cl
 	if sni != "" {
 		out["sni"] = sni
 	}
-	if alpn := paramStringSlice(ep.Inbound.Params, "alpn"); len(alpn) > 0 {
+	if alpn := alpnFromParams(ep.Inbound.Params); len(alpn) > 0 {
 		out["alpn"] = alpn
 	}
 	if fp := paramString(ep.Inbound.Params, "fingerprint"); fp != "" {

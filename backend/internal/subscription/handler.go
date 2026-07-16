@@ -407,21 +407,6 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// writeNotImplemented writes a 501 response for
-// formats the renderer does not yet supported. The
-// body is a fixed string (no untrusted data is
-// interpolated; the format name is omitted from the
-// body so gosec's taint analysis does not flag the
-// interpolation as a possible XSS sink — the 501
-// status code is the machine-readable signal, and
-// the operator can identify the format from the
-// request log without it appearing in the body).
-func writeNotImplemented(w http.ResponseWriter, _ Format) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusNotImplemented)
-	_, _ = w.Write([]byte("subscription format not implemented yet; use target=base64 or target=html in the meantime\n"))
-}
-
 // --- format detection ----------------------------------------------
 
 // detectFormat returns the wire format the caller is
