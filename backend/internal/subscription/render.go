@@ -80,7 +80,7 @@ var ErrUnknownFormat = errors.New("subscription: unknown format")
 // nil error; an empty subscription is a valid
 // subscription (the user is entitled to no hosts, so
 // we serve them no hosts).
-func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpoint) (out []byte, err error) {
 	_ = ctx // future: cache reads may consult ctx
 	_ = u   // future: format variables and headers will
 	if len(eps) == 0 {
@@ -112,7 +112,7 @@ func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpo
 		return []byte{}, nil
 	}
 	joined := strings.Join(lines, "\n")
-	out := make([]byte, base64.StdEncoding.EncodedLen(len(joined)))
+	out = make([]byte, base64.StdEncoding.EncodedLen(len(joined)))
 	base64.StdEncoding.Encode(out, []byte(joined))
 	return out, nil
 }
@@ -120,7 +120,7 @@ func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpo
 // renderEndpointURI is the per-protocol URI builder.
 // Unknown protocols are returned as errors so the
 // caller (RenderBase64) can skip them.
-func renderEndpointURI(ep ResolvedEndpoint) (string, error) {
+func renderEndpointURI(ep ResolvedEndpoint) (uri string, err error) {
 	displayName := displayName(ep.Host)
 	address, port := effectiveAddress(ep)
 	switch ep.Inbound.Protocol {
@@ -140,12 +140,12 @@ func renderEndpointURI(ep ResolvedEndpoint) (string, error) {
 // effectiveAddress returns the address and port that
 // the URI should advertise. Endpoint-level overrides
 // win over the node + inbound defaults.
-func effectiveAddress(ep ResolvedEndpoint) (string, int) {
-	addr := ep.Node.Address
+func effectiveAddress(ep ResolvedEndpoint) (addr string, port int) {
+	addr = ep.Node.Address
 	if len(ep.Endpoint.Address) > 0 {
 		addr = ep.Endpoint.Address[0]
 	}
-	port := ep.Inbound.ListenPort
+	port = ep.Inbound.ListenPort
 	if ep.Endpoint.Port != nil {
 		port = *ep.Endpoint.Port
 	}
@@ -164,7 +164,7 @@ func displayName(h *hosts.Host) string {
 
 // --- per-protocol renderers --------------------------------
 
-func renderVLESS(ep ResolvedEndpoint, addr string, port int, name string) (string, error) {
+func renderVLESS(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
 	uuidStr := paramString(ep.Inbound.Params, "uuid")
 	if uuidStr == "" {
 		return "", errors.New("vless: missing params.uuid")
@@ -198,7 +198,7 @@ func renderVLESS(ep ResolvedEndpoint, addr string, port int, name string) (strin
 	return "vless://" + uuidStr + "@" + addr + ":" + itoa(port) + "?" + q.Encode() + "#" + url.PathEscape(name), nil
 }
 
-func renderHysteria2(ep ResolvedEndpoint, addr string, port int, name string) (string, error) {
+func renderHysteria2(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
 	password := paramString(ep.Inbound.Params, "password")
 	if password == "" {
 		return "", errors.New("hysteria2: missing params.password")
@@ -213,7 +213,7 @@ func renderHysteria2(ep ResolvedEndpoint, addr string, port int, name string) (s
 	return "hysteria2://" + url.PathEscape(password) + "@" + addr + ":" + itoa(port) + "?" + q.Encode() + "#" + url.PathEscape(name), nil
 }
 
-func renderShadowsocks(ep ResolvedEndpoint, addr string, port int, name string) (string, error) {
+func renderShadowsocks(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
 	method := paramStringOr(ep.Inbound.Params, "method", "chacha20-ietf-poly1305")
 	password := paramString(ep.Inbound.Params, "password")
 	if password == "" {
@@ -226,7 +226,7 @@ func renderShadowsocks(ep ResolvedEndpoint, addr string, port int, name string) 
 	return "ss://" + userinfo + "@" + addr + ":" + itoa(port) + "#" + url.PathEscape(name), nil
 }
 
-func renderTrojan(ep ResolvedEndpoint, addr string, port int, name string) (string, error) {
+func renderTrojan(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
 	password := paramString(ep.Inbound.Params, "password")
 	if password == "" {
 		return "", errors.New("trojan: missing params.password")

@@ -100,7 +100,7 @@ func (s *Service) SetClock(now func() time.Time) {
 // GetUserBySubToken is a passthrough to the Store with a
 // friendly error. The token is what the operator hands
 // to the end user.
-func (s *Service) GetUserBySubToken(ctx context.Context, token string) (*User, error) {
+func (s *Service) GetUserBySubToken(ctx context.Context, token string) (out *User, err error) {
 	if token == "" {
 		return nil, &ValidationError{Field: "sub_token", Message: "must not be empty"}
 	}
@@ -134,7 +134,7 @@ func (s *Service) GetUserBySubToken(ctx context.Context, token string) (*User, e
 // per-user allow/block lists, or non-`all` pool
 // strategies. All of those are method-local additions
 // once the relevant tests exist.
-func (s *Service) ResolveHostsForUser(ctx context.Context, u *User) ([]*hosts.Host, error) {
+func (s *Service) ResolveHostsForUser(ctx context.Context, u *User) (out []*hosts.Host, err error) {
 	if u == nil {
 		return nil, &ValidationError{Field: "user", Message: "must not be nil"}
 	}
@@ -173,7 +173,7 @@ func (s *Service) ResolveHostsForUser(ctx context.Context, u *User) ([]*hosts.Ho
 
 	// Second-pass: resolve to *hosts.Host, drop
 	// missing / disabled, sort by priority.
-	out := make([]*hosts.Host, 0, len(seen))
+	out = make([]*hosts.Host, 0, len(seen))
 	for _, c := range seen {
 		h, err := s.hosts.Get(ctx, c.id)
 		if err != nil {
@@ -216,12 +216,11 @@ func (s *Service) ResolveHostsForUser(ctx context.Context, u *User) ([]*hosts.Ho
 // The result is the input the renderer wants: every
 // URL a subscription client should see, with the
 // display name, address, and protocol all pre-resolved.
-func (s *Service) ResolveEndpointsForUser(ctx context.Context, u *User) ([]ResolvedEndpoint, error) {
+func (s *Service) ResolveEndpointsForUser(ctx context.Context, u *User) (out []ResolvedEndpoint, err error) {
 	hs, err := s.ResolveHostsForUser(ctx, u)
 	if err != nil {
 		return nil, err
 	}
-	var out []ResolvedEndpoint
 	for _, h := range hs {
 		for _, ep := range h.Endpoints {
 			n, err := s.nodes.Get(ctx, ep.NodeID)

@@ -193,7 +193,7 @@ func (s *MemoryStore) WithPoolMember(m PoolMember) *MemoryStore {
 // GetUserBySubToken looks up the user by sub_token. The
 // UNIQUE index on `users.sub_token` makes this a single
 // map hit.
-func (s *MemoryStore) GetUserBySubToken(_ context.Context, token string) (*User, error) {
+func (s *MemoryStore) GetUserBySubToken(_ context.Context, token string) (out *User, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	id, ok := s.usersByToken[token]
@@ -212,7 +212,7 @@ func (s *MemoryStore) GetUserBySubToken(_ context.Context, token string) (*User,
 }
 
 // GetUserByID looks up a user by primary key.
-func (s *MemoryStore) GetUserByID(_ context.Context, id uuid.UUID) (*User, error) {
+func (s *MemoryStore) GetUserByID(_ context.Context, id uuid.UUID) (out *User, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	u, ok := s.users[id]
@@ -232,7 +232,7 @@ func (s *MemoryStore) GetUserByID(_ context.Context, id uuid.UUID) (*User, error
 // If the user has no plan_id the result is empty (no
 // error). If the user has a plan_id but the plan is not
 // in plan_pool, the result is also empty.
-func (s *MemoryStore) ListPoolsForUser(_ context.Context, u *User) ([]*Pool, error) {
+func (s *MemoryStore) ListPoolsForUser(_ context.Context, u *User) (out []*Pool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if u == nil || u.PlanID == nil {
@@ -265,7 +265,6 @@ func (s *MemoryStore) ListPoolsForUser(_ context.Context, u *User) ([]*Pool, err
 	// honour it; this MemoryStore shortcut is
 	// documented here so a future maintainer does not
 	// mistake it for the production behaviour.
-	var out []*Pool
 	for _, p := range s.pools {
 		if len(s.poolMembers[p.ID]) == 0 {
 			continue
@@ -280,10 +279,10 @@ func (s *MemoryStore) ListPoolsForUser(_ context.Context, u *User) ([]*Pool, err
 // ListPoolsAll returns every pool in the store, sorted
 // by ID. Used by Service to seed fixtures and by the
 // dev seed path in main.go.
-func (s *MemoryStore) ListPoolsAll(_ context.Context) ([]*Pool, error) {
+func (s *MemoryStore) ListPoolsAll(_ context.Context) (out []*Pool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*Pool, 0, len(s.pools))
+	out = make([]*Pool, 0, len(s.pools))
 	for _, p := range s.pools {
 		cp := *p
 		out = append(out, &cp)
@@ -294,10 +293,10 @@ func (s *MemoryStore) ListPoolsAll(_ context.Context) ([]*Pool, error) {
 
 // ListPoolMembers returns the members of a pool, sorted
 // by HostID ascending.
-func (s *MemoryStore) ListPoolMembers(_ context.Context, poolID uuid.UUID) ([]PoolMember, error) {
+func (s *MemoryStore) ListPoolMembers(_ context.Context, poolID uuid.UUID) (members []PoolMember, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	members := s.poolMembers[poolID]
+	members = s.poolMembers[poolID]
 	if len(members) == 0 {
 		// Return an empty (non-nil) slice so callers
 		// can range without a nil check; also return
