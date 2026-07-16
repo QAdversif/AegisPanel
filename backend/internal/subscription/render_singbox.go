@@ -113,7 +113,19 @@ type singboxDoc struct {
 // Empty input returns a valid empty document
 // (`{"outbounds": []}`) and a nil error. An empty
 // subscription is a valid subscription.
-func (s *Service) RenderSingbox(_ context.Context, _ *User, eps []ResolvedEndpoint) ([]byte, error) {
+func (s *Service) RenderSingbox(_ context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+	if len(eps) > 0 {
+		// Apply format variables + wildcard salt
+		// once, before the per-endpoint builder.
+		// nil u is the test-friendly baseline.
+		if rc := s.newRenderContext(u); rc != nil {
+			enriched := make([]ResolvedEndpoint, len(eps))
+			for i, ep := range eps {
+				enriched[i] = enrichEndpoint(ep, rc)
+			}
+			eps = enriched
+		}
+	}
 	doc := singboxDoc{Outbounds: make([]singboxOutbound, 0, len(eps))}
 	for _, ep := range eps {
 		out, err := renderSingboxOutbound(ep)
