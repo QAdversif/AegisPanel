@@ -210,7 +210,7 @@ func TestRenderSingbox_VariousProtocols(t *testing.T) {
 		{"ss", inbounds.ProtocolShadowsocks, map[string]any{"method": "aes-256-gcm", "password": "pw-s"}},
 		{"trojan", inbounds.ProtocolTrojan, map[string]any{"password": "pw-t"}},
 	}
-	var eps []ResolvedEndpoint
+	eps := make([]ResolvedEndpoint, 0, len(inboundsSeed))
 	for i, inb := range inboundsSeed {
 		id := uuid.New()
 		if err := inboundsStore.Create(context.Background(), &inbounds.Inbound{
