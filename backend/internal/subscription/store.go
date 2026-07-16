@@ -14,6 +14,7 @@ package subscription
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -35,8 +36,22 @@ type Store interface {
 	// the subscription). It is UNIQUE per migration
 	// 0001.
 	GetUserBySubToken(ctx context.Context, token string) (*User, error)
+	// GetUserByPrevSubToken returns the user whose
+	// `sub_token_prev` matches the given token. Used
+	// by the lookup-chain inside `GetUserBySubToken`
+	// when the current token does not match. The
+	// Service layer enforces the `ExpiresAt` window
+	// after the Store returns a hit.
+	GetUserByPrevSubToken(ctx context.Context, token string) (*User, error)
 	// GetUserByID returns the user with the given id.
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	// UpdateSubToken rotates the user's sub_token:
+	// the current token is moved to `sub_token_prev`
+	// with `sub_token_prev_expires_at = now + grace`,
+	// and `sub_token` is set to the new value. The
+	// grace is honoured by the lookup chain inside
+	// `GetUserBySubToken`.
+	UpdateSubToken(ctx context.Context, userID uuid.UUID, newToken string, prevExpiresAt *time.Time) error
 
 	// ListPoolsForUser returns every pool that the
 	// user is entitled to. The path is:
@@ -79,9 +94,16 @@ type MemoryStore struct {
 	// users[*].SubToken. The migration's UNIQUE
 	// constraint means the mapping is one-to-one.
 	usersByToken map[string]uuid.UUID
-	plans        map[uuid.UUID]*Plan
-	pools        map[uuid.UUID]*Pool
-	poolMembers  map[uuid.UUID][]PoolMember // poolID -> members
+	// usersByPrevToken is the same denormalised
+	// index over users[*].SubTokenPrev. Most users
+	// never rotate, so the index is small (the
+	// underlying map's nil entries are zero-cost).
+	// The migration's partial index is the
+	// production analogue.
+	usersByPrevToken map[string]uuid.UUID
+	plans            map[uuid.UUID]*Plan
+	pools            map[uuid.UUID]*Pool
+	poolMembers      map[uuid.UUID][]PoolMember // poolID -> members
 }
 
 // NewMemoryStore returns an empty MemoryStore. The
@@ -89,12 +111,13 @@ type MemoryStore struct {
 // use SetClock to swap it for a deterministic value.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		now:          time.Now,
-		users:        make(map[uuid.UUID]*User),
-		usersByToken: make(map[string]uuid.UUID),
-		plans:        make(map[uuid.UUID]*Plan),
-		pools:        make(map[uuid.UUID]*Pool),
-		poolMembers:  make(map[uuid.UUID][]PoolMember),
+		now:              time.Now,
+		users:            make(map[uuid.UUID]*User),
+		usersByToken:     make(map[string]uuid.UUID),
+		usersByPrevToken: make(map[string]uuid.UUID),
+		plans:            make(map[uuid.UUID]*Plan),
+		pools:            make(map[uuid.UUID]*Pool),
+		poolMembers:      make(map[uuid.UUID][]PoolMember),
 	}
 }
 
@@ -108,9 +131,9 @@ func (s *MemoryStore) SetClock(now func() time.Time) {
 }
 
 // WithUser copies `u` into the store and indexes it by
-// id and by sub_token. If `u.CreatedAt` is zero the
-// clock fills it. Returns the same store so calls can
-// be chained:
+// id, by sub_token, and (when set) by sub_token_prev.
+// If `u.CreatedAt` is zero the clock fills it.
+// Returns the same store so calls can be chained:
 //
 //	store.WithUser(u1).WithUser(u2).WithPool(p1)
 func (s *MemoryStore) WithUser(u *User) *MemoryStore {
@@ -126,6 +149,9 @@ func (s *MemoryStore) WithUser(u *User) *MemoryStore {
 	s.users[cp.ID] = &cp
 	if cp.SubToken != "" {
 		s.usersByToken[cp.SubToken] = cp.ID
+	}
+	if cp.SubTokenPrev != "" {
+		s.usersByPrevToken[cp.SubTokenPrev] = cp.ID
 	}
 	return s
 }
@@ -209,6 +235,80 @@ func (s *MemoryStore) GetUserBySubToken(_ context.Context, token string) (out *U
 	}
 	cp := *u
 	return &cp, nil
+}
+
+// GetUserByPrevSubToken looks up the user by their
+// `sub_token_prev`. Used by the Service's
+// `GetUserBySubToken` lookup chain when the current
+// token does not match. The Service enforces the
+// `SubTokenPrevExpiresAt` window AFTER the Store
+// returns a hit — the Store itself does not look at
+// the clock, so tests can pin a specific time and
+// assert on the exact user object.
+func (s *MemoryStore) GetUserByPrevSubToken(_ context.Context, token string) (out *User, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.usersByPrevToken[token]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	u, ok := s.users[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+// UpdateSubToken rotates the user's sub_token: the
+// current `SubToken` is moved to `SubTokenPrev` with
+// `SubTokenPrevExpiresAt` set to the supplied
+// timestamp, and `SubToken` is set to the new
+// value. `SubTokenRotatedAt` is bumped to now.
+//
+// `prevExpiresAt = nil` means "no grace period" —
+// the old token stops working immediately. The
+// Service picks the right value (now + 24h by
+// default) and passes it through.
+//
+// The previous `SubTokenPrev` (set by an earlier
+// rotation) is dropped from `usersByPrevToken` so
+// the index only carries the most-recent prev. The
+// earlier prev tokens are now hard-invalidated;
+// they would 404 on lookup even if their entry
+// were kept around, but the index drop saves a
+// per-lookup check.
+func (s *MemoryStore) UpdateSubToken(_ context.Context, userID uuid.UUID, newToken string, prevExpiresAt *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[userID]
+	if !ok {
+		return fmt.Errorf("id %s: %w", userID, ErrNotFound)
+	}
+	// Drop the earlier primary AND earlier prev
+	// from their indexes. The earlier prev is gone
+	// (it was the prev from the previous rotation);
+	// the lookup chain never resolves through it
+	// again, so leaving the entry would only leak
+	// stale rows.
+	delete(s.usersByToken, u.SubToken)
+	if u.SubTokenPrev != "" {
+		delete(s.usersByPrevToken, u.SubTokenPrev)
+	}
+	// Move the current primary into prev, install
+	// the new primary, update the prev-index to
+	// point at the new prev.
+	u.SubTokenPrev = u.SubToken
+	u.SubTokenPrevExpiresAt = prevExpiresAt
+	u.SubToken = newToken
+	now := s.now().UTC()
+	u.SubTokenRotatedAt = &now
+	u.UpdatedAt = now
+	s.usersByToken[u.SubToken] = userID
+	if u.SubTokenPrev != "" {
+		s.usersByPrevToken[u.SubTokenPrev] = userID
+	}
+	return nil
 }
 
 // GetUserByID looks up a user by primary key.

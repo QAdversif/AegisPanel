@@ -35,6 +35,8 @@ package subscription
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -119,18 +121,127 @@ func (s *Service) SetClock(now func() time.Time) {
 // GetUserBySubToken is a passthrough to the Store with a
 // friendly error. The token is what the operator hands
 // to the end user.
+//
+// The lookup chain is:
+//
+//  1. Try the primary sub_token (the current token).
+//  2. On miss, try the sub_token_prev (the token from
+//     the previous rotation, valid during the 24h
+//     grace window). The Store returns the user; the
+//     Service then checks `SubTokenPrevExpiresAt` and
+//     returns ErrNotFound if the grace has elapsed.
+//  3. On either miss, return NotFoundError.
+//
+// Both steps use the same error mapping so the handler
+// returns 404 in both cases — the caller cannot tell
+// whether the user exists but the token is wrong, or
+// the user simply does not exist.
 func (s *Service) GetUserBySubToken(ctx context.Context, token string) (out *User, err error) {
 	if token == "" {
 		return nil, &ValidationError{Field: "sub_token", Message: "must not be empty"}
 	}
 	u, err := s.store.GetUserBySubToken(ctx, token)
+	if err == nil {
+		return u, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("get user by sub_token: %w", err)
+	}
+	// Step 2: try the prev-token.
+	u, err = s.store.GetUserByPrevSubToken(ctx, token)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, &NotFoundError{What: "user", Key: "sub_token"}
 		}
-		return nil, fmt.Errorf("get user by sub_token: %w", err)
+		return nil, fmt.Errorf("get user by sub_token_prev: %w", err)
+	}
+	// The prev-token lookup found a user; check the
+	// grace window. A nil ExpiresAt means "no grace
+	// was set" (the rotation is immediate) — in that
+	// case the prev token is invalid even if the row
+	// is present. A set ExpiresAt must be in the
+	// future.
+	if u.SubTokenPrevExpiresAt == nil || !u.SubTokenPrevExpiresAt.After(s.now()) {
+		return nil, &NotFoundError{What: "user", Key: "sub_token"}
 	}
 	return u, nil
+}
+
+// DefaultSubTokenRotationGrace is the grace window the
+// Service applies when RotateSubToken is called
+// without an explicit grace. 24h matches the 3X-UI
+// convention: the end user has 24h to re-import the
+// new URL on every device before the old one stops
+// working.
+const DefaultSubTokenRotationGrace = 24 * time.Hour
+
+// RotateSubToken generates a new random token for
+// `userID`, marks the current token as the previous
+// one with the supplied grace window, and bumps
+// `SubTokenRotatedAt`. The grace is honoured by the
+// `GetUserBySubToken` lookup chain (above): the
+// previous token keeps resolving to the user for
+// that window, then 404s.
+//
+// The new token is a 32-char hex string (16 bytes of
+// entropy) — long enough to be unguessable, short
+// enough to be readable in the admin UI.
+func (s *Service) RotateSubToken(ctx context.Context, userID uuid.UUID, grace time.Duration) (out *User, err error) {
+	// Pull the current user. The store is the source
+	// of truth for the current sub_token; we read it
+	// to surface a 404 if the user does not exist
+	// (the Store.UpdateSubToken would do the same
+	// lookup, but reading here gives us a friendlier
+	// error path).
+	_, err = s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, &NotFoundError{What: "user", Key: "id"}
+		}
+		return nil, fmt.Errorf("rotate sub_token: get user: %w", err)
+	}
+	// Generate a fresh 32-char hex token.
+	newToken, err := newRandomSubToken()
+	if err != nil {
+		return nil, fmt.Errorf("rotate sub_token: generate token: %w", err)
+	}
+	// Apply grace if the caller asked for it. A
+	// zero grace means "rotate immediately" — the
+	// prev token is invalidated by setting
+	// `SubTokenPrevExpiresAt` to a zero time in the
+	// past; the Service.GetUserBySubToken check
+	// (`!ExpiresAt.After(now)`) catches that.
+	var prevExpiresAt *time.Time
+	if grace > 0 {
+		t := s.now().Add(grace).UTC()
+		prevExpiresAt = &t
+	}
+	if err := s.store.UpdateSubToken(ctx, userID, newToken, prevExpiresAt); err != nil {
+		return nil, fmt.Errorf("rotate sub_token: store update: %w", err)
+	}
+	// Read back the canonical user (the in-memory
+	// index is now stale; the Store.UpdateSubToken
+	// mutates in place but the in-memory copy the
+	// caller might be holding is the pre-rotation
+	// snapshot). For MemoryStore the same pointer is
+	// the source of truth, so the read-back returns
+	// the post-rotation view.
+	return s.store.GetUserByID(ctx, userID)
+}
+
+// newRandomSubToken returns a fresh 32-char hex
+// string. 16 bytes of entropy is enough to make a
+// rotated token unguessable even if the old one
+// leaked. The Service keeps the generator local
+// (rather than exporting it) because the format is
+// an implementation detail: future PRs may switch
+// to base32 or add a checksum suffix.
+func newRandomSubToken() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // ResolveHostsForUser returns every host the user is
