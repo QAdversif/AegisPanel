@@ -39,17 +39,18 @@ BEGIN;
 
 -- +migrate Up
 
-ALTER TABLE users ADD COLUMN sub_token_prev TEXT NULL;
-ALTER TABLE users ADD COLUMN sub_token_prev_expires_at TIMESTAMPTZ NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_token_prev TEXT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_token_prev_expires_at TIMESTAMPTZ NULL;
 
 -- Partial index: only the rotated users. The NULL
--- majority is excluded from the index.
-CREATE UNIQUE INDEX users_sub_token_prev_key ON users (sub_token_prev) WHERE sub_token_prev IS NOT NULL;
+-- majority is excluded from the index. The IF NOT
+-- EXISTS keeps a re-apply a no-op.
+CREATE UNIQUE INDEX IF NOT EXISTS users_sub_token_prev_key ON users (sub_token_prev) WHERE sub_token_prev IS NOT NULL;
 
 -- +migrate Down
 
 DROP INDEX IF EXISTS users_sub_token_prev_key;
-ALTER TABLE users DROP COLUMN sub_token_prev_expires_at;
-ALTER TABLE users DROP COLUMN sub_token_prev;
+ALTER TABLE users DROP COLUMN IF EXISTS sub_token_prev_expires_at;
+ALTER TABLE users DROP COLUMN IF EXISTS sub_token_prev;
 
 COMMIT;
