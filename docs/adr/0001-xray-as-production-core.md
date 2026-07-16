@@ -25,12 +25,12 @@ AegisPanel начинался с идеи core-agnostic панели через 
 
 ## Decision
 
-1. **Production core: Xray.** gRPC API для dynamic users + статистика +
-   cascade + balancer (`leastLoad`, `leastPing`).
-2. **Specialty core: sing-box.** HY2/TUIC-inbound'ы (Xray не умеет) + dev-окружение
-   + нишевые сценарии.
-3. **Для sing-box — Batched Apply** (§7.5): накопление дельт за окно 15-30 сек
-   + один reload ядра. Метрика `core_reload_total` для контроля стоимости.
+1. **Production core: Xray.** gRPC API для dynamic users, статистика,
+   cascade, balancer (`leastLoad`, `leastPing`).
+2. **Specialty core: sing-box.** HY2/TUIC-inbound'ы (Xray не умеет),
+   dev-окружение, нишевые сценарии.
+3. **Для sing-box — Batched Apply** (§7.5): накопление дельт за окно 15-30 сек,
+   один reload ядра. Метрика `core_reload_total` для контроля стоимости.
 4. **CoreProvider абстракция остаётся ядром дизайна.** Добавление ядра =
    новая реализация в `internal/cores/<name>/`, без миграции БД или переписывания
    фронта.
