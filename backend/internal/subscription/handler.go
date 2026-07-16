@@ -238,16 +238,24 @@ func (h *Handler) renderClash(w http.ResponseWriter, ctx context.Context, user *
 
 // --- html render (Phase 0 minimal) ---------------------------------
 
-// renderHTML serves a tiny self-contained page that
-// lists the per-client subscription URL the user is
-// entitled to. The QR code + per-client "copy URL"
-// buttons land in a later PR — Phase 0 ships the page
-// shell so the route is reachable end-to-end.
+// renderHTML serves the QR-code landing page. The
+// page embeds:
+//
+//   - a 256x256 QR code (PNG, data-URL) encoding the
+//     base64 subscription URL — the default for phone-
+//     camera import;
+//   - three copyable per-client URLs (base64, singbox,
+//     clash) with a vanilla-JS "copy" button;
+//   - the user's username and a count of entitled
+//     hosts.
 //
 // The page is intentionally inline-styled and
-// framework-free: the same HTML is served as the
-// landing target for a phone camera, so it must work
-// without JavaScript and render in <100 ms.
+// framework-free: a phone camera must be able to
+// render it without JavaScript and within the first
+// second of the request returning. The copy-button
+// JS is the only script on the page; it degrades
+// gracefully (selects the input on clipboard-API
+// failure) so the URL is still accessible.
 func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context.Context, user *User) {
 	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
 	if err != nil {
@@ -259,21 +267,57 @@ func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context
 		writeServiceError(w, fmt.Errorf("render base64 (for html): %w", err))
 		return
 	}
-	// The subscription URL is the request URL with
+	// The base64 URL is the request URL with
 	// ?target=base64 forced. Clients that ignore the
 	// html landing page can still copy the base64 URL
 	// from the page.
-	subURL := *r.URL
-	q := subURL.Query()
-	q.Set("target", "base64")
-	subURL.RawQuery = q.Encode()
-	subscriptionURL := subURL.String()
+	base64SubURL := subscriptionURLFor(r, FormatBase64)
+	singboxSubURL := subscriptionURLFor(r, FormatSingbox)
+	clashSubURL := subscriptionURLFor(r, FormatClash)
 
-	rows := strings.Split(string(body), "\n")
-	// rows may be empty for a user with no entitled
-	// hosts. The page renders the "no hosts" branch
-	// in that case.
-	host := r.Host
+	// hostCount is read off the rendered base64 body:
+	// each line is one URI, and an empty / single-
+	// newline body means "no entitled hosts".
+	hostCount := 0
+	if len(body) > 0 {
+		hostCount = len(strings.Split(strings.TrimRight(string(body), "\n"), "\n"))
+	}
+
+	// Build the QR code. The QR encodes the base64
+	// URL — that is the path every client can import
+	// from a URL; the per-client URLs on the page are
+	// the explicit override.
+	qrDataURL, err := buildQRCodeDataURL(base64SubURL, 256)
+	if err != nil {
+		// A QR failure must not 5xx the page; the user
+		// can still use the per-client URLs. We log
+		// the error and render the page with an empty
+		// QR (the <img> shows the alt text).
+		log.Warn().Err(err).Msg("subscription handler: qr render failed")
+		qrDataURL = ""
+	}
+
+	page := buildHTMLPage(
+		html.EscapeString(user.Username),
+		qrDataURL,
+		base64SubURL,
+		singboxSubURL,
+		clashSubURL,
+		hostCount,
+	)
+	writeSubscriptionHeaders(w, user, FormatHTML)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = ioWriteString(w, page)
+}
+
+// subscriptionURLFor returns the absolute URL of the
+// current request with `?target=<format>` forced. The
+// scheme honours r.TLS and the X-Forwarded-Proto
+// header (set by a reverse proxy in front of the
+// panel); the host is r.Host. Both are needed because
+// the QR code is scanned off the device — the device
+// has to be able to reach the URL it scans.
+func subscriptionURLFor(r *http.Request, format Format) string {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -281,22 +325,31 @@ func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context
 	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
 		scheme = fwd
 	}
-	canonical := scheme + "://" + host + subscriptionURL
-
-	page := buildHTMLPage(html.EscapeString(user.Username), canonical, len(rows))
-	writeSubscriptionHeaders(w, user, FormatHTML)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = ioWriteString(w, page)
+	u := *r.URL
+	q := u.Query()
+	q.Set("target", string(format))
+	u.RawQuery = q.Encode()
+	return scheme + "://" + r.Host + u.String()
 }
 
-// buildHTMLPage renders the minimal landing page. The
-// IO write is split out into io_WriteString so the test
-// can swap it for a buffer.
-func buildHTMLPage(username, subscriptionURL string, hostCount int) string {
+// buildHTMLPage renders the landing page. The page
+// embeds the QR code (a `data:` URL) and a per-client
+// URL table. The QR is sized at 256x256, which is the
+// sweet spot for phone-camera scanning without
+// bloating the response past ~5 KB.
+//
+// `urls` carries one row per (label, url) pair. The
+// page renders a copy-to-clipboard button next to
+// each row; the JS handler is a tiny `onclick` that
+// calls `navigator.clipboard.writeText` and falls
+// back to a manual prompt if the API is unavailable
+// (older browsers, no-HTTPS, etc.).
+func buildHTMLPage(username, qrDataURL, base64URL, singboxURL, clashURL string, hostCount int) string {
 	hostLine := fmt.Sprintf("You have <b>%d</b> host line(s) in this subscription.", hostCount)
 	if hostCount == 0 {
 		hostLine = "You have no hosts in this subscription yet — contact your operator."
 	}
+	rows := htmlClientRows(base64URL, singboxURL, clashURL)
 	return fmt.Sprintf(`<!doctype html>
 <html lang="en">
 <head>
@@ -306,20 +359,69 @@ func buildHTMLPage(username, subscriptionURL string, hostCount int) string {
 <style>
  body { font: 14px/1.4 system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 12px; color: #111; }
  h1 { font-size: 18px; margin: 0 0 8px; }
+ .qr { display: block; margin: 16px auto; max-width: 256px; width: 100%%; height: auto; }
  code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; word-break: break-all; }
+ table { width: 100%%; border-collapse: collapse; margin-top: 12px; }
+ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+ th { background: #fafafa; }
+ button { font: inherit; padding: 4px 10px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+ button:hover { background: #f0f0f0; }
  .muted { color: #666; font-size: 12px; margin-top: 24px; }
+ .url-cell { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
 <h1>AegisPanel subscription</h1>
 <p>User: <b>%s</b></p>
 <p>%s</p>
-<p>Subscription URL (paste into a VPN client, or scan the QR code — coming in a future update):</p>
-<p><code>%s</code></p>
-<p class="muted">Phase 0 page — no QR code, no per-client copy buttons yet.</p>
+<p>Scan the QR code with a VPN client that supports camera import (Hiddify, Streisand, NekoBox, Karing, V2Box, …):</p>
+<img class="qr" alt="Subscription QR code" src="%s">
+<p>Or pick a per-client URL below and paste it into the client's "import from URL" field:</p>
+<table>
+<thead><tr><th>Client</th><th>URL</th><th></th></tr></thead>
+<tbody>
+%s
+</tbody>
+</table>
+<p class="muted">If the copy button does nothing, your browser blocks the clipboard API over plain HTTP — use the URL text directly.</p>
 </body>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  var btns = document.querySelectorAll('button[data-copy]');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function() {
+      var id = this.getAttribute('data-copy');
+      var el = document.getElementById(id);
+      if (!el) return;
+      try { navigator.clipboard.writeText(el.value).then(function() { var s = el.parentNode.querySelector('.status'); if (s) s.textContent = 'copied'; }); }
+      catch (e) { el.select(); }
+    });
+  }
+});
+</script>
 </html>
-`, html.EscapeString(username), html.EscapeString(username), hostLine, html.EscapeString(subscriptionURL))
+`,
+		html.EscapeString(username),
+		html.EscapeString(username),
+		hostLine,
+		qrDataURL,
+		rows,
+	)
+}
+
+// htmlClientRows renders the per-client URL table
+// body. Each row has a copyable `<input>` so the
+// "copy" button has a stable target element. The
+// inputs are `readonly` (the user is not supposed to
+// edit them — the URL is the credential).
+func htmlClientRows(base64URL, singboxURL, clashURL string) string {
+	return fmt.Sprintf(`<tr><td>Base64 (v2rayN, Shadowrocket, v2rayNG)</td><td class="url-cell"><input id="u1" readonly value="%s"></td><td><button data-copy="u1">copy</button> <span class="status"></span></td></tr>
+<tr><td>Sing-box (Hiddify, NekoBox, sing-box CLI)</td><td class="url-cell"><input id="u2" readonly value="%s"></td><td><button data-copy="u2">copy</button> <span class="status"></span></td></tr>
+<tr><td>Clash / Mihomo (Clash Verge, Clash Meta)</td><td class="url-cell"><input id="u3" readonly value="%s"></td><td><button data-copy="u3">copy</button> <span class="status"></span></td></tr>`,
+		html.EscapeString(base64URL),
+		html.EscapeString(singboxURL),
+		html.EscapeString(clashURL),
+	)
 }
 
 // ioWriteString is a tiny seam so the test can
