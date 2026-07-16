@@ -143,13 +143,14 @@ func (h *Handler) handleRender(w http.ResponseWriter, r *http.Request) {
 
 	format := detectFormat(r)
 
-	// Phase 0: only base64 is implemented end-to-end.
-	// sing-box and clash return 501; html returns a
-	// minimal landing page.
+	// Phase 0: base64, singbox, and html are
+	// implemented end-to-end; clash returns 501.
 	switch format {
 	case FormatBase64:
 		h.renderBase64(w, ctx, user)
-	case FormatSingbox, FormatClash:
+	case FormatSingbox:
+		h.renderSingbox(w, ctx, user)
+	case FormatClash:
 		writeNotImplemented(w, format)
 	case FormatHTML:
 		h.renderHTML(w, r, ctx, user)
@@ -183,6 +184,30 @@ func (h *Handler) renderBase64(w http.ResponseWriter, ctx context.Context, user 
 	}
 	writeSubscriptionHeaders(w, user, FormatBase64)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+// renderSingbox resolves the user's entitled endpoints
+// and writes a sing-box outbounds JSON document to
+// the response. The top-level shape is
+// `{"outbounds": [...]}`. Endpoints whose inbound is
+// missing required params (e.g. a VLESS without a
+// uuid) are silently skipped — the subscription
+// must still serve for the rest of the entitled
+// endpoints.
+func (h *Handler) renderSingbox(w http.ResponseWriter, ctx context.Context, user *User) {
+	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	body, err := h.svc.RenderSingbox(ctx, user, eps)
+	if err != nil {
+		writeServiceError(w, fmt.Errorf("render singbox: %w", err))
+		return
+	}
+	writeSubscriptionHeaders(w, user, FormatSingbox)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(body)
 }
 

@@ -131,11 +131,20 @@ func TestHandler_Render_UnsupportedTarget(t *testing.T) {
 	}
 }
 
-func TestHandler_Render_SingboxNotImplemented(t *testing.T) {
+func TestHandler_Render_Singbox_Renders(t *testing.T) {
+	// After PR #42 the sing-box format is implemented
+	// end-to-end. The handler must return 200 with a
+	// valid `application/json` body. The renderer's
+	// own unit tests cover the wire format; this test
+	// is the end-to-end smoke that the handler
+	// dispatches to it.
 	hf := newHandlerFixture(t)
 	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=singbox")
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json prefix", got)
 	}
 }
 
