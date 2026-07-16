@@ -143,15 +143,15 @@ func (h *Handler) handleRender(w http.ResponseWriter, r *http.Request) {
 
 	format := detectFormat(r)
 
-	// Phase 0: base64, singbox, and html are
-	// implemented end-to-end; clash returns 501.
+	// Phase 0: base64, singbox, clash, and html are
+	// implemented end-to-end.
 	switch format {
 	case FormatBase64:
 		h.renderBase64(w, ctx, user)
 	case FormatSingbox:
 		h.renderSingbox(w, ctx, user)
 	case FormatClash:
-		writeNotImplemented(w, format)
+		h.renderClash(w, ctx, user)
 	case FormatHTML:
 		h.renderHTML(w, r, ctx, user)
 	default:
@@ -208,6 +208,31 @@ func (h *Handler) renderSingbox(w http.ResponseWriter, ctx context.Context, user
 	}
 	writeSubscriptionHeaders(w, user, FormatSingbox)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+// renderClash resolves the user's entitled endpoints
+// and writes a Clash proxy-list YAML document to
+// the response. The top-level shape is
+// `proxies: [ <proxy>, ... ]`. proxy-groups and
+// rules are intentionally NOT emitted — those are a
+// per-client policy concern, not a per-subscription
+// one. Clients merge this list into their own
+// template and apply the user-defined groups / rules
+// there.
+func (h *Handler) renderClash(w http.ResponseWriter, ctx context.Context, user *User) {
+	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	body, err := h.svc.RenderClash(ctx, user, eps)
+	if err != nil {
+		writeServiceError(w, fmt.Errorf("render clash: %w", err))
+		return
+	}
+	writeSubscriptionHeaders(w, user, FormatClash)
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	_, _ = w.Write(body)
 }
 

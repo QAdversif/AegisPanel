@@ -148,11 +148,20 @@ func TestHandler_Render_Singbox_Renders(t *testing.T) {
 	}
 }
 
-func TestHandler_Render_ClashNotImplemented(t *testing.T) {
+func TestHandler_Render_Clash_Renders(t *testing.T) {
+	// After PR #43 the Clash format is implemented
+	// end-to-end. The handler must return 200 with
+	// `text/yaml` content-type. The renderer's own
+	// unit tests cover the wire format; this test is
+	// the end-to-end smoke that the handler
+	// dispatches to it.
 	hf := newHandlerFixture(t)
 	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=clash")
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/yaml") {
+		t.Errorf("Content-Type = %q, want text/yaml prefix", got)
 	}
 }
 
