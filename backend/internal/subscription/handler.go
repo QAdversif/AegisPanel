@@ -236,7 +236,7 @@ func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context
 	page := buildHTMLPage(html.EscapeString(user.Username), canonical, len(rows))
 	writeSubscriptionHeaders(w, user, FormatHTML)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io_WriteString(w, page)
+	_, _ = ioWriteString(w, page)
 }
 
 // buildHTMLPage renders the minimal landing page. The
@@ -272,12 +272,12 @@ func buildHTMLPage(username, subscriptionURL string, hostCount int) string {
 `, html.EscapeString(username), html.EscapeString(username), hostLine, html.EscapeString(subscriptionURL))
 }
 
-// io_WriteString is a tiny seam so the test can
+// ioWriteString is a tiny seam so the test can
 // intercept the html render output. It is the
 // production path — using io.WriteString directly is
 // fine, but routing through a package-local function
 // makes the test a one-liner.
-func io_WriteString(w http.ResponseWriter, s string) (int, error) {
+func ioWriteString(w http.ResponseWriter, s string) (int, error) {
 	return fmt.Fprint(w, s)
 }
 
@@ -359,14 +359,18 @@ func writeServiceError(w http.ResponseWriter, err error) {
 
 // writeNotImplemented writes a 501 response for
 // formats the renderer does not yet support. The body
-// is the wire-format name so the operator can grep
-// for it in client logs.
+// mentions the wire-format name so the operator can
+// grep for it in client logs. The format is one of
+// the four known Format constants, so no escaping is
+// required (no untrusted data flows into the body).
 func writeNotImplemented(w http.ResponseWriter, format Format) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusNotImplemented)
-	_, _ = fmt.Fprintf(w,
-		"subscription format %q is not implemented yet; use target=base64 or target=html in the meantime\n",
-		format)
+	_, _ = fmt.Fprint(w,
+		"subscription format ",
+		string(format),
+		" is not implemented yet; use target=base64 or target=html in the meantime\n",
+	)
 }
 
 // --- format detection ----------------------------------------------

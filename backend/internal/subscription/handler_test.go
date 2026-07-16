@@ -3,6 +3,7 @@
 package subscription
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -44,12 +45,9 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 // do runs an HTTP request through the router and
 // returns the recorder. `target` is the full URL path
 // the router should see, e.g. "/sub/tok-alice".
-func (hf *handlerFixture) do(t *testing.T, method, target string, headers map[string]string) *httptest.ResponseRecorder {
+func (hf *handlerFixture) do(t *testing.T, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, nil)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 	w := httptest.NewRecorder()
 	hf.router.ServeHTTP(w, req)
 	return w
@@ -59,7 +57,7 @@ func (hf *handlerFixture) do(t *testing.T, method, target string, headers map[st
 
 func TestHandler_RenderBase64_Default(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -87,7 +85,7 @@ func TestHandler_RenderBase64_Default(t *testing.T) {
 
 func TestHandler_RenderExplicitTarget(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=base64", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=base64")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -95,7 +93,7 @@ func TestHandler_RenderExplicitTarget(t *testing.T) {
 
 func TestHandler_Render_NotFound(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-does-not-exist", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-does-not-exist")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
 	}
@@ -109,7 +107,7 @@ func TestHandler_Render_NotLive(t *testing.T) {
 	// Service.ResolveEndpointsForUser returns
 	// UserNotLiveError -> handler maps to 403.
 	hf := newHandlerFixture(t)
-	user, err := hf.svc.GetUserBySubToken(nil, "tok-alice")
+	user, err := hf.svc.GetUserBySubToken(context.TODO(), "tok-alice")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
@@ -119,7 +117,7 @@ func TestHandler_Render_NotLive(t *testing.T) {
 	if ms, ok := hf.svc.store.(*MemoryStore); ok {
 		ms.WithUser(user)
 	}
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice")
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
@@ -127,7 +125,7 @@ func TestHandler_Render_NotLive(t *testing.T) {
 
 func TestHandler_Render_UnsupportedTarget(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=garbage", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=garbage")
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d, want 415", w.Code)
 	}
@@ -135,7 +133,7 @@ func TestHandler_Render_UnsupportedTarget(t *testing.T) {
 
 func TestHandler_Render_SingboxNotImplemented(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=singbox", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=singbox")
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", w.Code)
 	}
@@ -143,7 +141,7 @@ func TestHandler_Render_SingboxNotImplemented(t *testing.T) {
 
 func TestHandler_Render_ClashNotImplemented(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=clash", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=clash")
 	if w.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want 501", w.Code)
 	}
@@ -151,7 +149,7 @@ func TestHandler_Render_ClashNotImplemented(t *testing.T) {
 
 func TestHandler_Render_HTML(t *testing.T) {
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=html", nil)
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice?target=html")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -259,7 +257,7 @@ func TestBuildUserInfoHeader_NilExpire(t *testing.T) {
 func TestHandler_Router_RejectsPost(t *testing.T) {
 	// Router only registers GET; POST should 405.
 	hf := newHandlerFixture(t)
-	w := hf.do(t, http.MethodPost, "/sub/tok-alice", nil)
+	w := hf.do(t, http.MethodPost, "/sub/tok-alice")
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
 	}
