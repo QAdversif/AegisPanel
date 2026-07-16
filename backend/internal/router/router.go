@@ -19,6 +19,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
 
 // Build returns the v1 http.Handler for Aegis. The auth subrouter is
@@ -26,7 +27,14 @@ import (
 // auth.Service.Middleware() and surface the verified Claims on the
 // request context for downstream handlers. Other module routers
 // (nodes, …) are mounted here too — see comments inline.
-func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, hostsSvc *hosts.Service, inboundsSvc *inbounds.Service) http.Handler {
+func Build(
+	cfg *config.Config,
+	authSvc *auth.Service,
+	nodesSvc *nodes.Service,
+	hostsSvc *hosts.Service,
+	inboundsSvc *inbounds.Service,
+	subscriptionSvc *subscription.Service,
+) http.Handler {
 	r := chi.NewRouter()
 
 	// Built-in middlewares (recover, real IP, request ID, logger).
@@ -68,6 +76,16 @@ func Build(cfg *config.Config, authSvc *auth.Service, nodesSvc *nodes.Service, h
 		// so the hosts service is constructed in main.go with
 		// the nodes service as a dependency.
 		r.Mount("/hosts", hosts.Router(hostsSvc, authSvc.Middleware()))
+
+		// Subscription URL — the public endpoint that
+		// turns a sub_token into a base64 / sing-box /
+		// Clash / html payload. Mounted under /sub so
+		// the route is short for the operator's
+		// documentation. The sub-path rotation
+		// (e.g. /s3cr3t-sub-<hex>/<token>) lands
+		// with the panel_path_config table in a
+		// later PR.
+		r.Mount("/sub", subscription.Router(subscriptionSvc))
 
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)

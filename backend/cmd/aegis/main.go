@@ -239,13 +239,12 @@ func main() {
 	//    main.go change.
 	subscriptionStore := subscription.NewMemoryStore()
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
-	_ = subscriptionSvc
 	log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
