@@ -33,6 +33,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/swaggo/swag v1.16.6
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

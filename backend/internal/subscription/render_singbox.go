@@ -274,7 +274,7 @@ func buildSingboxTLS(ep ResolvedEndpoint, _ string) map[string]any {
 		tls["server_name"] = sni
 	}
 	// alpn: pass through if present.
-	if alpn := paramStringSlice(ep.Inbound.Params, "alpn"); len(alpn) > 0 {
+	if alpn := alpnFromParams(ep.Inbound.Params); len(alpn) > 0 {
 		tls["alpn"] = alpn
 	}
 	// utls: only set when the inbound declares a
@@ -312,15 +312,21 @@ func buildSingboxTLS(ep ResolvedEndpoint, _ string) map[string]any {
 
 // --- param helpers -----------------------------------------------
 
-// paramStringSlice reads a []string value from the
-// inbound's `params` map. Returns nil if the key is
-// missing or not a slice of strings; the caller
-// treats nil as "no value".
-func paramStringSlice(params map[string]any, key string) []string {
+// alpnFromParams reads the inbound's `params.alpn`
+// value as a []string. The Phase 0 renderer reads
+// only the alpn slice — every other "list of
+// strings" field in the inbound params is a single
+// value, not a list. When a future renderer needs a
+// second list (e.g. server_names in XHTTP), split
+// the helper per-field rather than generalising
+// here; the unparam linter would flag a generic
+// "read any []string by key" function as "always
+// called with the same key".
+func alpnFromParams(params map[string]any) []string {
 	if params == nil {
 		return nil
 	}
-	v, ok := params[key]
+	v, ok := params["alpn"]
 	if !ok {
 		return nil
 	}
