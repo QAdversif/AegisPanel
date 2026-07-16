@@ -267,6 +267,29 @@ func validateEndpointOverrides(ep Endpoint) error {
 	return nil
 }
 
+// validateDownloadHostID checks the per-endpoint
+// XHTTP download-host reference. The cross-entity
+// check (does the host id exist?) is deferred to the
+// subscription service at resolve time, because the
+// hosts service does not depend on itself; a host can
+// be created with a download-host reference that
+// points at a host that does not yet exist, and a
+// later insert of the download host will satisfy the
+// constraint. The DB FK with `ON DELETE SET NULL`
+// (migration 0009) handles the delete path.
+func validateDownloadHostID(id *uuid.UUID) error {
+	if id == nil {
+		return nil
+	}
+	if *id == uuid.Nil {
+		return &ValidationError{
+			Field:   "endpoints[].download_host_id",
+			Message: "must be a non-zero UUID or unset",
+		}
+	}
+	return nil
+}
+
 // --- priority / tag normalisation ---------------------------------------
 
 func validatePriority(p int) error {

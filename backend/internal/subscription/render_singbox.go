@@ -178,6 +178,11 @@ func renderSingboxOutbound(ep ResolvedEndpoint) (singboxOutbound, error) {
 //	                     safari / ios / android)
 //	alpn:        []string
 //	reality:     map[string]any  { public_key, short_id }
+//	transport:   string  ("xhttp" enables the
+//	                     download_settings block; the
+//	                     full transport object lands
+//	                     with the Phase 1 transport
+//	                     work)
 func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag string) singboxOutbound {
 	uuidStr := paramString(ep.Inbound.Params, "uuid")
 	out := singboxOutbound{
@@ -192,6 +197,21 @@ func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag string) s
 	}
 	if tls := buildSingboxTLS(ep, "tls"); tls != nil {
 		out["tls"] = tls
+	}
+	// XHTTP `download_settings` block. Emitted when
+	// the inbound declares the XHTTP transport AND
+	// the endpoint has a resolved download host. The
+	// sing-box wire format is
+	// `download_settings: { address, port }`; we
+	// emit a minimal block with just those two
+	// fields (sing-box tolerates a partial block —
+	// `path` / `headers` land with the Phase 1
+	// transport work).
+	if ep.Download != nil && paramString(ep.Inbound.Params, "transport") == "xhttp" {
+		out["download_settings"] = map[string]any{
+			"address": ep.Download.Address,
+			"port":    ep.Download.Port,
+		}
 	}
 	return out
 }
