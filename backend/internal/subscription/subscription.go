@@ -94,21 +94,33 @@ const (
 // the user is entitled to without filtering. The slice
 // fields are still populated by the Store so a future
 // filter pass can read them without a migration.
+//
+// The sub-token rotation fields (`SubTokenPrev` /
+// `SubTokenPrevExpiresAt`) implement the 3X-UI
+// convention: a rotation generates a new token,
+// keeps the old one valid for 24h so the user has
+// time to re-import the new URL on every device,
+// then the old token stops working. The
+// `GetUserBySubToken` lookup chain tries the current
+// token first, then the prev token (when present and
+// not yet expired).
 type User struct {
-	ID                uuid.UUID
-	Username          string
-	Status            UserStatus
-	PlanID            *uuid.UUID
-	ExpireAt          *time.Time
-	TrafficLimitBytes int64
-	TrafficUsedBytes  int64
-	DeviceLimit       int
-	HostsAllowlist    []uuid.UUID
-	HostsBlocklist    []uuid.UUID
-	SubToken          string
-	SubTokenRotatedAt *time.Time
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                    uuid.UUID
+	Username              string
+	Status                UserStatus
+	PlanID                *uuid.UUID
+	ExpireAt              *time.Time
+	TrafficLimitBytes     int64
+	TrafficUsedBytes      int64
+	DeviceLimit           int
+	HostsAllowlist        []uuid.UUID
+	HostsBlocklist        []uuid.UUID
+	SubToken              string
+	SubTokenRotatedAt     *time.Time
+	SubTokenPrev          string
+	SubTokenPrevExpiresAt *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // Plan is the panel-side view of a tariff. The fields

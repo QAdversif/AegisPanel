@@ -49,6 +49,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
+	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/router"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
@@ -241,10 +242,17 @@ func main() {
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
 	log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 
+	// Panel-wide config (the rotating URL prefix).
+	// MemoryStore only for Phase 0; PgStore lands
+	// in a later PR.
+	panelCfgStore := panelcfg.NewMemoryStore()
+	panelCfgSvc := panelcfg.NewService(panelCfgStore)
+	log.Info().Msg("panelcfg: using in-memory store (MemoryStore, dev only)")
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
