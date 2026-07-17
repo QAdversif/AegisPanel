@@ -72,7 +72,7 @@ func countActiveRows(t *testing.T, pool *pgxpool.Pool) int {
 
 // TestPgStore_GetActive_DefaultRowSeeded — migration
 // 0010 inserts the sentinel default row with
-// `sub_path = ''`. GetActive must return it on a
+// `sub_path = ”`. GetActive must return it on a
 // fresh database without any further setup.
 func TestPgStore_GetActive_DefaultRowSeeded(t *testing.T) {
 	store, _ := runPgStore(t)
@@ -375,7 +375,7 @@ func TestPgStore_SetActive_AllowsDuplicatePath(t *testing.T) {
 // TestPgStore_Reset_ReactivatesDefault — Reset
 // deactivates the active row and re-activates the
 // sentinel default row. GetActive must return the
-// sentinel row with `sub_path = ''`.
+// sentinel row with `sub_path = ”`.
 func TestPgStore_Reset_ReactivatesDefault(t *testing.T) {
 	store, pool := runPgStore(t)
 	ctx := context.Background()
