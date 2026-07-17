@@ -116,6 +116,29 @@ CREATE TABLE IF NOT EXISTS host_pool_members (
 -- have it pre-removed) is a no-op.
 ALTER TABLE panel_path_config DROP CONSTRAINT IF EXISTS panel_path_config_id_check;
 
+-- (3) Drop the wrong UNIQUE constraint on sub_path.
+-- The column-level UNIQUE was added in 0010. It blocks
+-- a legitimate use case: the operator rotates to path
+-- A, then rotates to path B, then rotates back to path
+-- A. The MemoryStore allows this (each rotation gets a
+-- fresh id; the "at most one active row" invariant is
+-- held by the SetActive transaction via the `is_active`
+-- flag). The SQL UNIQUE on sub_path would either:
+--   (a) reject the second rotation back to A (the
+--       operator's intent fails silently), or
+--   (b) require a separate UNIQUE partial index on
+--       `sub_path WHERE is_active = TRUE` (the
+--       "one active row per path" invariant).
+-- (b) is the production-correct SQL-level expression
+-- of the invariant, but the application already enforces
+-- it via the deactivate-all-then-insert-one transaction
+-- in `SetActive`. The risk of an active-row collision
+-- is bounded by the application's own correctness, not
+-- the schema. We drop the UNIQUE here and document the
+-- invariant in the `SetActive` code (see
+-- `PanelcfgPgStore.SetActive`).
+ALTER TABLE panel_path_config DROP CONSTRAINT IF EXISTS panel_path_config_sub_path_key;
+
 -- +migrate Down
 
 -- (1) Re-create the CHECK constraint. The Down of a
@@ -132,6 +155,8 @@ ALTER TABLE panel_path_config DROP CONSTRAINT IF EXISTS panel_path_config_id_che
 -- re-creating it (the v2 chain). Re-adding the CHECK
 -- here is a 1-line side-effect of the bug fix.
 ALTER TABLE panel_path_config ADD CONSTRAINT panel_path_config_id_check CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID);
+
+ALTER TABLE panel_path_config ADD CONSTRAINT panel_path_config_sub_path_key UNIQUE (sub_path);
 
 DROP TABLE IF EXISTS host_pool_members;
 

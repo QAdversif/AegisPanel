@@ -38,13 +38,11 @@ package panelcfg
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -158,24 +156,23 @@ func (s *PgStore) SetActive(
 		return nil, fmt.Errorf("deactivate old sub_paths: %w", err)
 	}
 
-	// Insert the new active row. The sub_path is
-	// UNIQUE; a collision surfaces as a 23505 SQLSTATE
-	// (the rotation endpoint validates the path before
-	// the call, so a real collision means a parallel
-	// call from another operator). The RETURNING
-	// clause is mandatory: without it `QueryRow` sees
-	// no rows and Scan returns `pgx.ErrNoRows`. The
-	// caller needs the new id to re-read the row.
+	// Insert the new active row. The `sub_path`
+	// column is NOT unique (migration 0012 dropped
+	// the column-level UNIQUE so the operator can
+	// re-rotate to a path they used before — each
+	// rotation gets a fresh id; the "at most one
+	// active row" invariant is held by the
+	// SetActive transaction, not by the schema).
+	// The RETURNING clause is mandatory: without it
+	// `QueryRow` sees no rows and Scan returns
+	// `pgx.ErrNoRows`. The caller needs the new id
+	// to re-read the row.
 	const insert = `
 		INSERT INTO panel_path_config (id, sub_path, is_active, created_at, expires_at)
 		VALUES (gen_random_uuid(), $1, TRUE, clock_timestamp(), NULL)
 		RETURNING id`
 	var newID uuid.UUID
 	if err := tx.QueryRow(ctx, insert, newPath).Scan(&newID); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return nil, fmt.Errorf("sub_path %q: %w", newPath, ErrInvalidPath)
-		}
 		return nil, fmt.Errorf("insert new sub_path: %w", err)
 	}
 

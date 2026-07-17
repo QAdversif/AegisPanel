@@ -330,26 +330,43 @@ func TestPgStore_SetActive_AtMostOneActive(t *testing.T) {
 	}
 }
 
-// TestPgStore_SetActive_RejectsDuplicatePath — the
-// `sub_path` column has a UNIQUE constraint. Two
-// SetActive calls with the same path result in the
-// second one failing with ErrInvalidPath (the closest
-// semantic mapping; the duplicate would also surface
-// as 23505 unique_violation, which we collapse to
-// ErrInvalidPath because the operator is the only
-// caller and the validator already rejected the
-// obvious duplicates on the validation path).
-func TestPgStore_SetActive_RejectsDuplicatePath(t *testing.T) {
+// TestPgStore_SetActive_AllowsDuplicatePath — the
+// same `sub_path` can be re-rotated to (creating a
+// new history row each time). The MemoryStore
+// behaves the same way: each SetActive inserts a
+// fresh row with a new id; the "at most one active
+// row" invariant is held by the SetActive
+// transaction, not by the schema. The UNIQUE
+// constraint on `sub_path` was dropped in migration
+// 0012 to make the SQL match the MemoryStore
+// contract.
+func TestPgStore_SetActive_AllowsDuplicatePath(t *testing.T) {
 	store, _ := runPgStore(t)
 	ctx := context.Background()
 
-	const dup = "duplicate-path-zzzz"
-	if _, err := store.SetActive(ctx, dup, 0); err != nil {
+	const path = "repeat-rotation-aaaa"
+	first, err := store.SetActive(ctx, path, 0)
+	if err != nil {
 		t.Fatalf("first SetActive: %v", err)
 	}
-	_, err := store.SetActive(ctx, dup, 0)
-	if !errors.Is(err, ErrInvalidPath) {
-		t.Errorf("second SetActive err = %v, want ErrInvalidPath", err)
+	second, err := store.SetActive(ctx, path, 0)
+	if err != nil {
+		t.Fatalf("second SetActive with same path: %v", err)
+	}
+	// Two distinct history rows: different id, same sub_path.
+	if first.ID == second.ID {
+		t.Errorf("first.ID == second.ID (%v), want distinct history rows", first.ID)
+	}
+	if first.SubPath != second.SubPath {
+		t.Errorf("SubPath: first=%q second=%q, want the same (path was re-rotated to)", first.SubPath, second.SubPath)
+	}
+	// GetActive returns the most recent (second), not the first.
+	active, err := store.GetActive(ctx)
+	if err != nil {
+		t.Fatalf("GetActive: %v", err)
+	}
+	if active.ID != second.ID {
+		t.Errorf("GetActive.ID = %v, want %v (the most recent)", active.ID, second.ID)
 	}
 }
 
