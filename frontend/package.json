@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint . --ext .ts,.vue",
+    "lint": "eslint . --ext .ts,.vue && node tools/scripts/check-raw-text.mjs",
     "lint:fix": "eslint . --ext .ts,.vue --fix",
     "format": "prettier --write \"src/**/*.{ts,vue,json,css,scss,md}\"",
     "type-check": "vue-tsc --noEmit"

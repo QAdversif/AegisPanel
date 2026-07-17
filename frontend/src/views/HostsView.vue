@@ -123,8 +123,8 @@ const columns: ColumnDef<Host, unknown>[] = [
       :columns="columns"
       :data="hosts"
       :loading="loading"
-      :search-placeholder="t('hosts.search')"
-      :empty-label="t('hosts.empty')"
+      :search-key="'hosts.search'"
+      :empty-key="'hosts.empty'"
     />
   </section>
 </template>
