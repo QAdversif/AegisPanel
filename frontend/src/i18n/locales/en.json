@@ -1,11 +1,26 @@
 {
   "nav": {
-    "dashboard": "Dashboard"
+    "dashboard": "Dashboard",
+    "nodes": "Nodes",
+    "inbounds": "Inbounds",
+    "hosts": "Hosts",
+    "users": "Users",
+    "settings": "Settings",
+    "openMenu": "Open menu",
+    "soon": "Soon"
+  },
+  "topbar": {
+    "themeLight": "Switch to light theme",
+    "themeDark": "Switch to dark theme",
+    "panelStatus": "Panel status",
+    "profileSoon": "Profile (Phase 1+)",
+    "logoutSoon": "Sign out (Phase 1+)"
   },
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Operational overview of the Aegis panel.",
     "panel": "Panel",
+    "panelDesc": "Reachability of the panel API.",
     "nodes": "Nodes",
     "users": "Users",
     "hosts": "Hosts",

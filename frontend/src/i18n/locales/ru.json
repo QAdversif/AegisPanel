@@ -1,11 +1,26 @@
 {
   "nav": {
-    "dashboard": "Сводка"
+    "dashboard": "Сводка",
+    "nodes": "Ноды",
+    "inbounds": "Инбаунды",
+    "hosts": "Хосты",
+    "users": "Пользователи",
+    "settings": "Настройки",
+    "openMenu": "Открыть меню",
+    "soon": "Скоро"
+  },
+  "topbar": {
+    "themeLight": "Переключить на светлую тему",
+    "themeDark": "Переключить на тёмную тему",
+    "panelStatus": "Статус панели",
+    "profileSoon": "Профиль (Phase 1+)",
+    "logoutSoon": "Выход (Phase 1+)"
   },
   "dashboard": {
     "title": "Сводка",
     "subtitle": "Оперативный обзор панели Aegis.",
     "panel": "Панель",
+    "panelDesc": "Доступность API панели.",
     "nodes": "Ноды",
     "users": "Пользователи",
     "hosts": "Хосты",

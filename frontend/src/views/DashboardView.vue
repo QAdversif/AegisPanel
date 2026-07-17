@@ -1,14 +1,28 @@
 <!--
   SPDX-License-Identifier: AGPL-3.0-or-later
 
-  Phase 0 dashboard. Shows the panel reachability status and a
-  placeholder for the real metrics widgets (Phase 1+).
+  Phase 0 dashboard. Shows the panel reachability
+  status and placeholders for the real metrics
+  widgets (Phase 1+).
+
+  The placeholders use the `Skeleton` component to
+  signal "this is where data will appear" without
+  committing to a specific layout — PR-D will
+  replace them with live counts from the API.
 -->
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { useAuthStore } from '@/stores/auth'
+
+import Card from '@/components/ui/Card.vue'
+import CardHeader from '@/components/ui/CardHeader.vue'
+import CardTitle from '@/components/ui/CardTitle.vue'
+import CardDescription from '@/components/ui/CardDescription.vue'
+import CardContent from '@/components/ui/CardContent.vue'
+import Badge from '@/components/ui/Badge.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -16,115 +30,98 @@ const auth = useAuthStore()
 onMounted(() => {
   void auth.ping()
 })
+
+const statusLabel = computed(() => t(`dashboard.status.${auth.status}`))
+const statusVariant = computed(() => {
+  if (auth.status === 'ok') return 'success'
+  if (auth.status === 'down') return 'destructive'
+  return 'warning'
+})
 </script>
 
 <template>
   <section class="dashboard">
-    <h1>{{ t('dashboard.title') }}</h1>
-    <p class="dashboard__subtitle">{{ t('dashboard.subtitle') }}</p>
+    <header class="dashboard__header">
+      <div>
+        <h1 class="dashboard__title">
+          {{ t('dashboard.title') }}
+        </h1>
+        <p class="dashboard__subtitle">
+          {{ t('dashboard.subtitle') }}
+        </p>
+      </div>
+    </header>
 
     <div class="dashboard__grid">
-      <article class="card">
-        <h2>{{ t('dashboard.panel') }}</h2>
-        <p>
-          <span :class="['status-pill', `status-pill--${auth.status}`]">
-            {{ t(`dashboard.status.${auth.status}`) }}
-          </span>
-        </p>
-        <small v-if="auth.lastCheckedAt">
-          {{ t('dashboard.lastChecked') }}: {{ auth.lastCheckedAt.toLocaleTimeString() }}
-        </small>
-      </article>
+      <Card>
+        <CardHeader>
+          <CardTitle>{{ t('dashboard.panel') }}</CardTitle>
+          <CardDescription>{{ t('dashboard.panelDesc') }}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div class="dashboard__row">
+            <Badge :variant="statusVariant">
+              {{ statusLabel }}
+            </Badge>
+            <small
+              v-if="auth.lastCheckedAt"
+              class="dashboard__meta"
+            >
+              {{ t('dashboard.lastChecked') }}:
+              {{ auth.lastCheckedAt.toLocaleTimeString() }}
+            </small>
+          </div>
+        </CardContent>
+      </Card>
 
-      <article class="card card--placeholder">
-        <h2>{{ t('dashboard.nodes') }}</h2>
-        <p>0 / 0</p>
-        <small>{{ t('dashboard.placeholder') }}</small>
-      </article>
-
-      <article class="card card--placeholder">
-        <h2>{{ t('dashboard.users') }}</h2>
-        <p>0</p>
-        <small>{{ t('dashboard.placeholder') }}</small>
-      </article>
-
-      <article class="card card--placeholder">
-        <h2>{{ t('dashboard.hosts') }}</h2>
-        <p>0 / 0</p>
-        <small>{{ t('dashboard.placeholder') }}</small>
-      </article>
+      <Card
+        v-for="metric in ['nodes', 'users', 'hosts']"
+        :key="metric"
+      >
+        <CardHeader>
+          <CardTitle>{{ t(`dashboard.${metric}`) }}</CardTitle>
+          <CardDescription>{{ t('dashboard.placeholder') }}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Skeleton class="h-8 w-1/2" />
+        </CardContent>
+      </Card>
     </div>
   </section>
 </template>
 
-<style scoped lang="scss">
+<style scoped>
 .dashboard {
-  h1 {
-    margin: 0 0 0.25rem;
-    font-size: 1.5rem;
-  }
-
-  &__subtitle {
-    margin: 0 0 1.5rem;
-    color: #8a92a8;
-  }
-
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 1rem;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
 }
 
-.card {
-  padding: 1rem 1.25rem;
-  background: #111727;
-  border: 1px solid #1f2942;
-  border-radius: 8px;
-
-  h2 {
-    margin: 0 0 0.5rem;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #8a92a8;
-  }
-
-  p {
-    margin: 0 0 0.5rem;
-    font-size: 1.75rem;
-    font-weight: 600;
-  }
-
-  small {
-    color: #6f7891;
-  }
-
-  &--placeholder {
-    opacity: 0.6;
-  }
-}
-
-.status-pill {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 1rem;
+.dashboard__title {
+  margin: 0;
+  font-size: 1.5rem;
   font-weight: 600;
+}
 
-  &--ok {
-    background: #143d2b;
-    color: #4ade80;
-  }
+.dashboard__subtitle {
+  margin: 0.25rem 0 0;
+  color: hsl(var(--muted-foreground));
+}
 
-  &--down {
-    background: #3d1414;
-    color: #f87171;
-  }
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
 
-  &--unknown {
-    background: #2a2f3f;
-    color: #aab1c2;
-  }
+.dashboard__row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.dashboard__meta {
+  color: hsl(var(--muted-foreground));
 }
 </style>

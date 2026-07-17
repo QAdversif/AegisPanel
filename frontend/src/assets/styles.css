@@ -1,0 +1,148 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * TailwindCSS entrypoint for the Aegis admin UI.
+ *
+ * The three @tailwind directives tell Tailwind to
+ * inject (in this order):
+ *   1. base       preflight (CSS reset + element
+ *                 defaults) and the design tokens
+ *   2. components every component class registered
+ *                 in src/components/ui/* via @apply
+ *   3. utilities  every utility class used in templates
+ *
+ * The :root and .dark blocks define the design
+ * tokens (CSS custom properties) that the Tailwind
+ * theme.extend.colors block in tailwind.config.ts
+ * exposes. Theming is therefore a matter of changing
+ * the variables here - no Tailwind class changes are
+ * needed.
+ *
+ * Token values are HSL components (without the
+ * hsl(...) wrapper) so Tailwind can compose them
+ * with opacity modifiers (bg-primary/50,
+ * text-foreground/80, etc.). shadcn-vue uses the
+ * same convention.
+ *
+ * The --aegis-* variables at the bottom of the
+ * base layer preserve the legacy token names from
+ * the Phase 0 SCSS (the ones used by the auth store
+ * status pill and any pre-Phase-1 code). They will
+ * be removed when that code is fully migrated.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 215 20.2% 65.1%;
+
+    --radius: 0.5rem;
+
+    /* Legacy tokens. Same HSL components as the
+     * Tailwind tokens above, exposed under the old
+     * names so the Phase 0 code keeps compiling.
+     */
+    --aegis-bg: 0 0% 100%;
+    --aegis-surface: 0 0% 100%;
+    --aegis-surface-2: 210 40% 96.1%;
+    --aegis-border: 214.3 31.8% 91.4%;
+    --aegis-text: 222.2 47.4% 11.2%;
+    --aegis-text-muted: 215.4 16.3% 46.9%;
+    --aegis-text-subtle: 215 16% 47%;
+    --aegis-accent: 217 91% 60%;
+    --aegis-success: 142 76% 36%;
+    --aegis-danger: 0 84% 60%;
+  }
+
+  .dark {
+    --background: 222.2 47.4% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --popover: 222.2 47.4% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --card: 222.2 47.4% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 217.2 32.6% 26.5%;
+
+    /* Dark-mode legacy tokens. */
+    --aegis-bg: 222.2 47.4% 4.9%;
+    --aegis-surface: 222.2 47.4% 6.5%;
+    --aegis-surface-2: 222.2 32.6% 10%;
+    --aegis-border: 217.2 32.6% 17.5%;
+    --aegis-text: 210 40% 98%;
+    --aegis-text-muted: 215 20.2% 65.1%;
+    --aegis-text-subtle: 215 16% 47%;
+    --aegis-accent: 217 91% 60%;
+    --aegis-success: 142 76% 36%;
+    --aegis-danger: 0 84% 60%;
+  }
+
+  *,
+  *::before,
+  *::after {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+}
