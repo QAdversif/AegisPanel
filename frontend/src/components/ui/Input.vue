@@ -19,9 +19,9 @@ defineOptions({ inheritAttrs: false })
 
 const props = withDefaults(
   defineProps<{
-    modelValue?: string | number
+    modelValue?: string | number | boolean
     type?: string
-    class?: string
+    class?: string | boolean | undefined
   }>(),
   {
     modelValue: '',
