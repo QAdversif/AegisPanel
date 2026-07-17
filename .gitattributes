@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Aegis eol policy. Forces LF in the repo for
+# every text file. Windows-native scripts keep
+# CRLF because PowerShell + cmd.exe require it.
+#
+# Why this file exists
+# --------------------
+# Windows + core.autocrlf=true was producing
+# CRLF in the working tree for almost every file
+# (253 of 308 at the time of writing), even
+# though the canonical repo is LF. The local
+# `gofmt -l` run on Windows then flagged
+# every Go file as "incorrect" (the diff was
+# purely CRLF -> LF), so every `golangci-lint`
+# run looked broken even though CI on Linux was
+# green. Pinning the eol in the repo fixes that:
+# Git will hand every contributor LF, regardless
+# of their `core.autocrlf` setting.
+#
+# EOL matrix
+# ----------
+# *                         LF (default for text)
+# *.bat, *.cmd              CRLF (Windows batch)
+# *.ps1                    CRLF (PowerShell on Windows)
+# *.sh                     LF (already default, but explicit)
+# Binary files             left to Git's autodetect
+#
+# After this file lands, every contributor should
+# run `git add --renormalize . && git commit`
+# once so the working tree matches the repo's
+# canonical eol. The follow-up commit is empty
+# for users already on a clean LF tree and large
+# (~250 files, ~3k lines) for everyone else.
+
+*                 text=auto eol=lf
+*.bat             text eol=crlf
+*.cmd             text eol=crlf
+*.ps1             text eol=crlf
+*.sh              text eol=lf
+
+# Binary formats (no eol)
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.gif             binary
+*.ico             binary
+*.webp            binary
+*.woff            binary
+*.woff2           binary
+*.ttf             binary
+*.eot             binary
