@@ -166,19 +166,26 @@ func seedPoolMember(t *testing.T, pool *pgxpool.Pool, hostPoolID, hostID uuid.UU
 // seedHost inserts a single hosts row. We use the
 // raw SQL because the hosts package's Service is
 // not part of the test scope (the test only needs
-// the host row to exist for the FK).
+// the host row to exist for the FK to host_pool_members).
+//
+// The column list matches the v3 hosts schema
+// (migration 0004): `address` / `port` / `sni` /
+// `host` / `path` / `security` / `alpn` /
+// `transport_settings` / `http_headers` were moved
+// to the host_endpoints table; the hosts table
+// itself now has only the metadata columns
+// (remark, type, enabled, priority, status_filter,
+// country, city, tags, balancer).
 func seedHost(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	const q = `
 		INSERT INTO hosts (
 			id, remark, type, enabled, priority,
-			status_filter, address, sni, host,
-			transport_settings, http_headers
+			status_filter, country, city, tags
 		) VALUES (
 			$1, $2, 'direct', TRUE, 100,
-			'[]'::JSONB, '[]'::JSONB, '[]'::JSONB, '[]'::JSONB,
-			'{}'::JSONB, '{}'::JSONB
+			'[]'::JSONB, '', '', '[]'::JSONB
 		)`
 	if _, err := pool.Exec(context.Background(), q, id, "host-"+id.String()[:8]); err != nil {
 		t.Fatalf("seed host: %v", err)
@@ -319,7 +326,7 @@ func TestPgStore_UpdateSubToken_MovesPrimaryToPrev(t *testing.T) {
 		t.Fatalf("read before updated_at: %v", err)
 	}
 
-	expires := time.Now().Add(24 * time.Hour).UTC()
+	expires := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Microsecond)
 	if err := store.UpdateSubToken(context.Background(), id, newToken, &expires); err != nil {
 		t.Fatalf("UpdateSubToken: %v", err)
 	}
@@ -499,7 +506,10 @@ func TestPgStore_ListPoolsAll_EmptyDBReturnsEmptySlice(t *testing.T) {
 }
 
 // TestPgStore_ListPoolsAll_AllSeededPoolsReturned —
-// every seeded pool is returned, sorted by id.
+// every seeded pool is returned, sorted by id (UUID
+// string compare). The expected order is the
+// string-sorted order of the seeded ids, not the
+// insertion order.
 func TestPgStore_ListPoolsAll_AllSeededPoolsReturned(t *testing.T) {
 	store, pool := runPgStore(t)
 	ids := []uuid.UUID{
@@ -515,6 +525,9 @@ func TestPgStore_ListPoolsAll_AllSeededPoolsReturned(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len(pools) = %d, want 3", len(got))
 	}
+	// Sort the expected ids in the same order the
+	// store uses (UUID string compare ascending).
+	sortUUIDs(ids)
 	for i, p := range got {
 		if p.ID != ids[i] {
 			t.Errorf("got[%d].ID = %v, want %v (sorted by id)", i, p.ID, ids[i])

@@ -134,8 +134,6 @@ func (s *PgStore) SetActive(
 	// half-deactivated set of rows.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	now := time.Now().UTC()
-
 	// Deactivate every currently-active row. The grace
 	// window sets `expires_at`; without grace the old
 	// row stops being "active" the moment we commit.
@@ -144,15 +142,19 @@ func (s *PgStore) SetActive(
 	// distinct timestamps (NOW() returns the
 	// transaction start time, which would collapse
 	// them).
+	//
+	// The single placeholder is the grace window as
+	// an INTERVAL. A zero/negative duration sets
+	// `expires_at = NULL` (immediate cut-over).
 	const deactivate = `
 		UPDATE panel_path_config
 		SET is_active  = FALSE,
-		    expires_at = CASE WHEN $2 > INTERVAL '0 seconds'
-		                     THEN clock_timestamp() + $2::INTERVAL
+		    expires_at = CASE WHEN $1 > INTERVAL '0 seconds'
+		                     THEN clock_timestamp() + $1::INTERVAL
 		                     ELSE NULL
 		                END
 		WHERE is_active = TRUE`
-	if _, err := tx.Exec(ctx, deactivate, now, graceWindow); err != nil {
+	if _, err := tx.Exec(ctx, deactivate, graceWindow); err != nil {
 		return nil, fmt.Errorf("deactivate old sub_paths: %w", err)
 	}
 

@@ -397,11 +397,16 @@ func scanUserRow(rows pgx.Rows) (*User, error) {
 
 // poolSelect is the SELECT clause used by every
 // host_pools read. The order matches scanPoolRow.
+// The `hp` alias is mandatory because the
+// ListPoolsForUser helper joins against the
+// `plan_pool` table using `pp.pool_id = hp.id` — the
+// alias is the only stable name that lets both
+// statements (the FROM and the JOIN) agree.
 const poolSelect = `
 	SELECT
-		id, name, strategy, antiaffinity,
-		created_at, updated_at
-	FROM host_pools`
+		hp.id, hp.name, hp.strategy, hp.antiaffinity,
+		hp.created_at, hp.updated_at
+	FROM host_pools hp`
 
 // scanPoolRows reads the rows from a host_pools
 // query. An empty result returns an empty (non-nil)
