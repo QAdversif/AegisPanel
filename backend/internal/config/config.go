@@ -87,6 +87,24 @@ type Config struct {
 	// boot when this is "pg".
 	InboundsBackend string `env:"AEGIS_INBOUNDS_BACKEND" envDefault:"memory"`
 
+	// SubscriptionBackend selects the persistence layer for
+	// the subscription service. "memory" (default) keeps
+	// users / plans / host_pools in RAM — dev only.
+	// "pg" uses the PostgreSQL backend (PgStore) backed
+	// by the `users`, `plans`, `plan_pool`, `host_pools`,
+	// and `host_pool_members` tables (migration 0001)
+	// plus the `users.sub_token_prev` columns (migration
+	// 0011). The broader Phase 1 pg migration runs on
+	// boot when this is "pg".
+	SubscriptionBackend string `env:"AEGIS_SUBSCRIPTION_BACKEND" envDefault:"memory"`
+
+	// PanelcfgBackend selects the persistence layer for the
+	// panel-wide config service. "memory" (default) keeps
+	// the panel_path_config rows in RAM — dev only.
+	// "pg" uses the PostgreSQL backend (PgStore) backed
+	// by the `panel_path_config` table (migration 0010).
+	PanelcfgBackend string `env:"AEGIS_PANELCFG_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 }
