@@ -563,7 +563,11 @@ func TestPgStore_ListPoolMembers_EmptyPoolReturnsEmptySlice(t *testing.T) {
 }
 
 // TestPgStore_ListPoolMembers_AllMembersReturnedSorted —
-// every member is returned, sorted by host_id.
+// every member is returned, sorted by host_id. The
+// weights are checked against a `host_id -> weight`
+// map (rather than a fixed slice) because the
+// host_id sort is on random UUIDs and does NOT
+// preserve insertion order.
 func TestPgStore_ListPoolMembers_AllMembersReturnedSorted(t *testing.T) {
 	store, pool := runPgStore(t)
 	poolID := seedPool(t, pool, "members")
@@ -574,6 +578,16 @@ func TestPgStore_ListPoolMembers_AllMembersReturnedSorted(t *testing.T) {
 	seedPoolMember(t, pool, poolID, h2, 2)
 	seedPoolMember(t, pool, poolID, h3, 3)
 
+	// Expected: sorted by host_id; weights matched
+	// to host_ids, not to insertion order.
+	weightByHost := map[uuid.UUID]int{
+		h1: 1,
+		h2: 2,
+		h3: 3,
+	}
+	want := []uuid.UUID{h1, h2, h3}
+	sortUUIDs(want)
+
 	got, err := store.ListPoolMembers(context.Background(), poolID)
 	if err != nil {
 		t.Fatalf("ListPoolMembers: %v", err)
@@ -581,19 +595,13 @@ func TestPgStore_ListPoolMembers_AllMembersReturnedSorted(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len(members) = %d, want 3", len(got))
 	}
-	// Sorted by host_id ascending.
-	want := []uuid.UUID{h1, h2, h3}
-	sortUUIDs(want)
 	for i, m := range got {
 		if m.HostID != want[i] {
 			t.Errorf("got[%d].HostID = %v, want %v", i, m.HostID, want[i])
 		}
-	}
-	// Weights round-trip.
-	wantWeights := []int{1, 2, 3}
-	for i, m := range got {
-		if m.Weight != wantWeights[i] {
-			t.Errorf("got[%d].Weight = %d, want %d", i, m.Weight, wantWeights[i])
+		wantWeight := weightByHost[m.HostID]
+		if m.Weight != wantWeight {
+			t.Errorf("got[%d] (host %v).Weight = %d, want %d", i, m.HostID, m.Weight, wantWeight)
 		}
 	}
 }

@@ -162,10 +162,14 @@ func (s *PgStore) SetActive(
 	// UNIQUE; a collision surfaces as a 23505 SQLSTATE
 	// (the rotation endpoint validates the path before
 	// the call, so a real collision means a parallel
-	// call from another operator).
+	// call from another operator). The RETURNING
+	// clause is mandatory: without it `QueryRow` sees
+	// no rows and Scan returns `pgx.ErrNoRows`. The
+	// caller needs the new id to re-read the row.
 	const insert = `
 		INSERT INTO panel_path_config (id, sub_path, is_active, created_at, expires_at)
-		VALUES (gen_random_uuid(), $1, TRUE, clock_timestamp(), NULL)`
+		VALUES (gen_random_uuid(), $1, TRUE, clock_timestamp(), NULL)
+		RETURNING id`
 	var newID uuid.UUID
 	if err := tx.QueryRow(ctx, insert, newPath).Scan(&newID); err != nil {
 		var pgErr *pgconn.PgError
