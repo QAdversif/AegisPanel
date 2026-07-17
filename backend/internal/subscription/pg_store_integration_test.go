@@ -449,7 +449,9 @@ func TestPgStore_ListPoolsForUser_PlanNotLinkedReturnsEmpty(t *testing.T) {
 // TestPgStore_ListPoolsForUser_PlanLinkedReturnsPools —
 // the happy path: the user's plan is linked to one
 // or more host_pools via `plan_pool`, and the Store
-// returns them in id order.
+// returns them in id order. The `sort` is by UUID
+// string (the `scanPoolRows` defensive sort), so
+// the expected slice is sorted the same way.
 func TestPgStore_ListPoolsForUser_PlanLinkedReturnsPools(t *testing.T) {
 	store, pool := runPgStore(t)
 	planID := seedPlan(t, pool, "linked")
@@ -469,12 +471,16 @@ func TestPgStore_ListPoolsForUser_PlanLinkedReturnsPools(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(pools) = %d, want 2 (eu + us; ap not linked)", len(got))
 	}
-	// Sorted by id.
-	if got[0].ID != poolA {
-		t.Errorf("got[0].ID = %v, want %v", got[0].ID, poolA)
-	}
-	if got[1].ID != poolB {
-		t.Errorf("got[1].ID = %v, want %v", got[1].ID, poolB)
+	// Expected order: the two linked pools, sorted by
+	// UUID string ascending (the order the Store
+	// returns them). The insertion order (eu, us) is
+	// irrelevant — UUIDs are random.
+	want := []uuid.UUID{poolA, poolB}
+	sortUUIDs(want)
+	for i, p := range got {
+		if p.ID != want[i] {
+			t.Errorf("got[%d].ID = %v, want %v (sorted by id)", i, p.ID, want[i])
+		}
 	}
 	// The unlinked pool must not be in the result.
 	for _, p := range got {

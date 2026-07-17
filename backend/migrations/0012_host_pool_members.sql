@@ -1,20 +1,35 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- Aegis migration 0012 — restore `host_pool_members`.
+-- Aegis migration 0012 — restore `host_pool_members`
+-- + drop the `panel_path_config_id_check` CHECK
+-- constraint from migration 0010.
 --
--- Why:
+-- Why two changes in one migration:
 --
---   The `host_pool_members` table was originally created in
---   migration 0001 as the join between `host_pools` and
---   `hosts`. Migration 0004_hosts_v3.sql dropped it (along
---   with the v2 `hosts` table) when it introduced the new
---   `host_endpoints` table to model 1:N endpoints per host.
+--   Both are pre-existing schema bugs surfaced by the
+--   integration tests in PR #50 (SubscriptionPgStore +
+--   PanelcfgPgStore). Combining them keeps the
+--   migration list short — each test cycle is one
+--   `migrate up` round trip.
 --
---   The v3 split makes sense for the `hosts` package: each
---   host has many endpoints, each with its own (node,
---   inbound, port) pair. The `host_pool_members` table
---   served a different purpose — it grouped hosts into
---   pools, which is a separate concern owned by the
+-- ---------------------------------------------------------------------------
+-- 1. Restore `host_pool_members`
+-- ---------------------------------------------------------------------------
+--
+--   The `host_pool_members` table was originally
+--   created in migration 0001 as the join between
+--   `host_pools` and `hosts`. Migration
+--   0004_hosts_v3.sql dropped it (along with the v2
+--   `hosts` table) when it introduced the new
+--   `host_endpoints` table to model 1:N endpoints
+--   per host.
+--
+--   The v3 split makes sense for the `hosts` package:
+--   each host has many endpoints, each with its own
+--   (node, inbound, port) pair. The
+--   `host_pool_members` table served a different
+--   purpose — it grouped hosts into pools, which is
+--   a separate concern owned by the
 --   `subscription` package.
 --
 --   The Go model in `internal/subscription` still has
@@ -22,13 +37,13 @@
 --   `host_pool_members` (the MemoryStore uses it for
 --   pool→host lookups; the PgStore in PR #50 queries
 --   it for `ListPoolMembers` and `ListPoolsForUser`).
---   After migration 0004 the table is missing, so the
---   subscription PgStore integration tests fail.
+--   After migration 0004 the table is missing, so
+--   the subscription PgStore integration tests fail.
 --
---   This migration re-creates `host_pool_members` with
---   the v2 schema (from migration 0001, restored in
---   0004's Down body). The schema is intentionally
---   minimal:
+--   This migration re-creates `host_pool_members`
+--   with the v2 schema (from migration 0001,
+--   restored in 0004's Down body). The schema is
+--   intentionally minimal:
 --
 --     - pool_id, host_id (PRIMARY KEY)
 --     - weight (default 1, no CHECK — matches v2)
@@ -38,30 +53,54 @@
 --   pure join; the v2 contract is what the Go model
 --   expects.
 --
--- Why now (in PR #50):
+-- ---------------------------------------------------------------------------
+-- 2. Drop `panel_path_config_id_check`
+-- ---------------------------------------------------------------------------
 --
---   The subscription PgStore landed in PR #50 as
---   parity for the MemoryStore. The integration tests
---   for `ListPoolMembers`, `ListPoolsForUser`, and
---   `ListPoolsAll` exercise the actual SQL path; a
---   missing table surfaces as a `42P01 relation does
---   not exist` error. Rather than ship a PR with
---   skipped tests or untested code paths, the
---   migration lands in the same PR — the schema
---   restore is a 1-line fix, and the integration
---   tests now run end-to-end.
+--   Migration 0010 added
+--   `CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID)`
+--   to enforce "this table has a single row". The
+--   intent was correct (one global sub_path config)
+--   but the mechanism is wrong: the MemoryStore
+--   implements rotation as "insert a new row with
+--   a fresh UUID + deactivate the old one" (so
+--   rotation history is preserved). The CHECK
+--   constraint blocks every insert except the
+--   sentinel, breaking the rotation flow at the SQL
+--   level.
+--
+--   The right enforcement is the `is_active` flag
+--   combined with the `GetActive` predicate
+--   (`is_active = TRUE AND (expires_at IS NULL OR
+--   expires_at > now())`). The "at most one active
+--   row" invariant is held by the SetActive / Reset
+--   transactions in `PanelcfgPgStore` — they
+--   deactivate all currently-active rows before
+--   inserting the new one. The application is the
+--   right place for this invariant; the database
+--   CHECK is redundant and wrong.
+--
+--   We drop the CHECK with `IF EXISTS` so a re-apply
+--   is a no-op. The check constraint was added with
+--   the original CREATE TABLE in migration 0010; on
+--   databases that ran 0010 before this fix, the
+--   check is present and gets dropped. On databases
+--   that ran 0010 after this fix (a future fresh
+--   install) the IF EXISTS short-circuits.
+--
+--   Note: the sentinel-id convention is preserved.
+--   The `SentinelID` constant in the Go model
+--   (`00000000-0000-0000-0000-000000000001`) is
+--   still the only row that may carry
+--   `sub_path = ''` (the default), enforced by the
+--   Reset path's `ON CONFLICT (id) DO UPDATE` upsert
+--   onto the sentinel.
 
 BEGIN;
 
 -- +migrate Up
 
--- The `host_pool_members` table was created in 0001
--- and dropped in 0004. The Drop here is defensive:
--- if a future migration accidentally re-drops it,
--- the next apply restores the schema. On a clean
--- database the IF NOT EXISTS short-circuits the
--- CREATE; on a stale state the CREATE produces a
--- fresh table.
+-- (1) `host_pool_members` restore.
 CREATE TABLE IF NOT EXISTS host_pool_members (
     pool_id         UUID NOT NULL REFERENCES host_pools(id) ON DELETE CASCADE,
     host_id         UUID NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
@@ -69,7 +108,33 @@ CREATE TABLE IF NOT EXISTS host_pool_members (
     PRIMARY KEY (pool_id, host_id)
 );
 
+-- (2) Drop the wrong CHECK constraint from migration 0010.
+-- The constraint was added in 0010 with the original
+-- CREATE TABLE. ALTER TABLE ... DROP CONSTRAINT IF EXISTS
+-- is idempotent: a fresh install that does not have the
+-- constraint yet (because a future migration 0010 will
+-- have it pre-removed) is a no-op.
+ALTER TABLE panel_path_config
+    DROP CONSTRAINT IF EXISTS panel_path_config_id_check;
+
 -- +migrate Down
+
+-- (1) Re-create the CHECK constraint. The Down of a
+-- new migration must leave the schema in the same
+-- state as the Up of the previous migration. The
+-- pre-migration state had the CHECK in place, so
+-- the Down re-adds it. (This is a "Forward-fix"
+-- migration: the Down is not for restoring the
+-- pre-0012 schema, it is for rolling forward the
+-- migration itself to its starting state.)
+--
+-- The down does NOT drop `host_pool_members`:
+-- migration 0004's Down body is responsible for
+-- re-creating it (the v2 chain). Re-adding the CHECK
+-- here is a 1-line side-effect of the bug fix.
+ALTER TABLE panel_path_config
+    ADD CONSTRAINT panel_path_config_id_check
+    CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID);
 
 DROP TABLE IF EXISTS host_pool_members;
 
