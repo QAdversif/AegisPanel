@@ -1,9 +1,13 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN services
-> (sing-box, Xray, Hysteria 2). Multi-core, BYO Node, Cascade Topology,
-> MCP-driven, full-client compatibility (Hiddify, v2rayNG/N, Streisand,
-> Clash и др.), anti-censorship via Caddy + decoy sites + port masquerading.
+> (sing-box on MVP v1.0, Xray as second provider in v2.0+). Multi-core
+> ready via CoreProvider abstraction, BYO Node, Cascade Topology (Xray-only,
+> v2.2+), MCP-driven (v2.6+), full-client compatibility (Hiddify, v2rayNG/N,
+> Streisand, Clash и др.), anti-censorship via Caddy + decoy sites + port
+> masquerading. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §21 + v9 entry,
+> and [`ADR-0003`](./docs/adr/0003-mvp-singbox-vertical-slice.md) for the
+> MVP strategy.
 >
 > **Stack:** Go 1.22+ backend, Vue 3 + TypeScript frontend, Caddy, fail2ban,
 > PostgreSQL, ClickHouse, Redis, NATS. **License:** AGPL-3.0.
