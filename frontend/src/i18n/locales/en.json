@@ -5,6 +5,7 @@
     "inbounds": "Inbounds",
     "hosts": "Hosts",
     "users": "Users",
+    "subscription": "Subscription",
     "settings": "Settings",
     "openMenu": "Open menu",
     "soon": "Soon"
@@ -13,8 +14,31 @@
     "themeLight": "Switch to light theme",
     "themeDark": "Switch to dark theme",
     "panelStatus": "Panel status",
-    "profileSoon": "Profile (Phase 1+)",
-    "logoutSoon": "Sign out (Phase 1+)"
+    "profileSoon": "Profile (Phase 2+)",
+    "logoutSoon": "Sign out",
+    "logout": "Sign out",
+    "unknownUser": "Operator"
+  },
+  "common": {
+    "actions": "Actions",
+    "edit": "Edit",
+    "delete": "Delete",
+    "create": "Create",
+    "save": "Save",
+    "cancel": "Cancel",
+    "on": "On",
+    "off": "Off"
+  },
+  "login": {
+    "title": "Sign in to Aegis",
+    "subtitle": "Operator credentials for the control panel.",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign in",
+    "welcome": "Welcome back",
+    "failed": "Sign-in failed",
+    "usernameRequired": "Username is required",
+    "passwordRequired": "Password is required"
   },
   "dashboard": {
     "title": "Dashboard",
@@ -22,14 +46,112 @@
     "panel": "Panel",
     "panelDesc": "Reachability of the panel API.",
     "nodes": "Nodes",
-    "users": "Users",
+    "nodesDesc": "Online / total registered nodes.",
     "hosts": "Hosts",
+    "hostsDesc": "Endpoints bundled as products for end users.",
+    "inbounds": "Inbounds",
+    "inboundsDesc": "Per-node protocol listeners.",
+    "online": "online",
     "lastChecked": "Last checked",
-    "placeholder": "Wired up in Phase 1+",
+    "placeholder": "Wired up in Phase 2+",
+    "loadFailed": "Dashboard data failed to load",
     "status": {
       "ok": "Online",
       "down": "Offline",
       "unknown": "Checking…"
     }
+  },
+  "nodes": {
+    "title": "Nodes",
+    "subtitle": "BYO servers running the VPN core (sing-box).",
+    "create": "New node",
+    "createTitle": "Register a new node",
+    "createDescription": "Provide the SSH endpoint the panel will use to reach the node. The node's own registration is a separate step in the agent flow.",
+    "editTitle": "Edit node",
+    "editDescription": "Update the node's metadata. The agent will pick up the change on its next heartbeat.",
+    "name": "Name",
+    "region": "Region",
+    "address": "SSH address",
+    "addressHint": "host:port (e.g. node1.example.com:22)",
+    "capacityHint": "Capacity hint",
+    "capacityHintHint": "Free-form (e.g. \"1 Gbps\", \"1000 users\")",
+    "state": "State",
+    "states": {
+      "new": "New",
+      "online": "Online",
+      "draining": "Draining",
+      "offline": "Offline",
+      "disabled": "Disabled"
+    },
+    "search": "Search nodes…",
+    "empty": "No nodes yet.",
+    "created": "Node created",
+    "createFailed": "Could not create the node",
+    "updated": "Node updated",
+    "updateFailed": "Could not update the node",
+    "deleted": "Node deleted",
+    "deleteFailed": "Could not delete the node",
+    "loadFailed": "Could not load nodes",
+    "confirmDelete": "Delete node \"{name}\"?"
+  },
+  "inbounds": {
+    "title": "Inbounds",
+    "subtitle": "Per-node protocol listeners (VLESS / Hysteria 2 / Shadowsocks / Trojan).",
+    "name": "Name",
+    "protocol": "Protocol",
+    "listen": "Listen",
+    "listenPort": "Port",
+    "enabled": "Enabled",
+    "node": "Node",
+    "allNodes": "All nodes",
+    "search": "Search inbounds…",
+    "empty": "No inbounds yet.",
+    "loadFailed": "Could not load inbounds"
+  },
+  "hosts": {
+    "title": "Hosts",
+    "subtitle": "Bundles of endpoints visible to end users as products.",
+    "remark": "Remark",
+    "type": "Type",
+    "types": {
+      "direct": "Direct",
+      "balancer": "Balancer"
+    },
+    "enabled": "Enabled",
+    "priority": "Priority",
+    "endpoints": "Endpoints",
+    "search": "Search hosts…",
+    "empty": "No hosts yet.",
+    "deleted": "Host deleted",
+    "deleteFailed": "Could not delete the host",
+    "loadFailed": "Could not load hosts",
+    "confirmDelete": "Delete host \"{name}\"?"
+  },
+  "users": {
+    "title": "Users",
+    "subtitle": "End-user VPN accounts.",
+    "placeholderTitle": "User management lands in v0.2",
+    "placeholderDescription": "The full CRUD surface (list / create / edit / delete + per-user subscription URL) lands with the user module in v0.2. The route is wired so the nav link resolves."
+  },
+  "subscription": {
+    "title": "Subscription",
+    "subtitle": "Preview the rendered subscription payload for any sub_token.",
+    "previewTitle": "Preview a subscription",
+    "previewDescription": "Paste a sub_token to render the corresponding subscription URL. v0.1.0 ships preview only; per-user management lands in v0.2.",
+    "token": "Sub-token",
+    "tokenPlaceholder": "a3f1...64hex",
+    "format": "Format",
+    "preview": "Preview",
+    "rendering": "Rendering…",
+    "resultTitle": "Rendered payload ({format})",
+    "resultDescription": "The panel's response for the requested token + format.",
+    "qrAlt": "QR code for the subscription URL",
+    "fetchFailed": "Could not render the subscription"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Operator-level settings.",
+    "placeholderTitle": "Settings land in v0.2",
+    "placeholderDescription": "Panel sub-path rotation, audit log, and operator profile land in v0.2."
   }
 }

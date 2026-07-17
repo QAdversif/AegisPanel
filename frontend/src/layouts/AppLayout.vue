@@ -19,10 +19,10 @@
   links land with the auth module in Phase 1+.
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute } from 'vue-router'
-import { LayoutDashboard, Menu, Moon, Server, Settings, Shield, Sun, Users, Wifi } from 'lucide-vue-next'
+import { useRoute, useRouter } from 'vue-router'
+import { LayoutDashboard, Link2, LogOut, Menu, Moon, Server, Settings, Shield, Sun, Users, Wifi } from 'lucide-vue-next'
 
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -41,15 +41,16 @@ import Toaster from '@/components/ui/Toaster.vue'
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
 
 const mobileNavOpen = ref(false)
 
-// Nav entries. v0.1.0 has only Dashboard; the
-// rest are placeholders that will be wired in
-// PR-D. Keeping them visible (greyed) makes the
-// roadmap legible from the chrome alone.
+// Nav entries. v0.1.0 enables everything that has
+// a real route wired (Dashboard, Nodes, Inbounds,
+// Hosts, Subscription). Users + Settings are
+// still "Soon" placeholders (v0.2).
 interface NavItem {
   key: string
   to: string
@@ -60,9 +61,10 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { key: 'dashboard', to: '/', label: t('nav.dashboard'), icon: LayoutDashboard, enabled: true },
-  { key: 'nodes', to: '/nodes', label: t('nav.nodes'), icon: Server, enabled: false },
-  { key: 'inbounds', to: '/inbounds', label: t('nav.inbounds'), icon: Shield, enabled: false },
-  { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: false },
+  { key: 'nodes', to: '/nodes', label: t('nav.nodes'), icon: Server, enabled: true },
+  { key: 'inbounds', to: '/inbounds', label: t('nav.inbounds'), icon: Shield, enabled: true },
+  { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: true },
+  { key: 'subscription', to: '/subscription', label: t('nav.subscription'), icon: Link2, enabled: true },
   { key: 'users', to: '/users', label: t('nav.users'), icon: Users, enabled: false },
   { key: 'settings', to: '/settings', label: t('nav.settings'), icon: Settings, enabled: false },
 ]
@@ -72,6 +74,19 @@ const statusVariant = computed(() => {
   if (auth.status === 'ok') return 'success'
   if (auth.status === 'down') return 'destructive'
   return 'warning'
+})
+
+const username = computed(() => auth.me?.username ?? t('topbar.unknownUser'))
+
+function handleLogout(): void {
+  auth.logout()
+  void router.replace({ name: 'login' })
+}
+
+onMounted(() => {
+  // Best-effort identity refresh on first mount
+  // so the topbar can show the username.
+  void auth.refreshMe()
 })
 </script>
 
@@ -202,13 +217,14 @@ const statusVariant = computed(() => {
                 align="end"
                 :side-offset="6"
               >
-                <DropdownMenuLabel>{{ t('topbar.panelStatus') }}</DropdownMenuLabel>
+                <DropdownMenuLabel>{{ username }}</DropdownMenuLabel>
                 <DropdownMenuItem disabled>
                   {{ t('topbar.profileSoon') }}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>
-                  {{ t('topbar.logoutSoon') }}
+                <DropdownMenuItem @select="handleLogout">
+                  <LogOut class="h-4 w-4" />
+                  {{ t('topbar.logout') }}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

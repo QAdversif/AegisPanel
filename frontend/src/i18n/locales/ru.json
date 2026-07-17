@@ -5,6 +5,7 @@
     "inbounds": "Инбаунды",
     "hosts": "Хосты",
     "users": "Пользователи",
+    "subscription": "Подписка",
     "settings": "Настройки",
     "openMenu": "Открыть меню",
     "soon": "Скоро"
@@ -13,8 +14,31 @@
     "themeLight": "Переключить на светлую тему",
     "themeDark": "Переключить на тёмную тему",
     "panelStatus": "Статус панели",
-    "profileSoon": "Профиль (Phase 1+)",
-    "logoutSoon": "Выход (Phase 1+)"
+    "profileSoon": "Профиль (Phase 2+)",
+    "logoutSoon": "Выйти",
+    "logout": "Выйти",
+    "unknownUser": "Оператор"
+  },
+  "common": {
+    "actions": "Действия",
+    "edit": "Изменить",
+    "delete": "Удалить",
+    "create": "Создать",
+    "save": "Сохранить",
+    "cancel": "Отмена",
+    "on": "Вкл",
+    "off": "Выкл"
+  },
+  "login": {
+    "title": "Вход в Aegis",
+    "subtitle": "Учётные данные оператора панели.",
+    "username": "Имя пользователя",
+    "password": "Пароль",
+    "submit": "Войти",
+    "welcome": "С возвращением",
+    "failed": "Не удалось войти",
+    "usernameRequired": "Введите имя пользователя",
+    "passwordRequired": "Введите пароль"
   },
   "dashboard": {
     "title": "Сводка",
@@ -22,14 +46,112 @@
     "panel": "Панель",
     "panelDesc": "Доступность API панели.",
     "nodes": "Ноды",
-    "users": "Пользователи",
+    "nodesDesc": "Онлайн / всего зарегистрировано нод.",
     "hosts": "Хосты",
+    "hostsDesc": "Эндпоинты, упакованные в продукты для пользователей.",
+    "inbounds": "Инбаунды",
+    "inboundsDesc": "Протокольные слушатели на каждой ноде.",
+    "online": "онлайн",
     "lastChecked": "Последняя проверка",
-    "placeholder": "Подключится в Phase 1+",
+    "placeholder": "Подключится в Phase 2+",
+    "loadFailed": "Не удалось загрузить данные сводки",
     "status": {
       "ok": "Доступна",
       "down": "Недоступна",
       "unknown": "Проверка…"
     }
+  },
+  "nodes": {
+    "title": "Ноды",
+    "subtitle": "BYO-серверы, на которых работает ядро (sing-box).",
+    "create": "Новая нода",
+    "createTitle": "Зарегистрировать новую ноду",
+    "createDescription": "Укажите SSH-эндпоинт, через который панель будет ходить на ноду. Сама регистрация ноды — отдельный шаг в flow агента.",
+    "editTitle": "Изменить ноду",
+    "editDescription": "Обновите метаданные ноды. Агент подхватит изменение на следующем heartbeat.",
+    "name": "Имя",
+    "region": "Регион",
+    "address": "SSH-адрес",
+    "addressHint": "host:port (например, node1.example.com:22)",
+    "capacityHint": "Подсказка о ёмкости",
+    "capacityHintHint": "Свободный формат (например, \"1 Gbps\", \"1000 users\")",
+    "state": "Состояние",
+    "states": {
+      "new": "Новая",
+      "online": "Онлайн",
+      "draining": "Сливается",
+      "offline": "Офлайн",
+      "disabled": "Отключена"
+    },
+    "search": "Поиск нод…",
+    "empty": "Нод пока нет.",
+    "created": "Нода создана",
+    "createFailed": "Не удалось создать ноду",
+    "updated": "Нода обновлена",
+    "updateFailed": "Не удалось обновить ноду",
+    "deleted": "Нода удалена",
+    "deleteFailed": "Не удалось удалить ноду",
+    "loadFailed": "Не удалось загрузить ноды",
+    "confirmDelete": "Удалить ноду \"{name}\"?"
+  },
+  "inbounds": {
+    "title": "Инбаунды",
+    "subtitle": "Протокольные слушатели на каждой ноде (VLESS / Hysteria 2 / Shadowsocks / Trojan).",
+    "name": "Имя",
+    "protocol": "Протокол",
+    "listen": "Слушает",
+    "listenPort": "Порт",
+    "enabled": "Включён",
+    "node": "Нода",
+    "allNodes": "Все ноды",
+    "search": "Поиск инбаундов…",
+    "empty": "Инбаундов пока нет.",
+    "loadFailed": "Не удалось загрузить инбаунды"
+  },
+  "hosts": {
+    "title": "Хосты",
+    "subtitle": "Наборы эндпоинтов, видимые пользователям как продукты.",
+    "remark": "Метка",
+    "type": "Тип",
+    "types": {
+      "direct": "Прямой",
+      "balancer": "Балансер"
+    },
+    "enabled": "Включён",
+    "priority": "Приоритет",
+    "endpoints": "Эндпоинты",
+    "search": "Поиск хостов…",
+    "empty": "Хостов пока нет.",
+    "deleted": "Хост удалён",
+    "deleteFailed": "Не удалось удалить хост",
+    "loadFailed": "Не удалось загрузить хосты",
+    "confirmDelete": "Удалить хост \"{name}\"?"
+  },
+  "users": {
+    "title": "Пользователи",
+    "subtitle": "Аккаунты конечных пользователей VPN.",
+    "placeholderTitle": "Управление пользователями — в v0.2",
+    "placeholderDescription": "Полный CRUD (список / создание / правка / удаление + per-user URL подписки) появится с модулем users в v0.2. Маршрут уже подключён, чтобы ссылка в навигации работала."
+  },
+  "subscription": {
+    "title": "Подписка",
+    "subtitle": "Превью отрендеренной подписки для любого sub_token.",
+    "previewTitle": "Превью подписки",
+    "previewDescription": "Вставьте sub_token, чтобы увидеть соответствующий URL подписки. v0.1.0 — только превью; per-user управление появится в v0.2.",
+    "token": "Sub-token",
+    "tokenPlaceholder": "a3f1...64hex",
+    "format": "Формат",
+    "preview": "Превью",
+    "rendering": "Рендерим…",
+    "resultTitle": "Отрендеренный payload ({format})",
+    "resultDescription": "Ответ панели для запрошенного токена и формата.",
+    "qrAlt": "QR-код для URL подписки",
+    "fetchFailed": "Не удалось отрендерить подписку"
+  },
+  "settings": {
+    "title": "Настройки",
+    "subtitle": "Настройки уровня оператора.",
+    "placeholderTitle": "Настройки — в v0.2",
+    "placeholderDescription": "Ротация sub-path панели, audit log, профиль оператора — в v0.2."
   }
 }
