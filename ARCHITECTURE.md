@@ -1,9 +1,12 @@
 # Aegis — VPN Control Panel. Архитектурный план
 
-> **Aegis** — control panel для мульти-протокольного VPN-сервиса. Multi-core
-> (sing-box, Xray, Hysteria 2), BYO Node, Cascade Topology, MCP-управление,
+> **Aegis** — control panel для мульти-протокольного VPN-сервиса.
+> **Multi-core ready** через CoreProvider абстракцию: на **MVP v1.0 — sing-box 1.8+**
+> (единственный core, Batched Apply как primary-стратегия); **v2.0+** — Xray
+> добавляется как second provider (gRPC dynamic users, Cascade Topology).
+> BYO Node, Cascade Topology (Xray-only, v2.2.0+), MCP-управление (v2.6.0+),
 > full-client compatibility (Hiddify, v2rayNG/N, Streisand, Clash и др.),
-> anti-censorship через Caddy + decoy-сайты + маскировку портов.
+> anti-censorship через Caddy + decoy-сайты + маскировку портов. См. §7, §21, [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
 >
 > **Стек:** Backend Go 1.22+, Frontend Vue 3, Caddy, fail2ban, PostgreSQL,
 > ClickHouse, Redis, NATS.
@@ -29,14 +32,14 @@
 | Термин | Определение |
 | --- | --- |
 | **Panel** | Центральная панель управления (control plane): UI, API, БД, оркестратор. |
-| **Core** | Прокси-ядро, обрабатывающее пользовательский трафик. **Production — Xray** (gRPC API для динамических юзеров, `HandlerService.AddUser/RemoveUser` + `StatsService.QueryStats`). **Specialty — sing-box** (HY2/TUIC-inbound'ы, dev-окружение, нишевые сценарии). См. §7. |
+| **Core** | Прокси-ядро, обрабатывающее пользовательский трафик. **MVP v1.0 — sing-box 1.8+** (единственный core на релизе, HY2/TUIC-inbound'ы включены; динамические юзеры через Batched Apply, §7.5). **v2.0+ — Xray добавляется как second provider** через CoreProvider абстракцию (gRPC `HandlerService.AddUser/RemoveUser`, `leastLoad` balancer, Cascade Topology). См. §7, [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md). |
 | **CoreProvider** | Go-интерфейс в `internal/cores/`, абстрагирующий рендер конфига и валидацию от конкретного ядра. Каждое ядро (sing-box, Xray, …) — отдельная реализация. См. §7. |
 | **Batched Apply** | Стратегия применения изменений для ядер **без** API динамических юзеров (sing-box). Вместо `add user` per-request — накопление дельт за окно 15–30 сек и один `reload` ядра. Метрика `core_reload_total` + `core_reload_lost_sessions` для контроля стоимости. См. §7.5. |
 | **Node** | Сервер (VPS / dedicated / VM), на котором развёрнут Core + Agent. |
 | **Node Profile** | Конфигурация сетевого стека ноды: `reality-direct` (ядро на 443, Caddy опционально только для decoy) или `caddy-fronted` (Caddy терминирует TLS, проксирует на ядро на localhost). См. §19.4.4. Профиль — это **свойство ноды**, не Host'а; валидатор в CoreProvider запрещает несовместимые комбинации (например, `caddy-fronted + reality`). |
 | **Agent** | Лёгкий компонент на ноде: связь с Panel, применение конфигурации, сбор метрик, life-cycle Core. |
 | **Host** | Бандл endpoint'ов = бандл пар `(Node, Inbound)` + override-слой + display name + format variables. **Endpoint** — то, что в конечном счёте попадает в подписку как одна строка (один URL). Типы: `direct` (1 endpoint) / `balancer` (N endpoint'ов + стратегия) / `chain` (Phase 4+). |
-| **Cascade / Chain** | Цепочка нод, где клиент подключается к одной (Portal), а трафик идёт через другую (Bridge), возможно через Relay. Режимы: `reverse` (bridge за NAT) и `forward` (все публичные). **Phase 4+** (Xray-only, требует `reverse` outbound). |
+| **Cascade / Chain** | Цепочка нод, где клиент подключается к одной (Portal), а трафик идёт через другую (Bridge), возможно через Relay. Режимы: `reverse` (bridge за NAT) и `forward` (все публичные). **v2.1+** (Xray-only, требует `reverse` outbound — sing-box этого не умеет, потому в v1.0 недоступно). См. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md). |
 | **MCP** | Model Context Protocol — стандарт для AI-ассистентов (Claude, Cursor) нативно вызывать tools панели (CRUD users/nodes, manage cascades, get stats). **Read-only по умолчанию** + dry-run для write-операций. См. §17. |
 | **Inbound** | Слушатель на ноде (VLESS/REality, Shadowsocks, Hysteria, и т. п.) со своими параметрами. |
 | **Subscription** | Набор Host'ов, выдаваемый пользователю в виде URL-ленты (Sing-box / Clash / V2Ray / base64). |
@@ -53,14 +56,40 @@
 
 ## 1. Видение и границы MVP
 
+**MVP v1.0 ships на sing-box 1.8+ как единственном core.** Динамические
+юзеры (создание / удаление / лимиты) применяются через **Batched Apply**
+(§7.5) — накопление дельт за окно 15-30 сек и один reload ядра. Это
+компромисс, позволяющий уложить MVP в 4-6 недель solo-разработки без
+потери extensibility: CoreProvider абстракция позволяет добавить Xray
+как second provider в v2.0+ без миграции БД и переписывания фронта.
+См. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
+
 **Что входит в MVP**
 
-- Multi-core архитектура с провайдером sing-box (с возможностью добавления других ядер без breaking changes).
-- Регистрация, авто-развёртывание и мониторинг нод.
-- Host manager: ручное и автоматическое формирование пулов хостов, выдача в подписки.
-- Конфигурация протоколов на уровне панели (inbound-шаблоны, JSON-валидация, dry-run).
-- Стабильный API для внешнего ЛК (CRUD пользователей, планы, трафик, вебхуки оплаты).
-- Admin-UI на **Vue 3 + TypeScript + Vite** для базовых операций.
+- **Один core provider: sing-box 1.8+.** Поддержка VLESS+REALITY, VLESS+XTLS-Vision, Shadowsocks, Trojan, HY2, TUIC. Multi-port inbound, XHTTP `download_settings`. Динамические юзеры через Batched Apply (20s window по умолчанию).
+- **CoreProvider абстракция** (уже реализована в `internal/cores/`) — готова к добавлению Xray / Hysteria-2 standalone в v2.0+ без breaking changes.
+- **Agent** (Go, musl) — связь панель↔нода через HTTP+bearer (Phase 1), миграция на mTLS+gRPC в v1.1.0.
+- **BYO Node flow** — оператор присылает IP+SSH-ключ, панель сама ставит agent через `internal/bootstrap/`.
+- **Host manager** — ручное и автоматическое формирование пулов хостов, выдача в подписки.
+- **Конфигурация протоколов** на уровне панели (inbound-шаблоны, JSON-валидация, dry-run, diff).
+- **Подписки:** `singbox` JSON, `clash-meta` YAML, `base64` (v2rayNG/Shadowrocket), HTML sub-page с QR. Format variables (`{USERNAME}`, `{DATA_LEFT}`, `{STATUS_EMOJI}`), wildcard random salt, multi-port, XHTTP download, sub-token rotation, panel_path rotation.
+- **API для внешнего ЛК** — CRUD пользователей, планы, трафик, вебхуки оплаты (HMAC-SHA256, anti-replay).
+- **Admin-UI** на Vue 3 + TypeScript + Vite для базовых операций. UI-стек:
+  **shadcn-vue + Reka UI + TailwindCSS**, `@tanstack/vue-table` (DataTable),
+  `vee-validate` + `zod` (формы), `lucide-vue-next` (иконки). Подробности —
+  [ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md).
+- **Минимальный мониторинг** — healthchecks panel/agent, JSON-логи, метрики `core_reload_total`, `core_reload_lost_sessions_total`, `core_user_apply_latency_seconds` в Prometheus (полные дашборды — v1.5.0).
+
+**Что НЕ входит в MVP (явно out of scope)**
+
+- **Xray core** — v2.0+ (см. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md)). Сейчас не импортируется в `cmd/aegis/main.go`.
+- **Cascade Topology / Chain** — v2.1+ (Xray-only, требует `reverse` outbound).
+- **MCP-сервер** — v2.1+.
+- **Subscription Profile, SRH Inspector, Response Rules** — v2.1+.
+- **Платёжный шлюз** — только webhook-контракт, реализация в Cabinet.
+- **Сложная BI-аналитика** — собираем сырые события, визуализация в Grafana.
+- **Полноценная RBAC для админов** — один уровень «super-admin» на MVP, scopes уже есть в коде.
+- **Мобильное приложение** — только **совместимость с популярными VPN-клиентами** (Hiddify, v2rayNG/N, Streisand, NekoBox, Shadowrocket, Clash Verge/Meta, Karing, V2Box, sing-box CLI) через стандартные URL подписки с auto-детектом формата по User-Agent (см. раздел 10.4).
 
 **Что НЕ входит в MVP (явно out of scope)**
 
@@ -253,12 +282,13 @@ type CoreProvider interface {
 
 - Реализации лежат в `internal/cores/<name>/` и подключаются через реестр.
 - `CoreConfig` — внутренний нормализованный DTO, общий для всех ядер: inbounds, outbounds, routing, dns, experimental. Маппинг в нативный JSON — за провайдером.
-- **Зачем это сразу:** переход с sing-box на Xray (или добавление Hysteria-2) — это добавление адаптера, без миграции БД и без переписывания фронта.
-- **Production core: Xray.** См. §7.5 для обоснования (у Xray есть
-  `HandlerService.AddUser/RemoveUser` через gRPC — динамические юзеры без
-  рестарта ядра). sing-box остаётся как **specialty core** для HY2/TUIC-inbound'ов
-  (которые Xray не умеет) и для dev-окружения. В будущем — Hysteria 2 standalone,
-  TUIC, WireGuard — каждое ядро своей реализацией CoreProvider.
+- **Зачем это сразу:** добавление второго core (Xray, Hysteria-2 standalone, …) — это новый пакет в `internal/cores/<name>/` + регистрация в `init()`, без миграции БД и без переписывания фронта. На MVP v1.0 зарегистрирован только `sing-box` (прод) + `noop` (dev).
+- **MVP core: sing-box 1.8+.** Единственный core, поставляемый в v1.0.
+  Поддержка VLESS+REALITY, VLESS+XTLS-Vision, Shadowsocks, Trojan, HY2, TUIC.
+  Динамические юзеры применяются через **Batched Apply** (§7.5) — это
+  primary-стратегия энфорсмента юзеров, не fallback. Xray добавляется как
+  second provider в v2.0+ через ту же CoreProvider абстракцию. См.
+  [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md) для обоснования.
 - Capability-флаги позволяют UI скрывать то, что ядро не умеет. **Расширенный набор**:
 
 | Флаг | Описание |
@@ -277,18 +307,29 @@ type CoreProvider interface {
 
 Флаги публикуются в API через `GET /api/cores` для UI и клиентских интеграций.
 
-### 7.5 Batched Apply (для ядер без `DYNAMIC_USERS`)
+### 7.5 Batched Apply (primary-стратегия MVP)
 
+На MVP v1.0 единственный core — sing-box 1.8+ (см. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md)).
 У sing-box **нет** API для добавления/удаления юзеров без рестарта ядра —
 feature-request в их репозитории открыт с 2023 года. Их встроенный «v2ray API»
 предоставляет только `StatsService` (чтение трафика) и `Clash API` (мониторинг),
 но **не** `HandlerService`. Каждое добавление/удаление юзера = полный
-`reload` ядра = обрыв активных сессий.
+`reload` ядра = обрыв активных TCP-сессий (HY2/QUIC переживают reload
+через connection migration, VLESS/REALITY — reconnect за <1 сек).
 
-**Решение: Batched Apply.** Вместо per-request `add user` панель накапливает
-дельты (add/remove/set-limit) за окно **15–30 секунд** (настраивается) и
-применяет их одним батчем через `Apply()` (full reload). Окно компромиссное:
-короткое — частые reload'ы, длинное — высокий лаг энфорсмента лимитов.
+**Решение: Batched Apply — primary-стратегия энфорсмента юзеров**, не
+fallback. Вместо per-request `add user` панель накапливает дельты
+(add/remove/set-limit) за окно **15–30 секунд** (настраивается через
+`AEGIS_BATCHED_APPLY_WINDOW`, дефолт 20s) и применяет их одним батчем
+через `Apply()` (full reload). Окно компромиссное: короткое — частые
+reload'ы, длинное — высокий лаг энфорсмента лимитов.
+
+Когда в v2.0+ появится Xray CoreProvider (с `DYNAMIC_USERS` через
+gRPC `HandlerService.AddUser/RemoveUser`), Batched Apply останется
+**только для sing-box-нод**; Xray-ноды получат instant-apply.
+BatchedApplier спроектирован как generic обёртка, которая
+auto-включается, если `Capabilities().Has(DYNAMIC_USERS) == false`,
+поэтому переключение ядра на ноде не требует изменения панели.
 
 ```go
 // BatchedApplier (псевдокод, в internal/cores/batched.go)
@@ -2051,12 +2092,14 @@ ignoreip = 1.2.3.4 5.6.7.8
 
 ---
 
-## 21. Unified Roadmap
+## 21. Unified Roadmap (v9, вариант A — sing-box only MVP)
 
-> **Единственный источник правды** по Phase-плану. Раньше roadmap был
-> размазан по §10.3.7 (cascade-only), §21 (общий план) и
-> `ARCHITECTURE_ADDENDUM_1.md` (всё остальное) — три источника расходились.
-> В v8 addendum заархивирован, §10.3.7 ссылается сюда, §21 — канон.
+> **Единственный источник правды** по roadmap. Версия v9 (2026-07-17) — полный
+> пересмотр после отмены ADR-0001: sing-box — единственный core на MVP v1.0,
+> Xray перенесён в v2.0+. Roadmap ниже — это **версия для solo-разработки**
+> с реалистичными оценками. Каждый релиз — вертикально законченный слайс
+> (можно катить в прод как `mvp-0.x` / `mvp-1.0`), архитектура не ломается
+> между релизами. См. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
 >
 > **Состояние:** отметки `[done]` / `[wip]` / `[ ]` — это **факт** по коду в
 > репо. Отметки `[backlog]` — будущее. Если хочешь узнать текущее состояние
@@ -2071,98 +2114,113 @@ ignoreip = 1.2.3.4 5.6.7.8
 - Модель данных из §16, scopes-based API-ключи.
 - Native migrator с `schema_migrations` tracking + self-idempotent миграции.
 - Frontend: Vue 3 + TS + Vite, Phase 0 placeholder.
+- `CoreProvider` интерфейс + capability-флаги + registry (`internal/cores/`).
+- `sing-box` CoreProvider (рендер конфига из CoreConfig DTO, diff, validate, ParseStatus/ParseStats — stubs).
+- `noop` CoreProvider для dev-режима.
+- Subscription package (`internal/subscription/`): MemoryStore, Service, renderers (base64 / sing-box / clash-meta / HTML+QR), format variables, wildcard salt, multi-port, XHTTP download, sub-token rotation, panel_path_config rotation.
+- Host manager v3 (override-слой, `type=direct|balancer`, status_filter, priority).
+- Inbounds с multi-port (`listen_port` + `listen_ports []int`).
+- Hosts/Inbounds/Nodes/Auth `*PgStore` (миграция MemoryStore→PgStore по `AEGIS_*_BACKEND=pg`).
+- Node Profile separation ([ADR-0002](./docs/adr/0002-node-profile-separation.md)) — `reality-direct` vs `caddy-fronted`, валидатор запрещает `caddy-fronted + reality` и `wildcard_sni + reality`.
 
-### Phase 1 — Один core, manual subscription pipeline  `[wip]`
+### Phase 1 — MVP-0.x (vertical slices до soft launch)  `[wip]`
 
-**Цель:** работающая подписка end-to-end (без реального Core/Agent, render в синтетический конфиг).
+**Цель:** к концу Phase 1 — soft launch MVP-1.0 на одной реальной ноде (sing-box), end-to-end: панель → render → agent → apply → sing-box reload → пользователь подключается по подписке.
 
-- `[done]` `CoreProvider` интерфейс + capability-флаги (`internal/cores/`).
-- `[done]` `sing-box` CoreProvider (рендер конфига из CoreConfig DTO, in-memory `Apply`).
-- `[done]` `noop` CoreProvider для dev-режима (auto-registered when `cfg.Env != "production"`).
-- `[done]` Subscription package (`internal/subscription/`):
-  - MemoryStore с `users`/`plans`/`pools`/`pool_members`.
-  - `Service` с `ResolveHostsForUser`, format auto-detect (UA, Accept, `?target=`).
-  - Renderers: `base64`, `sing-box JSON`, `clash-meta YAML`, `HTML sub-page`.
-  - Format variables (`{USERNAME}`, `{DATA_USAGE}`, `{DAYS_LEFT}`, `{STATUS_EMOJI}`, …) + wildcard salt.
-  - Multi-port inbound + random port selection per fetch.
-  - XHTTP `download_settings` (per-host download host id, operator-controlled).
-  - QR-код в HTML sub-page (per-client URLs).
-  - Sub-token rotation с 24h grace + URL prefix rotation (`panel_path_config`).
-- `[done]` Host manager v3 (override-слой, `type=direct|balancer`, status_filter, priority).
-- `[done]` Pool strategies (`all` для Phase 0; `round_robin`/`least_loaded`/`geo_aware` — Phase 4).
-- `[done]` Inbounds с multi-port (`listen_port` + `listen_ports []int`).
-- `[done]` Hosts/Inbounds/Nodes/Auth `*PgStore` (миграция MemoryStore→PgStore по `AEGIS_*_BACKEND=pg`).
-- `[ ]` **Batched apply** для sing-box (см. §7.5) — `core_reload_total`, окно 15-30 сек, динамические юзеры через reload.
-- `[ ]` **Xray CoreProvider** (см. §7) — **production core**. gRPC `HandlerService.AddUser/RemoveUser` + `StatsService.QueryStats`. Это второй провайдер в `internal/cores/xray/`, не замена sing-box.
-- `[ ]` Node Profile separation (см. §19.4.4) — `reality-direct` vs `caddy-fronted`, валидатор запрещает `caddy-fronted + reality` и `wildcard_sni + reality`.
-- `[ ]` Wildcard-SNI restriction для REALITY (см. §10.1.2) — `ErrWildcardSniIncompatibleWithReality`.
+#### MVP-0.1 — Render-only (`v0.1.0-mvp-render`)  `[ ]`
+**Что:** Phase 1 финализируется. Apply остаётся stub, но **всё что до Apply** работает через API + UI.
+- [ ] Subscription `PgStore` (миграция с MemoryStore; в `internal/subscription/store_pg.go`).
+- [ ] Panelcfg `PgStore` (`internal/panelcfg/store_pg.go`).
+- [ ] Frontend: страницы `NodesView`, `InboundsView`, `HostsView`, `UsersView`, `SubscriptionView` (CRUD + таблицы) + общий layout (sidebar + topbar).
+- [ ] Frontend: UI-стек **shadcn-vue + Reka UI + TailwindCSS** ([ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md)). DataTable через `@tanstack/vue-table`. Формы через `vee-validate` + `zod`. Иконки `lucide-vue-next`.
+- [ ] OpenAPI → `openapi-typescript` codegen, типизированный API-client в `frontend/src/api/`.
+- [ ] CI: e2e test (docker-compose с panel + Postgres + sing-box в noop-режиме, smoke API + UI).
+- **DoD:** через UI завести ноду + inbound + host + юзера; открыть `/api/v1/sub/<token>`; увидеть валидный sing-box JSON. `Apply` падает с `ErrApplyNotImplemented` — **OK для 0.1**.
 
-### Phase 1.5 — Agent + mTLS канал  `[ ]`
+#### MVP-0.2 — Agent (`v0.2.0-mvp-agent`)  `[ ]`
+**Что:** появляется Agent. Канал Panel↔Agent — **HTTP + bearer token** (mTLS — в v1.1.0). Apply работает end-to-end.
+- [ ] `cmd/aegis-agent/main.go` (Go, single static binary, musl) — отдельный бинарь в `backend/cmd/aegis-agent/`.
+- [ ] Agent API: `POST /v1/apply` (получает JSON sing-box конфиг → пишет в `/etc/sing-box/config.json` → `systemctl reload sing-box`), `GET /v1/status`, `GET /v1/stats`, `GET /healthz`.
+- [ ] `cores/singbox.Apply` → HTTP-клиент к агенту (заменяет stub).
+- [ ] `cores/singbox.ParseStatus` — парсер `sing-box version` / `systemctl is-active`.
+- [ ] `cores/singbox.ParseStats` — парсер JSON из sing-box clash-api (если включён) или лог-парсинг.
+- [ ] Ansible-роль `install_agent` (`deploy/ansible/roles/install_agent/`) доводится до рабочего состояния (копирует бинарь, ставит systemd unit, открывает bearer-secret handshake).
+- [ ] Smoke test: docker-compose с panel + sing-box + agent; панель делает Apply → sing-box reload → healthz OK.
+- **DoD:** панель через UI делает Apply на тестовую ноду, sing-box перезагружает конфиг, статус виден в UI.
 
-**Цель:** панель реально управляет нодой через Agent.
+#### MVP-0.3 — BYO Node flow (`v0.3.0-mvp-byo-node`)  `[ ]`
+**Что:** оператор присылает IP+SSH-ключ, панель сама ставит agent.
+- [ ] `internal/bootstrap/` (сейчас пустая папка): SSH-клиент, ssh-keyscan, host-key verify.
+- [ ] `internal/bootstrap/`: копирование agent-бинаря на ноду через SFTP, установка systemd unit, обмен bearer-secret.
+- [ ] `internal/bootstrap/`: state machine `provisioning → active → degraded → suspended → decommissioned` (см. §8.3).
+- [ ] UI: модалка «Add node» (IP, port, username, SSH-key paste) → SSH-probe → install agent → ping → статус `active`.
+- **DoD:** ввод IP+SSH-ключа в UI → нода автоматически появляется в `active` → Apply работает.
 
-- Agent (Go, single static binary, musl): `apply_config`, `get_status`, `get_metrics`, `dynamic_user_add`/`remove`/`list` (через gRPC Xray или batched apply sing-box), `get_user_traffic`, `restart_core`.
-- **mTLS поверх WSS** на отдельном hostname `panel-direct.example.com` (grey cloud, **не** через Cloudflare — см. §15.1).
-- **Короткоживущие сертификаты** (3-7 дней) с авто-продлением агентом. Отзыв = прекращение продления.
-- Локальный кеш последнего успешного конфига на ноде (на случай потери связи).
-- Per-node генерируемые ed25519 SSH-ключи (через Ansible), whitelist-sudoer `panel-agent` (systemctl, docker, логи).
-- Подписанные бинари агента (cosign) — self-upgrade проверяет подпись.
+#### MVP-0.4 — Batched Apply (`v0.4.0-mvp-batched`)  `[ ]`
+**Что:** закрываем §7.5 — generic BatchedApplier для core без `DYNAMIC_USERS`.
+- [ ] `internal/cores/batched.go` — generic обёртка, auto-включается если `Capabilities().Has(DYNAMIC_USERS) == false`.
+- [ ] Очередь дельт в Redis (или in-memory для MVP, если Redis недоступен).
+- [ ] Метрики: `core_reload_total{kind,node}`, `core_reload_pending_users{node}`, `core_reload_lost_sessions_total{node}`, `core_user_apply_latency_seconds`.
+- [ ] Тесты: создание/удаление 100 юзеров подряд → ≤ 3 reload ядра за 30 сек.
+- **DoD:** burst нагрузка → метрики заполняются, reload rate < 1/15s, нет потери юзеров.
 
-### Phase 2 — Пользователи, ЛК API, Agent completion  `[ ]`
+#### **MVP-1.0 — Soft launch** (`v1.0.0-mvp-soft-launch`)  `[ ]`
+**Что:** production-readiness чеклист, публичный тег.
+- [ ] Healthchecks на panel + agent (для systemd + docker-compose).
+- [ ] Логи в JSON в stdout (panel + agent), структурированные.
+- [ ] Backup-скрипт для Postgres (расширение `tools/scripts/backup.sh`) + cron + retention.
+- [ ] `tools/scripts/branch-start.sh`, `release.sh` — dry-run прогон.
+- [ ] `docs/user-guide/admin/quickstart.md` с реальными командами от 0 до работающей ноды.
+- [ ] `.env.example` обновить, заполнить дефолты.
+- [ ] Restore-drill: поднять panel на чистой VM из backup → работает.
+- **DoD:**
+  - 1 панель + 1 нода + 10 юзеров работают 24 часа без сбоев.
+  - Создание юзера → ≤ 30 сек → подписка обновилась.
+  - Удаление юзера → ≤ 30 сек → sing-box убрал юзера.
+  - Restart агента → auto-reconnect, Apply replay из последней панельной ревизии.
+  - Backup → restore на чистую машину → работает.
 
-**Цель:** полноценная панель управления юзерами + стабильный Agent.
+### Phase 2 — Post-MVP hardening (`v1.1.0` — `v1.8.0`)  `[backlog]`
 
-- CRUD пользователей, планы, трафик, лимиты, device-limit (HWID best-effort, см. §12).
-- Cabinet API: все эндпоинты, идемпотентность (Redis dedup), scopes.
-- **Webhook с HMAC-SHA256** подписью + anti-replay (§13.4). Retry: exponential backoff (1s → 1h, max 24h), max attempts 6, DLQ.
-- **Disk alerts с hysteresis** (§13.5).
-- Локальный энфорсмент лимитов на агенте (agent пушит per-user квоту → отсекает локально, не дожидаясь цикла сверки).
-- Transactional outbox + Redis Streams (для webhook'ов; NATS **не используем** пока не упрёмся — Redis Streams покрывает).
-- UI на Vue 3: пользователи, ноды, хосты, подписки, dashboard (Naive UI / PrimeVue kit, OpenAPI → openapi-typescript).
+**Цель:** итеративное наращивание функциональности без ломки архитектуры. Каждый релиз — отдельный minor-релиз с обратной совместимостью.
 
-### Phase 2.5 — BYO Node flow + Ansible  `[ ]`
+| Версия | Что добавляем | Срок (solo) | Файлы / модули |
+| --- | --- | --- | --- |
+| `v1.1.0` | **mTLS + gRPC** канал Panel↔Agent (вместо HTTP bearer) | 2 нед | `internal/bootstrap/`, `cmd/aegis-agent/` |
+| `v1.2.0` | Реальный **users CRUD + plans + traffic limits** + Cabinet API | 2-3 нед | `internal/users/`, `internal/plans/`, `internal/stats/` (сейчас пустые) |
+| `v1.3.0` | **Webhooks** (HMAC-SHA256 + anti-replay + exponential backoff + DLQ) | 1-2 нед | `internal/webhooks/` (пустой) |
+| `v1.4.0` | **Outgoing notifications** (Telegram через n8n / generic webhook) | 1 нед | `internal/notifications/` (пустой) |
+| `v1.5.0` | **Observability**: Prometheus exporter, Grafana dashboard, базовые алерты (node down, reload rate, disk usage) | 1 нед | `internal/obs/` (расширение) |
+| `v1.6.0` | **Multi-port + inbound profiles UI** (визуальный редактор inbound'ов) | 1 нед | `frontend/src/views/InboundsView.vue` |
+| `v1.7.0` | **Decoy sites v1** (оператор настраивает Caddy руками, панель — референсный конфиг + smoke test) | 1 нед | `internal/decoy/` (пустой) |
+| `v1.8.0` | **Per-user traffic** → ClickHouse (если выбран) или остаётся в Postgres | 2 нед | `internal/stats/` (расширение) |
 
-**Цель:** оператор присылает IP + SSH-ключ, панель сама разворачивает ноду.
+### Phase 3 — Second core + Advanced features (`v2.0.0`+)  `[backlog]`
 
-- BYO Node flow (§9): регистрация существующей ноды в панели, SSH-probe, Ansible-based install.
-- Ansible-роли: `bootstrap_node`, `install_agent`, `upgrade_agent`, `smoke_test`. Идемпотентные, в репо.
-- Provisioning → active → degraded → suspended → decommissioned (§8.3).
-- Drain mode (для zero-downtime снятия ноды).
-- Нагрузочные тесты API + chaos-тест Agent (kill Core, kill сеть, kill panel).
-- Restore-runbook для БД (RPO ≤ 1h, RTO ≤ 30m). Квартальные учения.
+**Цель:** добавить Xray как second provider, раскрыть CoreProvider абстракцию. После v2.0.0 архитектура возвращается в режим, описанный в бывшем Phase 4 roadmap v8, но **после** стабилизации MVP-1.x.
 
-### Phase 3 — Production hardening  `[ ]`
+| Версия | Что добавляем | Срок (solo) | Файлы / модули |
+| --- | --- | --- | --- |
+| **`v2.0.0`** | **Xray CoreProvider** как second provider (gRPC `HandlerService.AddUser/RemoveUser` + `StatsService.QueryStats`). UI: выбор ядра при создании ноды (`node.core_kind: "sing-box" \| "xray"`). Миграция: новая колонка в `nodes` (default `sing-box`). | 3-4 нед | `internal/cores/xray/` (новый пакет), `internal/cores/registry.go` (auto-register), `frontend/src/views/NodesView.vue` (UI селектор) |
+| `v2.1.0` | **Balancer-тип Host'а**: Xray `leastLoad` или sing-box `urltest` на edge-ноде. | 1-2 нед | `internal/hosts/` (расширение), `internal/cores/singbox/render.go` (urltest) |
+| `v2.2.0` | **Cascade Topology** (Xray-only, `reverse` mode) — Portal → Bridge. Auto-generated x25519 + shortIds. Требует Xray (sing-box не умеет `reverse` outbound). | 4-6 нед | `internal/cascades/` (пустой), `internal/cores/xray/` (chain rendering) |
+| `v2.3.0` | **Network Map UI** для cascade + Subscription Profile (External Squads-стиль). | 2-3 нед | `frontend/src/views/CascadeView.vue`, `internal/subscriptions/` (пустой) |
+| `v2.4.0` | **SRH Inspector** — журнал запросов подписки + детект утечек (20+ IP за час → алерт). | 1-2 нед | `internal/subscription/` (расширение) |
+| `v2.5.0` | **Response Rules** — движок условных правил (UA/ASN/статус → формат/announce/block). Метрика `unknown_user_agent_total`. | 2 нед | `internal/subscription/` (новый модуль rule-engine) |
+| `v2.6.0` | **MCP-сервер** (read-only default + write-scope с dry-run) — пользователи, ноды, хосты, get_stats. | 2 нед | `internal/mcp/` (пустой) |
+| `v2.7.0` | **ACL на ноде** (Celerity-стиль) — routing-rules с `reject` / `direct` / `geoip`. | 1-2 нед | `internal/cores/xray/render.go`, `internal/cores/singbox/render.go` |
+| `v2.8.0` | **Decoy Sites** (полная реализация) — управляемая загрузка HTML, XSS-санитизация, zip-slip protection, Playwright preview. | 3 нед | `internal/decoy/` (полный) |
 
-- mTLS, SOPS / Vault, rate-limit, audit (с hash-chain для tamper-evidence), бэкапы.
-- OpenTelemetry traces (опционально, feature-flag), Prometheus metrics, Grafana dashboards.
-- **Per-user данные в ClickHouse** (миграция с Postgres partitions). Prometheus остаётся на агрегатах (§14.1).
-- Telegram-нотификации через generic outgoing webhooks (n8n/бот оператора), **не** нативный Telegram-модуль.
-- Happ-совместимость (полная спека: announce, HWID-заголовки) — отметка `best-effort, зависит от клиента` где применимо.
-- NTP-check в Probe (clock skew ломает REALITY/TLS).
-
-### Phase 4 — Advanced features  `[ ]`
-
-- **Xray CoreProvider** (если не сделано в Phase 1) — production dynamic users.
-- **Balancer-тип Host'а**: Xray `leastLoad` или sing-box `urltest` на edge-ноде (клиентский failover в подписках покрывает 90% — server-side balancer только при 100+ нодах).
-- **Cascade Topology (Xray-only, `reverse` mode)** — базовый `chain` тип с auto-generated x25519 + shortIds. Требует Xray (sing-box не умеет `reverse` outbound).
-- **Network Map UI** для cascade.
-- **Subscription Profile** (External Squads-стиль) — ортогональная сущность поверх Pool: шаблоны по типам клиентов, announce, support link, Response Rules.
-- **SRH Inspector** — журнал запросов подписки + детект утечек (20+ IP за час → алерт).
-- **Response Rules** — движок условных правил (UA/ASN/статус → формат/announce/block). Метрика `unknown_user_agent_total`.
-- **MCP-сервер** (read-only default + write-scope с dry-run) — пользователи, ноды, хосты, get_stats.
-- **ACL на ноде** (Celerity-стиль) — routing-rules с `reject`/`direct`/`geoip` на уровне Core.
-- **Decoy Sites** (полная реализация §26) — управляемая загрузка HTML, XSS-санитизация, zip-slip protection, Playwright preview. На MVP — оператор настраивает Caddy вручную.
-
-### Phase 5+ — Масштабирование (по запросу)  `[backlog]`
+### Phase 4+ — Backlog (по запросу)  `[backlog]`
 
 - Cascade `forward` mode + relay role + multi-hop.
 - WireGuard inbound (PasarGuard-стиль).
 - Hysteria 2 standalone / TUIC standalone core providers.
 - Канбан-фичи: канареечные деплои, blue/green, geo-aware выдача на полную.
-- Marzban-importer (миграция с Marzban) → позже remnawave-importer. Главный канал adoption.
-- **OCI agent+core image** (Remnawave-стиль) — agent + core в одном Docker-образе, версионируются вместе. Обновление = `docker compose pull` на ноде.
-- Cloudflare mTLS (если Enterprise-тариф) — сейчас не планируем, дизайн §15.1 даёт baseline.
-- Infra billing (учёт стоимости нод, Remnawave-стиль).
+- Marzban-importer → позже remnawave-importer (главный канал adoption).
+- **OCI agent+core image** (Remnawave-стиль) — agent + core в одном Docker-образе, версионируются вместе.
+- Cloudflare mTLS (если Enterprise-тариф).
+- Infra billing (учёт стоимости нод).
 - Multi-region panel с CRDT или read-replica.
 
 ---
@@ -2172,33 +2230,35 @@ ignoreip = 1.2.3.4 5.6.7.8
 - **Multi-tenant.** Одна панель = один оператор (см. §27).
 - **API провайдеров** (Hetzner/AWS/...) — намеренно не поддерживаем, BYO Node.
 - **Платёжный шлюз внутри панели** — только webhook-контракт для внешнего Cabinet.
-- **NATS как event bus** (Phase 0–3) — Redis Streams покрывает сценарии. NATS вернётся при шардировании.
+- **NATS как event bus** (Phase 0–2) — Redis Streams покрывает сценарии. NATS вернётся при шардировании.
 - **Telegram OAuth для админа** — JWT + Argon2id достаточно.
 - **«Save anyway»** для невалидных конфигов (Remnawave анти-паттерн) — у нас строгая валидация.
-- **Tempo / OpenTelemetry tracing** на MVP — метрики + логи с первого дня, трейсинг по feature-flag.
-- **Decoy-marketplace, динамический decoy по UA/geo** — Phase 5+ backlog, не MVP.
+- **Tempo / OpenTelemetry tracing** на MVP — метрики + логи с первого дня, трейсинг по feature-flag (v2.0+).
+- **Decoy-marketplace, динамический decoy по UA/geo** — v2.8.0+ backlog, не MVP.
 - **Custom decoy upload через UI на MVP** — оператор настраивает Caddy вручную, секретные пути через `panel_path_config` дают базовую маскировку.
+- **Xray на v1.0** — намеренно не делаем (см. ADR-0003). Появится в v2.0.0 как second provider, не как замена sing-box.
 
 ---
 
-### Этапы и тайминг (честная оценка)
+### Этапы и тайминг (честная оценка для solo-разработки)
 
-Оценки в неделях — для **команды из 2-3 человек**. Для соло-разработчика —
-**×2 к каждой фазе**.
-
-| Фаза | Команда 2-3 | Solo | Текущий статус |
+| Фаза | Срок (solo) | Текущий статус | Артефакт релиза |
 | --- | --- | --- | --- |
-| Phase 0 | 1-2 | 2-3 | ✅ done |
-| Phase 1 (subscription pipeline) | 3-4 | 6-8 | 🟡 ~70% done (PR #44-47) |
-| Phase 1.5 (Agent) | 2-3 | 4-6 | ⚪ не начат |
-| Phase 2 (Users + ЛК) | 3-4 | 6-8 | ⚪ не начат |
-| Phase 2.5 (BYO Ansible) | 1-2 | 3-4 | ⚪ не начат |
-| Phase 3 (Hardening) | 2-3 | 4-6 | ⚪ не начат |
-| Phase 4 (Advanced) | 4-6 | 8-12 | ⚪ не начат |
-| Phase 5+ | по запросу | по запросу | backlog |
+| Phase 0 (фундамент) | 2-3 нед | ✅ done (PR #1–#43) | `v0.0.1-skeleton` |
+| MVP-0.1 (Render-only) | 1 нед | ⚪ не начат | `v0.1.0-mvp-render` |
+| MVP-0.2 (Agent) | 1.5-2 нед | ⚪ не начат | `v0.2.0-mvp-agent` |
+| MVP-0.3 (BYO Node) | 1 нед | ⚪ не начат | `v0.3.0-mvp-byo-node` |
+| MVP-0.4 (Batched Apply) | 0.5-1 нед | ⚪ не начат | `v0.4.0-mvp-batched` |
+| **MVP-1.0 (Soft launch)** | 0.5 нед | ⚪ не начат | `v1.0.0-mvp-soft-launch` |
+| **Итого до MVP-1.0** | **5-7 нед** | — | публичный релиз |
+| Phase 2 (v1.1.0 — v1.8.0) | ~10-12 нед | ⚪ не начат | minor-релизы каждые 1-2 нед |
+| Phase 3 (v2.0.0 — v2.8.0) | ~18-22 нед | ⚪ не начат | Xray + Cascade + MCP + ACL + Decoy |
+| Phase 4+ (backlog) | по запросу | ⚪ backlog | по demand |
 
-**Итого до MVP (Phase 0–3):** 12-18 недель командой, 25-35 недель соло.
-**До feature-parity с Remnawave (включая Phase 4):** ×2 сверху.
+**Сравнение с v8 roadmap (отменённый):**
+- v8 обещал MVP за 12-18 недель командой / **25-35 недель solo**.
+- v9 реалистично: **5-7 недель solo** до MVP-1.0, за счёт сужения скоупа (один core вместо двух параллельных).
+- v2.0+ (Xray + Cascade + MCP) — та же сложность, что v8 Phase 4, но перенесена **после** стабилизации MVP, а не параллельно.
 
 ---
 
@@ -2266,8 +2326,47 @@ ignoreip = 1.2.3.4 5.6.7.8
 
 ## 25. История изменений
 
+- **v9.1 (2026-07-17, UI-стек зафиксирован)** — добавлен
+  [ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md): UI на MVP v1.0 —
+  **shadcn-vue + Reka UI + TailwindCSS**, `@tanstack/vue-table` (DataTable),
+  `vee-validate` + `zod` (формы), `lucide-vue-next` (иконки).
+  Альтернативы рассмотрены и отклонены: NaiveUI (vendor lock-in), PrimeVue
+  (bundle size), Element Plus (устаревший дизайн), Vuetify (opinionated).
+  - §1 — UI-стек перечислен явно.
+  - §21 Phase 1 / MVP-0.1 — «NaiveUI / PrimeVue (выбор — в PR)» заменено на
+    конкретный список зависимостей + ссылка на ADR-0004.
+
+- **v9 (2026-07-17, вариант A — sing-box only MVP)** — отмена ADR-0001,
+  полный пересмотр roadmap под solo-разработку:
+  - **[ADR-0001 отменён](./docs/adr/0001-xray-as-production-core.md)**, новое
+    решение зафиксировано в [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
+    Xray перенесён из Phase 1 в **v2.0.0** (после стабилизации MVP) как
+    second provider через CoreProvider абстракцию. sing-box — единственный
+    core на MVP v1.0.
+  - **§0 (Термины) обновлён.** Core = `sing-box на MVP / Xray в v2.0+`.
+    Cascade = `v2.2.0+ (Xray-only)`. Внешние ссылки на «Phase 4+» заменены
+    на конкретные версии v2.x.
+  - **§1 (Границы MVP) переписан.** Явно перечислено что входит в MVP
+    (sing-box, agent, BYO Node, host manager, подписки, базовый мониторинг)
+    и что **намеренно out of scope** на v1.0 (Xray, Cascade, MCP,
+    Subscription Profile, SRH Inspector, Response Rules).
+  - **§7 (Core Provider) обновлён.** Убрана формулировка «Production core:
+    Xray». Добавлена «MVP core: sing-box 1.8+».
+  - **§7.5 (Batched Apply) переименован.** Из «для ядер без DYNAMIC_USERS»
+    в «primary-стратегия MVP». Окно 20s по умолчанию, настраивается через
+    `AEGIS_BATCHED_APPLY_WINDOW`. Добавлен абзац: когда Xray появится в
+    v2.0+, Batched Apply останется только для sing-box-нод; Xray-ноды
+    получат instant-apply.
+  - **§21 (Roadmap) полностью переписан.** Phase 0 (done) + Phase 1 (MVP-0.1
+    … MVP-1.0) + Phase 2 (v1.1.0 — v1.8.0) + Phase 3 (v2.0.0 — v2.8.0) +
+    Phase 4+ (backlog). Каждый релиз — вертикально законченный слайс с
+    Definition of Done. **Таймлайн до MVP-1.0: 5-7 недель solo**
+    (vs 25-35 недель в v8 — сокращение за счёт сужения скоупа).
+  - **Шапка документа** обновлена: версия `v9 (2026-07-17, вариант A)`,
+    ссылка на [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
+
 - **v8 (2026-07-17, review-driven fixes)** — патчи по результатам критического
-  разбора (внешняя AI-ревью + сравнение с Remnawave):
+  разбора (внешнее AI-ревью + сравнение с Remnawave):
   - **Roadmap унифицирован.** Раньше Phase-план был размазан по трём местам:
     §10.3.7 (cascade-only), §21 (общий roadmap), и `ARCHITECTURE_ADDENDUM_1.md`
     (всё остальное). Это создавало три источника правды, которые расходились.

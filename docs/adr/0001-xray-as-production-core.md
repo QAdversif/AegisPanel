@@ -1,8 +1,21 @@
 # ADR-0001: Xray как production core, sing-box как specialty
 
-**Status:** Accepted (2026-07-17)
+> **⚠️ SUPERSEDED BY [ADR-0003](./0003-mvp-singbox-vertical-slice.md) (2026-07-17, в тот же день).**
+>
+> Решение об Xray-as-production принималось в контексте «команда 2-3 человека,
+> 12-18 недель до MVP». При переходе к solo-разработке и архитектурному
+> ревью на следующий день стало ясно, что скоуп Xray CoreProvider не лезет
+> в MVP-таймлайн и не оправдан. ADR-0003 отменяет это решение:
+> sing-box — **единственный core на MVP (v1.0)**, Xray — **Phase 2+ / v2.0+**
+> как second provider через CoreProvider абстракцию.
+>
+> Этот файл **сохраняется в `docs/adr/`** как часть истории решений. Не
+> редактировать; для актуального решения см. ADR-0003.
+
+**Status:** Superseded by ADR-0003 (2026-07-17)
+**Originally Accepted:** 2026-07-17
 **Supersedes:** v7 «sing-box MVP, Xray — future option» (ARCHITECTURE.md §7)
-**Drives:** ARCHITECTURE.md §7, §7.5, §21 Phase 1 / 4
+**Drives:** ARCHITECTURE.md §7, §7.5, §21 Phase 1 / 4 (см. ADR-0003 для v9)
 
 ## Context
 
