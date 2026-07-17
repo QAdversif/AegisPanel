@@ -6,33 +6,41 @@
   sortable headers, global search, pagination,
   empty state.
 
+  All user-facing strings go through vue-i18n
+  (the `dataTable.*` namespace). The component
+  also accepts override props for column /
+  caller-specific copy (searchPlaceholder,
+  caption, emptyLabel).
+
   Usage:
 
     <DataTable
       :columns="columns"
       :data="nodes"
       :loading="isLoading"
-      search-placeholder="Search nodes…"
-    >
-      <template #cell-name="{ row }">
-        <RouterLink :to="`/nodes/${row.id}`">{{ row.name }}</RouterLink>
-      </template>
-    </DataTable>
+      search-key="nodes.search"
+    />
 
-  The `columns` prop is the standard
-  @tanstack/vue-table `ColumnDef<T, unknown>[]` —
-  cell renderers are passed as `cell` or via a
-  `meta.render` shim, whichever the consumer
-  prefers.
-
-  v0.1.0 scope: sort + filter + paginate. Column
-  visibility, column resizing, row selection, and
-  faceted filters land in later PRs as the CRUD
-  pages need them.
+  `search-key` is a vue-i18n key; the placeholder
+  reads from `t(searchKey)`. `empty-key` does
+  the same for the empty-state label. Passing
+  the raw string (searchPlaceholder / emptyLabel)
+  is also supported for non-i18n callers but the
+  eslint rule flags it.
 -->
 <script setup lang="ts" generic="T extends Record<string, unknown>">
 import { computed, ref } from 'vue'
-import { useVueTable, getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationRowModel, FlexRender, type ColumnDef, type SortingState } from '@tanstack/vue-table'
+import { useI18n } from 'vue-i18n'
+import {
+  FlexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useVueTable,
+  type ColumnDef,
+  type SortingState,
+} from '@tanstack/vue-table'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search } from 'lucide-vue-next'
 
 import Button from './ui/Button.vue'
@@ -47,22 +55,36 @@ import TableCell from './ui/TableCell.vue'
 import TableCaption from './ui/TableCaption.vue'
 import { cn } from '@/lib/utils'
 
+const { t } = useI18n()
+
 const props = withDefaults(
   defineProps<{
     columns: ColumnDef<T, unknown>[]
     data: T[]
     loading?: boolean
     caption?: string
+    /** Override the search placeholder. Prefer
+     * `search-key` so the string is translated.
+     */
     searchPlaceholder?: string
+    /** vue-i18n key for the search placeholder. */
+    searchKey?: string
     initialPageSize?: number
+    /** Override the empty-state label. Prefer
+     * `empty-key`.
+     */
     emptyLabel?: string
+    /** vue-i18n key for the empty-state label. */
+    emptyKey?: string
   }>(),
   {
     loading: false,
     caption: '',
-    searchPlaceholder: 'Search…',
+    searchPlaceholder: '',
+    searchKey: '',
     initialPageSize: 20,
-    emptyLabel: 'No rows.',
+    emptyLabel: '',
+    emptyKey: '',
   },
 )
 
@@ -107,6 +129,18 @@ const table = useVueTable<T>({
 })
 
 const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.length > 0)
+
+const computedSearchPlaceholder = computed(() => {
+  if (props.searchPlaceholder) return props.searchPlaceholder
+  if (props.searchKey) return t(props.searchKey)
+  return t('dataTable.search')
+})
+
+const computedEmptyLabel = computed(() => {
+  if (props.emptyLabel) return props.emptyLabel
+  if (props.emptyKey) return t(props.emptyKey)
+  return t('dataTable.empty')
+})
 </script>
 
 <template>
@@ -120,10 +154,12 @@ const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.len
         v-if="hasSearch"
         class="relative max-w-xs flex-1"
       >
-        <Search class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Search
+          class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+        />
         <Input
           v-model="globalFilter"
-          :placeholder="props.searchPlaceholder"
+          :placeholder="computedSearchPlaceholder"
           class="pl-8"
         />
       </div>
@@ -207,7 +243,7 @@ const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.len
                 :colspan="props.columns.length"
                 class="h-24 text-center text-muted-foreground"
               >
-                {{ props.emptyLabel }}
+                {{ computedEmptyLabel }}
               </TableCell>
             </TableRow>
           </template>
@@ -221,14 +257,19 @@ const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.len
       class="flex flex-wrap items-center justify-between gap-2 px-2 text-sm text-muted-foreground"
     >
       <div>
-        {{ table.getFilteredRowModel().rows.length }} of {{ props.data.length }} row(s) selected.
+        {{
+          t('dataTable.selectedOf', {
+            filtered: table.getFilteredRowModel().rows.length,
+            total: props.data.length,
+          })
+        }}
       </div>
       <div class="flex items-center gap-2">
         <Button
           variant="outline"
           size="icon"
           :disabled="!table.getCanPreviousPage()"
-          aria-label="First page"
+          :aria-label="t('dataTable.firstPage')"
           @click="table.setPageIndex(0)"
         >
           <ChevronsLeft class="h-4 w-4" />
@@ -237,19 +278,24 @@ const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.len
           variant="outline"
           size="icon"
           :disabled="!table.getCanPreviousPage()"
-          aria-label="Previous page"
+          :aria-label="t('dataTable.previousPage')"
           @click="table.previousPage()"
         >
           <ChevronLeft class="h-4 w-4" />
         </Button>
         <span>
-          Page {{ table.getState().pagination.pageIndex + 1 }} of {{ table.getPageCount() }}
+          {{
+            t('dataTable.pageOf', {
+              page: table.getState().pagination.pageIndex + 1,
+              total: table.getPageCount(),
+            })
+          }}
         </span>
         <Button
           variant="outline"
           size="icon"
           :disabled="!table.getCanNextPage()"
-          aria-label="Next page"
+          :aria-label="t('dataTable.nextPage')"
           @click="table.nextPage()"
         >
           <ChevronRight class="h-4 w-4" />
@@ -258,7 +304,7 @@ const hasSearch = computed(() => props.data.length > 0 || globalFilter.value.len
           variant="outline"
           size="icon"
           :disabled="!table.getCanNextPage()"
-          aria-label="Last page"
+          :aria-label="t('dataTable.lastPage')"
           @click="table.setPageIndex(table.getPageCount() - 1)"
         >
           <ChevronsRight class="h-4 w-4" />
