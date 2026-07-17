@@ -114,8 +114,7 @@ CREATE TABLE IF NOT EXISTS host_pool_members (
 -- is idempotent: a fresh install that does not have the
 -- constraint yet (because a future migration 0010 will
 -- have it pre-removed) is a no-op.
-ALTER TABLE panel_path_config
-    DROP CONSTRAINT IF EXISTS panel_path_config_id_check;
+ALTER TABLE panel_path_config DROP CONSTRAINT IF EXISTS panel_path_config_id_check;
 
 -- +migrate Down
 
@@ -132,9 +131,7 @@ ALTER TABLE panel_path_config
 -- migration 0004's Down body is responsible for
 -- re-creating it (the v2 chain). Re-adding the CHECK
 -- here is a 1-line side-effect of the bug fix.
-ALTER TABLE panel_path_config
-    ADD CONSTRAINT panel_path_config_id_check
-    CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID);
+ALTER TABLE panel_path_config ADD CONSTRAINT panel_path_config_id_check CHECK (id = '00000000-0000-0000-0000-000000000001'::UUID);
 
 DROP TABLE IF EXISTS host_pool_members;
 
