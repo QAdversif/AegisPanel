@@ -135,7 +135,9 @@ func main() {
 		needsPg = cfg.AuthBackend == "pg" ||
 			cfg.HostsBackend == "pg" ||
 			cfg.NodesBackend == "pg" ||
-			cfg.InboundsBackend == "pg"
+			cfg.InboundsBackend == "pg" ||
+			cfg.SubscriptionBackend == "pg" ||
+			cfg.PanelcfgBackend == "pg"
 	)
 	if needsPg {
 		p, err := db.Open(ctx, cfg.PostgresDSN)
@@ -238,16 +240,40 @@ func main() {
 	//    pointer dance does not nil-deref) and the
 	//    subsequent PRs can call into it without a
 	//    main.go change.
-	subscriptionStore := subscription.NewMemoryStore()
+	//
+	//    Backend is selected at startup:
+	//      AEGIS_SUBSCRIPTION_BACKEND=memory (default) uses
+	//      the Phase 0 MemoryStore; =pg uses PgStore backed
+	//      by the shared pool and the `users`, `plans`,
+	//      `plan_pool`, `host_pools`, `host_pool_members`
+	//      tables (migrations 0001 + 0011).
+	var subscriptionStore subscription.Store
+	switch cfg.SubscriptionBackend {
+	case "pg":
+		subscriptionStore = subscription.NewPgStore(pool)
+		log.Info().Msg("subscription: using pgx-backed store (PgStore)")
+	default:
+		subscriptionStore = subscription.NewMemoryStore()
+		log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
+	}
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
-	log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 
 	// Panel-wide config (the rotating URL prefix).
-	// MemoryStore only for Phase 0; PgStore lands
-	// in a later PR.
-	panelCfgStore := panelcfg.NewMemoryStore()
+	// Backend is selected at startup:
+	//   AEGIS_PANELCFG_BACKEND=memory (default) uses the
+	//   Phase 0 MemoryStore; =pg uses PgStore backed by
+	//   the shared pool and the `panel_path_config`
+	//   table (migration 0010).
+	var panelCfgStore panelcfg.Store
+	switch cfg.PanelcfgBackend {
+	case "pg":
+		panelCfgStore = panelcfg.NewPgStore(pool)
+		log.Info().Msg("panelcfg: using pgx-backed store (PgStore)")
+	default:
+		panelCfgStore = panelcfg.NewMemoryStore()
+		log.Info().Msg("panelcfg: using in-memory store (MemoryStore, dev only)")
+	}
 	panelCfgSvc := panelcfg.NewService(panelCfgStore)
-	log.Info().Msg("panelcfg: using in-memory store (MemoryStore, dev only)")
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
