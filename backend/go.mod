@@ -13,7 +13,7 @@ require (
 	// Configuration from env / files
 	github.com/caarlos0/env/v11 v11.2.2
 	// HTTP router
-	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/joho/godotenv v1.5.1
 
 	// Metrics
@@ -32,6 +32,7 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/redis/go-redis/v9 v9.21.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/swaggo/swag v1.16.6
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -64,7 +65,6 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.20.1 // indirect
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
