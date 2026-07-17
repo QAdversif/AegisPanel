@@ -228,8 +228,8 @@ const canWrite = computed(() => auth.me?.scopes.includes('write') ?? auth.me?.sc
       :columns="columns"
       :data="nodes"
       :loading="loading"
-      :search-placeholder="t('nodes.search')"
-      :empty-label="t('nodes.empty')"
+      :search-key="'nodes.search'"
+      :empty-key="'nodes.empty'"
     />
 
     <!-- Create dialog -->

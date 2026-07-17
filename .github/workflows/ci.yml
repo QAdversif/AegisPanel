@@ -142,6 +142,16 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      - name: Check raw text in templates
+        # Fails the build if a .vue template contains
+        # user-facing text that should have been wrapped
+        # in vue-i18n's t('key'). The script lives at
+        # tools/scripts/check-raw-text.mjs and is the
+        # "ESLint rule" for i18n that we couldn't
+        # reasonably express in eslint-plugin-vue-i18n
+        # (the published plugin is pinned to eslint 5/6).
+        run: node tools/scripts/check-raw-text.mjs
+
       # vitest is wired but the Phase 0 frontend has no test files
       # yet, so `pnpm run test` would error with "no test files
       # found". Skip until the first component test lands; we

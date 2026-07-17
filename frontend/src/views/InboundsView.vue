@@ -139,8 +139,8 @@ const nodeOptions = computed(() => [
       :columns="columns"
       :data="inbounds"
       :loading="loading"
-      :search-placeholder="t('inbounds.search')"
-      :empty-label="t('inbounds.empty')"
+      :search-key="'inbounds.search'"
+      :empty-key="'inbounds.empty'"
     />
   </section>
 </template>

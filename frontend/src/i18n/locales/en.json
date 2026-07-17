@@ -19,6 +19,16 @@
     "logout": "Sign out",
     "unknownUser": "Operator"
   },
+  "dataTable": {
+    "search": "Search…",
+    "empty": "No rows.",
+    "selectedOf": "{filtered} of {total} row(s) selected.",
+    "pageOf": "Page {page} of {total}",
+    "firstPage": "First page",
+    "previousPage": "Previous page",
+    "nextPage": "Next page",
+    "lastPage": "Last page"
+  },
   "common": {
     "actions": "Actions",
     "edit": "Edit",

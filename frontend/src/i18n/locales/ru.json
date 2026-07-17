@@ -19,6 +19,16 @@
     "logout": "Выйти",
     "unknownUser": "Оператор"
   },
+  "dataTable": {
+    "search": "Поиск…",
+    "empty": "Нет строк.",
+    "selectedOf": "{filtered} из {total} выбрано.",
+    "pageOf": "Страница {page} из {total}",
+    "firstPage": "Первая страница",
+    "previousPage": "Предыдущая страница",
+    "nextPage": "Следующая страница",
+    "lastPage": "Последняя страница"
+  },
   "common": {
     "actions": "Действия",
     "edit": "Изменить",
