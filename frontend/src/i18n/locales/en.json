@@ -161,7 +161,30 @@
   "settings": {
     "title": "Settings",
     "subtitle": "Operator-level settings.",
-    "placeholderTitle": "Settings land in v0.2",
-    "placeholderDescription": "Panel sub-path rotation, audit log, and operator profile land in v0.2."
+    "activePath": "Active sub_path",
+    "activePathDescription": "The current URL prefix for the subscription endpoint. Empty = the documented /api/v1/sub/<token> path; non-empty = a rotated secret prefix that hides the subscription endpoint from URL-scraping bots.",
+    "defaultPath": "(default — no rotation yet)",
+    "default": "default",
+    "lastRotated": "Last rotated",
+    "rotateTitle": "Rotate the sub_path",
+    "rotateDescription": "Pick a fresh random sub_path. Existing subscribers on the old path will stop working immediately (or after the optional grace window).",
+    "rotateRandom": "Rotate to a fresh random sub_path",
+    "resetToDefault": "Reset to the default",
+    "explicitTitle": "Rotate to a specific sub_path",
+    "explicitDescription": "Pick a memorable sub_path yourself. Useful when the operator wants a recognizable prefix (e.g. \"aegis-prod-2026\").",
+    "explicitLabel": "Sub-path",
+    "explicitHint": "4-64 characters, lowercase letters, digits, dashes only.",
+    "explicitSubmit": "Rotate to this sub_path",
+    "warningTitle": "Heads up",
+    "warningDescription": "Rotating the sub_path breaks every existing subscriber's URL. Subscribers must re-import the new URL on every device. The default empty sub_path (no rotation) keeps the documented /api/v1/sub/<token> path.",
+    "confirmReset": "Reset to the default empty sub_path? Existing subscribers on the rotated path will stop working.",
+    "rotated": "Sub_path rotated",
+    "rotateFailed": "Could not rotate the sub_path",
+    "reset": "Sub_path reset to default",
+    "resetFailed": "Could not reset the sub_path",
+    "loadFailed": "Could not load the active sub_path",
+    "pathMinLength": "Sub_path must be at least 4 characters",
+    "pathMaxLength": "Sub_path must be at most 64 characters",
+    "pathInvalidChars": "Sub_path may contain only lowercase letters, digits, and dashes"
   }
 }
