@@ -66,7 +66,7 @@ const navItems: NavItem[] = [
   { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: true },
   { key: 'subscription', to: '/subscription', label: t('nav.subscription'), icon: Link2, enabled: true },
   { key: 'users', to: '/users', label: t('nav.users'), icon: Users, enabled: false },
-  { key: 'settings', to: '/settings', label: t('nav.settings'), icon: Settings, enabled: false },
+  { key: 'settings', to: '/settings', label: t('nav.settings'), icon: Settings, enabled: true },
 ]
 
 const statusLabel = computed(() => t(`dashboard.status.${auth.status}`))

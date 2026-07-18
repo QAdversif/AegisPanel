@@ -92,6 +92,13 @@ func Build(
 		// not yet rotated the sub_path.
 		r.Mount("/sub", subscription.Router(subscriptionSvc))
 
+		// Panel-wide config (the rotating sub_path).
+		// Admin-only. GET the active row, POST
+		// /rotate for a fresh random path,
+		// /rotate-to for an explicit path, /reset to
+		// restore the default empty sub_path.
+		r.Mount("/panelcfg", panelcfg.Router(panelCfgSvc, authSvc.Middleware()))
+
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)
 
