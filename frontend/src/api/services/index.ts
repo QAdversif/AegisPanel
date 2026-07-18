@@ -8,4 +8,5 @@ export * from './nodes'
 export * from './inbounds'
 export * from './hosts'
 export * from './subscription'
+export * from './panelcfg'
 
