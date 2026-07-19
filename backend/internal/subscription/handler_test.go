@@ -17,6 +17,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 )
 
 // handlerFixture is the same as newFixture from
@@ -392,6 +393,56 @@ func TestHandler_Router_RejectsPost(t *testing.T) {
 	w := hf.do(t, http.MethodPost, "/sub/tok-alice")
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+// --- rate limiting (PR-K) -------------------------------------
+
+// newRateLimitedFixture wires a Router with a fresh
+// rate limiter (1 rps, burst=2). The user lookup is
+// still served by the in-memory Service; the limiter
+// sits in front of it. The real *ratelimit.Limiter is
+// used here (no stub) so the test exercises the same
+// code path as production.
+func newRateLimitedFixture(t *testing.T) *handlerFixture {
+	t.Helper()
+	f := newFixture(t)
+	limiter := ratelimit.New(1, 2, 0) // 1 rps, burst 2, no idle refill
+	mux := chi.NewRouter()
+	mux.Mount("/sub", RouterWithLimiter(f.sub, limiter))
+	return &handlerFixture{
+		svc:    f.sub,
+		router: mux,
+	}
+}
+
+func TestHandler_RateLimited_Returns429(t *testing.T) {
+	// 3 requests at rps=1, burst=2 -> the third is 429.
+	hf := newRateLimitedFixture(t)
+	for i := 0; i < 2; i++ {
+		w := hf.do(t, http.MethodGet, "/sub/tok-alice")
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i+1, w.Code)
+		}
+	}
+	w := hf.do(t, http.MethodGet, "/sub/tok-alice")
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("3rd request: status = %d, want 429", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got == "" {
+		t.Error("Retry-After header is empty; want a positive integer")
+	}
+}
+
+func TestHandler_NoRateLimitByDefault(t *testing.T) {
+	// newHandlerFixture uses Router (no limiter); a
+	// 100-request fan-out should all succeed.
+	hf := newHandlerFixture(t)
+	for i := 0; i < 100; i++ {
+		w := hf.do(t, http.MethodGet, "/sub/tok-alice")
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d: 429 without a limiter configured", i+1)
+		}
 	}
 }
 
