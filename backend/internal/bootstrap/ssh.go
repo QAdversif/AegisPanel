@@ -520,9 +520,9 @@ func (c *sshClient) uploadStream(ctx context.Context, src io.Reader, dst string,
 // uploadStream call runs inside a single
 // goroutine that already checks ctx in
 // copyContext. The lint flag is silenced via
-// the explicit ctx use; renaming the param
-// would be a larger diff.
-func (c *sshClient) ensureRemoteDir(ctx context.Context, dir string) error {
+// `//nolint:unparam` — the explicit `_ = ctx`
+// line is NOT enough to fool golangci-lint v2.
+func (c *sshClient) ensureRemoteDir(ctx context.Context, dir string) error { //nolint:unparam
 	_ = ctx // v0.4.0: wire through to c.sftp.Mkdir
 	if dir == "" || dir == "." || dir == "/" {
 		return nil
@@ -672,7 +672,11 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("bootstrap: close temp known_hosts: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	// G703 (path traversal) is suppressed: `path` is
+	// operator-config-controlled via cfg.KnownHosts at
+	// boot, not user input. The same lint suppression
+	// applies to the os.CreateTemp call above.
+	if err := os.Rename(tmpName, path); err != nil { // #nosec G703 -- operator-config path
 		return fmt.Errorf("bootstrap: rename known_hosts: %w", err)
 	}
 	return nil
