@@ -14,7 +14,9 @@
     "lint": "eslint . --ext .ts,.vue && node tools/scripts/check-raw-text.mjs",
     "lint:fix": "eslint . --ext .ts,.vue --fix",
     "format": "prettier --write \"src/**/*.{ts,vue,json,css,scss,md}\"",
-    "type-check": "vue-tsc --noEmit"
+    "type-check": "vue-tsc --noEmit",
+    "codegen": "openapi-typescript ../docs/openapi.yaml -o src/types/api.d.ts",
+    "codegen:check": "node tools/scripts/check-codegen.mjs"
   },
   "dependencies": {
     "@tanstack/vue-table": "^8.21.3",
@@ -47,6 +49,7 @@
     "eslint": "^8.57.1",
     "eslint-plugin-vue": "^9.32.0",
     "jsdom": "^25.0.1",
+    "openapi-typescript": "^7.13.0",
     "postcss": "8.5",
     "prettier": "^3.4.1",
     "sass": "^1.81.0",
