@@ -4,10 +4,13 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/alexedwards/argon2id"
+	"github.com/google/uuid"
 )
 
 // User is a panel principal. Phase 0 stores credentials in memory;
@@ -18,9 +21,13 @@ import (
 type User struct {
 	ID           string
 	Username     string
+	Email        string // empty in dev; required when persisted to the pgx store
 	PasswordHash string // argon2id PHC string
+	Role         string // 'super-admin' | 'operator' | 'viewer' (matches the `admins.role` DB enum)
+	Enabled      bool
 	Scopes       Scopes
 	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // VerifyPassword reports whether the given plaintext matches the
@@ -59,7 +66,8 @@ func HashPassword(plaintext string) (string, error) {
 // the mutex explicitly. Seed users via WithUser.
 type MemoryStore struct {
 	mu      sync.RWMutex
-	users   map[string]*User // keyed by username
+	users   map[string]*User  // keyed by username
+	emails  map[string]string // email -> username (for the Email UNIQUE constraint)
 	refresh map[string]refreshEntry
 }
 
@@ -74,21 +82,105 @@ type refreshEntry struct {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		users:   make(map[string]*User),
+		emails:  make(map[string]string),
 		refresh: make(map[string]refreshEntry),
 	}
 }
 
 // WithUser seeds a user. Intended for tests and the Phase 0 dev
 // bootstrap. Re-adding a username overwrites the previous entry
-// (useful for re-seeding).
+// (useful for re-seeding). The Email UNIQUE constraint is NOT
+// enforced by WithUser — it is the dev/test seed helper, and
+// tests can override existing entries at will. The production
+// path goes through CreateUser.
 func (m *MemoryStore) WithUser(u *User) *MemoryStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if u.CreatedAt.IsZero() {
 		u.CreatedAt = time.Now().UTC()
 	}
+	if u.UpdatedAt.IsZero() {
+		u.UpdatedAt = u.CreatedAt
+	}
+	if u.Email != "" {
+		m.emails[u.Email] = u.Username
+	}
 	m.users[u.Username] = u
 	return m
+}
+
+// CreateUser inserts a new admin. The caller fills every
+// field on the passed User (ID, Username, Email, PasswordHash,
+// Role) and is responsible for hashing the password with
+// HashPassword beforehand. A zero ID is replaced with a
+// fresh uuid.New() before the insert.
+//
+// Returns ErrConflict on username or email collision. The
+// production pgx path also returns ErrConflict on the
+// underlying UNIQUE-index violation (a 23505); the
+// MemoryStore mirrors that behaviour so the HTTP layer
+// has one error to handle.
+func (m *MemoryStore) CreateUser(_ context.Context, u *User) error {
+	if u == nil {
+		return fmt.Errorf("auth: CreateUser: nil user")
+	}
+	if u.Username == "" {
+		return fmt.Errorf("auth: CreateUser: username is required")
+	}
+	if u.PasswordHash == "" {
+		return fmt.Errorf("auth: CreateUser: password hash is required (call HashPassword first)")
+	}
+	if u.ID == "" {
+		u.ID = uuid.NewString()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.users[u.Username]; exists {
+		return fmt.Errorf("%w: username %q", ErrConflict, u.Username)
+	}
+	if u.Email != "" {
+		if _, exists := m.emails[u.Email]; exists {
+			return fmt.Errorf("%w: email %q", ErrConflict, u.Email)
+		}
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now().UTC()
+	}
+	u.UpdatedAt = u.CreatedAt
+	if !u.Enabled {
+		// Default to enabled when the caller does not
+		// explicitly set the flag. CLI subcommands
+		// building the User from input flags leave
+		// Enabled at the zero value (false); that
+		// would block the very first login. Override.
+		u.Enabled = true
+	}
+	cp := *u
+	m.users[u.Username] = &cp
+	if u.Email != "" {
+		m.emails[u.Email] = u.Username
+	}
+	return nil
+}
+
+// UpdatePassword rotates the user's argon2id password hash.
+// Returns ErrUnauthorised if the user is gone. The caller
+// is responsible for hashing the new password with
+// HashPassword beforehand — the Store only persists.
+func (m *MemoryStore) UpdatePassword(_ context.Context, userID, newHash string) error {
+	if newHash == "" {
+		return fmt.Errorf("auth: UpdatePassword: new hash is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, u := range m.users {
+		if u.ID == userID {
+			u.PasswordHash = newHash
+			u.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+	}
+	return ErrUnauthorised
 }
 
 // LookupUser implements Store.
@@ -100,6 +192,30 @@ func (m *MemoryStore) LookupUser(_ context.Context, username string) (*User, err
 		return nil, ErrUnauthorised
 	}
 	return u, nil
+}
+
+// LookupByUsername implements Store. Behaves identically
+// to LookupUser (returns ErrUnauthorised on miss); the
+// alias exists for the CLI subcommand's "user not found"
+// UX so the Store interface carries both methods and a
+// future split (404 vs 401) is a no-op call-site change.
+func (m *MemoryStore) LookupByUsername(ctx context.Context, username string) (*User, error) {
+	return m.LookupUser(ctx, username)
+}
+
+// ListUsers implements Store. Returns a copy of every
+// User the store knows about, sorted by username for
+// deterministic output.
+func (m *MemoryStore) ListUsers(_ context.Context) ([]*User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*User, 0, len(m.users))
+	for _, u := range m.users {
+		cp := *u
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	return out, nil
 }
 
 // SaveRefresh implements Store.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,7 +33,7 @@ func NewPgStore(pool *pgxpool.Pool) *PgStore {
 // and "disabled" into the same error to avoid username enumeration.
 func (s *PgStore) LookupUser(ctx context.Context, username string) (*User, error) {
 	const q = `
-		SELECT id, username, password_hash, role, enabled
+		SELECT id, username, email, password_hash, role, enabled, created_at, updated_at
 		FROM admins
 		WHERE username = $1
 		LIMIT 1`
@@ -42,11 +43,14 @@ func (s *PgStore) LookupUser(ctx context.Context, username string) (*User, error
 	var (
 		id           uuid.UUID
 		uname        string
+		email        string
 		passwordHash string
 		role         string
 		enabled      bool
+		createdAt    time.Time
+		updatedAt    time.Time
 	)
-	if err := row.Scan(&id, &uname, &passwordHash, &role, &enabled); err != nil {
+	if err := row.Scan(&id, &uname, &email, &passwordHash, &role, &enabled, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUnauthorised
 		}
@@ -59,10 +63,150 @@ func (s *PgStore) LookupUser(ctx context.Context, username string) (*User, error
 	return &User{
 		ID:           id.String(),
 		Username:     uname,
+		Email:        email,
 		PasswordHash: passwordHash,
+		Role:         role,
+		Enabled:      enabled,
 		Scopes:       scopesForRole(role),
-		CreatedAt:    time.Now().UTC(), // best-effort; not material for the in-memory Store
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
 	}, nil
+}
+
+// CreateUser inserts a new admin. The caller fills every
+// field on the passed User (ID, Username, Email, PasswordHash,
+// Role) and is responsible for hashing the password with
+// HashPassword beforehand. A zero ID is replaced with a
+// fresh uuid.New() before the insert.
+//
+// Returns ErrConflict on a UNIQUE constraint violation
+// (a 23505 SQLSTATE — the migration has UNIQUE indexes on
+// both `username` and `email`).
+func (s *PgStore) CreateUser(ctx context.Context, u *User) error {
+	if u == nil {
+		return fmt.Errorf("auth: CreateUser: nil user")
+	}
+	if u.Username == "" {
+		return fmt.Errorf("auth: CreateUser: username is required")
+	}
+	if u.Email == "" {
+		return fmt.Errorf("auth: CreateUser: email is required (the admins.email column is NOT NULL)")
+	}
+	if u.PasswordHash == "" {
+		return fmt.Errorf("auth: CreateUser: password hash is required (call HashPassword first)")
+	}
+	if u.Role == "" {
+		u.Role = "operator"
+	}
+	if u.ID == "" {
+		u.ID = uuid.NewString()
+	}
+	id, err := uuid.Parse(u.ID)
+	if err != nil {
+		return fmt.Errorf("auth: CreateUser: parse id: %w", err)
+	}
+	enabled := u.Enabled
+	if !u.Enabled && !u.UpdatedAt.IsZero() {
+		// Explicit Enabled=false is honoured; the
+		// default below applies only to the zero
+		// (uninitialised) case.
+	} else if u.UpdatedAt.IsZero() {
+		enabled = true
+	}
+	const q = `
+		INSERT INTO admins (
+			id, username, email, password_hash, role, enabled, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, NOW(), NOW()
+		)`
+	if _, err := s.pool.Exec(ctx, q, id, u.Username, u.Email, u.PasswordHash, u.Role, enabled); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %s", ErrConflict, pgErr.ConstraintName)
+		}
+		return fmt.Errorf("auth: CreateUser insert: %w", err)
+	}
+	return nil
+}
+
+// UpdatePassword rotates the user's argon2id password hash.
+// Returns ErrUnauthorised if the user is gone (zero rows
+// affected). The caller is responsible for hashing the new
+// password with HashPassword beforehand.
+func (s *PgStore) UpdatePassword(ctx context.Context, userID, newHash string) error {
+	if newHash == "" {
+		return fmt.Errorf("auth: UpdatePassword: new hash is required")
+	}
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("auth: UpdatePassword: parse id: %w", err)
+	}
+	const q = `
+		UPDATE admins
+		SET password_hash = $2, updated_at = NOW()
+		WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, id, newHash)
+	if err != nil {
+		return fmt.Errorf("auth: UpdatePassword: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUnauthorised
+	}
+	return nil
+}
+
+// ListUsers implements Store. Returns every admin,
+// ordered by username. The slice is freshly allocated
+// and safe for the caller to mutate.
+func (s *PgStore) ListUsers(ctx context.Context) ([]*User, error) {
+	const q = `
+		SELECT id, username, email, password_hash, role, enabled, created_at, updated_at
+		FROM admins
+		ORDER BY username ASC`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("auth: ListUsers: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*User, 0)
+	for rows.Next() {
+		var (
+			id           uuid.UUID
+			uname        string
+			email        string
+			passwordHash string
+			role         string
+			enabled      bool
+			createdAt    time.Time
+			updatedAt    time.Time
+		)
+		if err := rows.Scan(&id, &uname, &email, &passwordHash, &role, &enabled, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("auth: ListUsers scan: %w", err)
+		}
+		out = append(out, &User{
+			ID:           id.String(),
+			Username:     uname,
+			Email:        email,
+			PasswordHash: passwordHash,
+			Role:         role,
+			Enabled:      enabled,
+			Scopes:       scopesForRole(role),
+			CreatedAt:    createdAt,
+			UpdatedAt:    updatedAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("auth: ListUsers rows: %w", err)
+	}
+	return out, nil
+}
+
+// LookupByUsername implements Store. Identical
+// behaviour to LookupUser (returns ErrUnauthorised on
+// miss). The alias exists for the CLI subcommand's
+// "user not found" UX.
+func (s *PgStore) LookupByUsername(ctx context.Context, username string) (*User, error) {
+	return s.LookupUser(ctx, username)
 }
 
 // SaveRefresh persists a refresh-token hash bound to userID. The

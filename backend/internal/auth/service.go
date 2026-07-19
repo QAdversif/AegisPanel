@@ -159,6 +159,89 @@ func (s *Service) lookupByID(_ context.Context, id string) (*User, error) {
 	return nil, ErrUnauthorised
 }
 
+// CreateAdmin mints a new admin user with an argon2id-hashed
+// password and persists it through the Store. The caller
+// supplies every field on the input except PasswordHash
+// (which is derived from plaintext) and ID (assigned by
+// the Store).
+//
+// Returns ErrConflict on username or email collision (the
+// Store maps the underlying UNIQUE-index violation onto a
+// single error so the caller does not have to know which
+// constraint fired).
+func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*User, error) {
+	if in.Username == "" {
+		return nil, fmt.Errorf("auth: CreateAdmin: username is required")
+	}
+	if in.Email == "" {
+		return nil, fmt.Errorf("auth: CreateAdmin: email is required")
+	}
+	if in.Plaintext == "" {
+		return nil, fmt.Errorf("auth: CreateAdmin: plaintext is required")
+	}
+	if in.Role == "" {
+		in.Role = "operator"
+	}
+	hash, err := HashPassword(in.Plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("auth: CreateAdmin: hash: %w", err)
+	}
+	u := &User{
+		Username:     in.Username,
+		Email:        in.Email,
+		PasswordHash: hash,
+		Role:         in.Role,
+		Enabled:      true,
+		Scopes:       scopesForRole(in.Role),
+	}
+	if err := s.store.CreateUser(ctx, u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// ChangePassword rotates the user's argon2id password hash.
+// The caller supplies the new plaintext; the Service
+// hashes it. Returns ErrUnauthorised if the user is gone.
+func (s *Service) ChangePassword(ctx context.Context, userID, newPlaintext string) error {
+	if newPlaintext == "" {
+		return fmt.Errorf("auth: ChangePassword: new plaintext is required")
+	}
+	hash, err := HashPassword(newPlaintext)
+	if err != nil {
+		return fmt.Errorf("auth: ChangePassword: hash: %w", err)
+	}
+	return s.store.UpdatePassword(ctx, userID, hash)
+}
+
+// CreateAdminInput is the operator-facing shape for creating
+// a new admin. Plaintext is hashed by the Service; ID is
+// assigned by the Store; Enabled defaults to true.
+type CreateAdminInput struct {
+	Username  string
+	Email     string
+	Plaintext string
+	Role      string // 'super-admin' | 'operator' | 'viewer' (default: 'operator')
+}
+
+// LookupByUsername is the CLI's equivalent of Login
+// without a password — the `aegis admin passwd` and
+// `aegis admin list` subcommands use it to resolve
+// the user row before mutating it. Mirrors the Store
+// method so the pg / memory implementations are
+// interchangeable.
+func (s *Service) LookupByUsername(ctx context.Context, username string) (*User, error) {
+	return s.store.LookupByUsername(ctx, username)
+}
+
+// ListUsers returns every user the Store knows about.
+// The returned slice is freshly allocated; callers may
+// mutate without affecting the store. Used by the
+// `aegis admin list` CLI subcommand.
+func (s *Service) ListUsers(ctx context.Context) ([]*User, error) {
+	return s.store.ListUsers(ctx)
+}
+
 // randomJTI returns a 16-byte hex string used as the JWT "jti" claim.
 func randomJTI() (string, error) {
 	buf := make([]byte, 16)

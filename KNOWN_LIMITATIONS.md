@@ -71,11 +71,25 @@ mirror is a v0.1.0 shortcut.
 
 ## Backend
 
-### Argon2id for the admin password — v0.2
+### Argon2id for the admin password — closed in v0.2 (PR-J)
 
-`internal/auth` uses a legacy password hash
-back-end. Argon2id (with the panel's resource
-profile) lands in v0.2.
+The `internal/auth` package already uses
+Argon2id with `DefaultParams` (m=64 MiB,
+t=1, p=4) via the `alexedwards/argon2id`
+library, and the migration declares
+`password_hash TEXT NOT NULL -- argon2id
+encoded`. PR-J closes the operational gap:
+the `aegis admin add <user> --email <email>
+[--role <role>]` and `aegis admin passwd
+<user>` subcommands now exist for the
+operator to seed the first admin and rotate
+passwords without writing SQL by hand. The
+`MemoryStore` dev seed is gated behind
+`AEGIS_ENV != "production"` (a real install
+that boots in production with the dev seed
+fails fast with a clear error). v0.3 adds
+the `/admin` HTTP surface so the panel can
+manage principals from the UI.
 
 ### Panelcfg HTTP handler — v0.2
 

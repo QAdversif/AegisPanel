@@ -86,6 +86,13 @@ var ErrUnauthorised = errors.New("auth: unauthorised")
 // verified, is expired, or is otherwise unusable.
 var ErrInvalidToken = errors.New("auth: invalid token")
 
+// ErrConflict is returned by Store.CreateUser when the
+// chosen username or email is already in use. The Store
+// maps the underlying UNIQUE-index violation (a 23505 in
+// the pgx path) onto this error so the HTTP layer can
+// surface a 409 without leaking which constraint fired.
+var ErrConflict = errors.New("auth: conflict")
+
 // Store is the persistence boundary for users and refresh tokens.
 // Implementations: MemoryStore (Phase 0), PgStore (Phase 1.1).
 type Store interface {
@@ -119,4 +126,39 @@ type Store interface {
 	// token theft, in which case the safest response is to
 	// invalidate every outstanding refresh for that user.
 	RevokeChain(ctx context.Context, userID string) error
+
+	// CreateUser inserts a new admin user. The caller is
+	// responsible for filling every field on the passed
+	// User (ID, Username, Email, PasswordHash, Role, Scopes)
+	// and for hashing the password with HashPassword
+	// beforehand. The Store enforces username + email
+	// uniqueness (mirroring the migration's UNIQUE indexes)
+	// and returns ErrConflict on collision. A zero ID
+	// is replaced with a fresh uuid.New() before the
+	// insert.
+	CreateUser(ctx context.Context, u *User) error
+
+	// UpdatePassword rotates the user's argon2id password
+	// hash. Returns ErrUnauthorised if the user is gone
+	// (the handler maps that to 404, not 401). The caller
+	// is responsible for hashing the new password with
+	// HashPassword beforehand.
+	UpdatePassword(ctx context.Context, userID, newHash string) error
+
+	// ListUsers returns every user the store knows about,
+	// in no particular order. Used by the `aegis admin
+	// list` CLI subcommand and (eventually) the audit
+	// log UI's user picker. The returned slice is
+	// freshly allocated; callers may mutate without
+	// affecting the store.
+	ListUsers(ctx context.Context) ([]*User, error)
+
+	// LookupByUsername returns the user with the given
+	// username, or ErrUnauthorised if not found. Unlike
+	// LookupUser, this call does NOT collapse "not found"
+	// into "unauthorised" (both errors look the same to
+	// the caller; the distinction is only useful for
+	// the CLI). v0.3 splits the two error types if the
+	// audit log UI needs a "user not found" 404.
+	LookupByUsername(ctx context.Context, username string) (*User, error)
 }
