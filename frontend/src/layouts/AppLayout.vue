@@ -65,7 +65,7 @@ const navItems: NavItem[] = [
   { key: 'inbounds', to: '/inbounds', label: t('nav.inbounds'), icon: Shield, enabled: true },
   { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: true },
   { key: 'subscription', to: '/subscription', label: t('nav.subscription'), icon: Link2, enabled: true },
-  { key: 'users', to: '/users', label: t('nav.users'), icon: Users, enabled: false },
+  { key: 'users', to: '/users', label: t('nav.users'), icon: Users, enabled: true },
   { key: 'settings', to: '/settings', label: t('nav.settings'), icon: Settings, enabled: true },
 ]
 

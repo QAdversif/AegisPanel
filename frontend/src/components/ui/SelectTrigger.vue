@@ -16,7 +16,7 @@ import { ChevronDown } from 'lucide-vue-next'
 
 import { cn } from '@/lib/utils'
 
-const props = defineProps<{ class?: string }>()
+const props = defineProps<{ class?: string | boolean | undefined }>()
 
 const classes = computed(() =>
   cn(

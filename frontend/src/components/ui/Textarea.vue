@@ -18,7 +18,7 @@ const props = withDefaults(
   defineProps<{
     modelValue?: string
     rows?: number
-    class?: string
+    class?: string | boolean | undefined
   }>(),
   {
     modelValue: '',

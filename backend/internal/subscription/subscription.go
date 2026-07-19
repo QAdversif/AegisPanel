@@ -105,55 +105,55 @@ const (
 // token first, then the prev token (when present and
 // not yet expired).
 type User struct {
-	ID                    uuid.UUID
-	Username              string
-	Status                UserStatus
-	PlanID                *uuid.UUID
-	ExpireAt              *time.Time
-	TrafficLimitBytes     int64
-	TrafficUsedBytes      int64
-	DeviceLimit           int
-	HostsAllowlist        []uuid.UUID
-	HostsBlocklist        []uuid.UUID
-	SubToken              string
-	SubTokenRotatedAt     *time.Time
-	SubTokenPrev          string
-	SubTokenPrevExpiresAt *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	ID                    uuid.UUID   `json:"id"`
+	Username              string      `json:"username"`
+	Status                UserStatus  `json:"status"`
+	PlanID                *uuid.UUID  `json:"plan_id,omitempty"`
+	ExpireAt              *time.Time  `json:"expire_at,omitempty"`
+	TrafficLimitBytes     int64       `json:"traffic_limit_bytes"`
+	TrafficUsedBytes      int64       `json:"traffic_used_bytes"`
+	DeviceLimit           int         `json:"device_limit"`
+	HostsAllowlist        []uuid.UUID `json:"hosts_allowlist,omitempty"`
+	HostsBlocklist        []uuid.UUID `json:"hosts_blocklist,omitempty"`
+	SubToken              string      `json:"sub_token"`
+	SubTokenRotatedAt     *time.Time  `json:"sub_token_rotated_at,omitempty"`
+	SubTokenPrev          string      `json:"sub_token_prev"`
+	SubTokenPrevExpiresAt *time.Time  `json:"sub_token_prev_expires_at,omitempty"`
+	CreatedAt             time.Time   `json:"created_at"`
+	UpdatedAt             time.Time   `json:"updated_at"`
 }
 
 // Plan is the panel-side view of a tariff. The fields
 // mirror the `plans` table one-to-one.
 type Plan struct {
-	ID                uuid.UUID
-	Name              string
-	TrafficLimitBytes int64
-	Duration          time.Duration
-	DeviceLimit       int
-	ResetPeriod       ResetPeriod
-	PriceCents        int64
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                uuid.UUID     `json:"id"`
+	Name              string        `json:"name"`
+	TrafficLimitBytes int64         `json:"traffic_limit_bytes"`
+	Duration          time.Duration `json:"duration_ns"`
+	DeviceLimit       int           `json:"device_limit"`
+	ResetPeriod       ResetPeriod   `json:"reset_period"`
+	PriceCents        int64         `json:"price_cents"`
+	CreatedAt         time.Time     `json:"created_at"`
+	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
 // Pool is the panel-side view of a host pool. A pool
 // groups a set of hosts and exposes a strategy for
 // selecting which ones to hand to a user.
 type Pool struct {
-	ID           uuid.UUID
-	Name         string
-	Strategy     PoolStrategy
-	Antiaffinity bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID           uuid.UUID    `json:"id"`
+	Name         string       `json:"name"`
+	Strategy     PoolStrategy `json:"strategy"`
+	Antiaffinity bool         `json:"antiaffinity"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 // PoolMember is the join between a Pool and a Host.
 // `Weight` defaults to 1; strategies that respect
 // weight (round_robin, weighted) read it directly.
 type PoolMember struct {
-	PoolID uuid.UUID
-	HostID uuid.UUID
-	Weight int
+	PoolID uuid.UUID `json:"pool_id"`
+	HostID uuid.UUID `json:"host_id"`
+	Weight int       `json:"weight"`
 }
