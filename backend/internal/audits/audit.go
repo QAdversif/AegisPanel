@@ -197,10 +197,10 @@ const (
 	MaxListLimit     = 1000
 )
 
-// Sentinel actor identifier for system-driven
-// entries (no authenticated user is on the line).
-// Used by the v0.3+ agent-timeout and apply-failure
-// log paths.
+// SystemActorUsername is the actor identifier for
+// system-driven entries (no authenticated user is
+// on the line). Used by the v0.3+ agent-timeout and
+// apply-failure log paths.
 const SystemActorUsername = "system"
 
 // ParseUUID is a tiny helper so handler code reads

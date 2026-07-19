@@ -61,7 +61,7 @@ func (s *Service) handleLogin() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		writeJSON(w, http.StatusOK, loginResponse{
+		writeJSON(w, loginResponse{
 			AccessToken:  result.AccessToken,
 			RefreshToken: result.RefreshToken,
 			TokenType:    "Bearer",
@@ -92,7 +92,7 @@ func (s *Service) handleRefresh() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		writeJSON(w, http.StatusOK, loginResponse{
+		writeJSON(w, loginResponse{
 			AccessToken:  result.AccessToken,
 			RefreshToken: result.RefreshToken,
 			TokenType:    "Bearer",
@@ -121,7 +121,7 @@ func (s *Service) handleMe() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("me: %v", err))
 			return
 		}
-		writeJSON(w, http.StatusOK, meResponse{
+		writeJSON(w, meResponse{
 			UserID:   u.ID,
 			Username: u.Username,
 			Scopes:   u.Scopes.Strings(),
@@ -209,7 +209,7 @@ func (s *Service) handleChangePassword() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("change password: %v", err))
 			return
 		}
-		writeJSON(w, http.StatusOK, changePasswordResponse{
+		writeJSON(w, changePasswordResponse{
 			UserID:   u.ID,
 			Username: u.Username,
 			Scopes:   u.Scopes.Strings(),
@@ -217,11 +217,12 @@ func (s *Service) handleChangePassword() http.HandlerFunc {
 	}
 }
 
-// writeJSON writes v as a JSON object with the given status. Kept
+// writeJSON writes v as a JSON object with a 200 status. Kept
 // local to the auth package so we don't take on a project-wide
-// JSON helper dependency.
-func writeJSON(w http.ResponseWriter, status int, v any) {
+// JSON helper dependency. Every call-site in the auth package
+// returns 200; error responses go through writeJSONError instead.
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
 }

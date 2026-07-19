@@ -48,13 +48,15 @@ func loginRequestBody(t *testing.T, username, password string) *bytes.Reader {
 	return bytes.NewReader(body)
 }
 
-// login issues a /auth/login call and returns the
-// resulting access token. The change-password tests
-// attach the token as a bearer credential to the
-// follow-up request.
-func login(t *testing.T, r http.Handler, username, password string) string {
+// login issues a /auth/login call for the seeded
+// "admin" user and returns the resulting access
+// token. The change-password tests attach the
+// token as a bearer credential to the follow-up
+// request. The username is hard-coded because the
+// test router only seeds the one admin.
+func login(t *testing.T, r http.Handler, password string) string {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/login", loginRequestBody(t, username, password))
+	req := httptest.NewRequest(http.MethodPost, "/login", loginRequestBody(t, "admin", password))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -69,7 +71,7 @@ func login(t *testing.T, r http.Handler, username, password string) string {
 
 func TestChangePassword_Success(t *testing.T) {
 	r, _ := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(changePasswordRequest{
 		CurrentPassword: "hunter2-correct-horse",
 		NewPassword:     "new-strong-passphrase",
@@ -96,7 +98,7 @@ func TestChangePassword_Success(t *testing.T) {
 
 func TestChangePassword_WrongCurrent(t *testing.T) {
 	r, _ := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(changePasswordRequest{
 		CurrentPassword: "nope",
 		NewPassword:     "new-strong-passphrase",
@@ -113,7 +115,7 @@ func TestChangePassword_WrongCurrent(t *testing.T) {
 
 func TestChangePassword_TooShort(t *testing.T) {
 	r, _ := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(changePasswordRequest{
 		CurrentPassword: "hunter2-correct-horse",
 		NewPassword:     "short",
@@ -130,7 +132,7 @@ func TestChangePassword_TooShort(t *testing.T) {
 
 func TestChangePassword_SameAsCurrent(t *testing.T) {
 	r, _ := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(changePasswordRequest{
 		CurrentPassword: "hunter2-correct-horse",
 		NewPassword:     "hunter2-correct-horse",
@@ -147,7 +149,7 @@ func TestChangePassword_SameAsCurrent(t *testing.T) {
 
 func TestChangePassword_MissingFields(t *testing.T) {
 	r, _ := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(map[string]string{
 		"current_password": "hunter2-correct-horse",
 	})
@@ -167,7 +169,7 @@ func TestChangePassword_MissingFields(t *testing.T) {
 // with the old one does not.
 func TestChangePassword_NewHashTakesEffect(t *testing.T) {
 	r, svc := newChangePasswordRouter(t)
-	token := login(t, r, "admin", "hunter2-correct-horse")
+	token := login(t, r, "hunter2-correct-horse")
 	body, _ := json.Marshal(changePasswordRequest{
 		CurrentPassword: "hunter2-correct-horse",
 		NewPassword:     "new-strong-passphrase",
