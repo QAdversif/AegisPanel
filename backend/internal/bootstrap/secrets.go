@@ -59,7 +59,7 @@ const SecretLen = 32
 // essentially "the kernel is broken" — a panic
 // would be equally appropriate, but returning
 // the error keeps the call-site honest.
-func GenerateBearerSecret() (plain string, hash string, err error) {
+func GenerateBearerSecret() (plain, hash string, err error) {
 	buf := make([]byte, SecretLen)
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", fmt.Errorf("bootstrap: read random: %w", err)

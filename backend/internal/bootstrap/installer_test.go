@@ -74,7 +74,7 @@ func TestInstaller_SuccessPath(t *testing.T) {
 		NodeName:     "test-node",
 		Address:      "10.0.0.1:22",
 		SSHUser:      "root",
-		BearerSecret: "test-bearer-secret-not-real-0000000000000000000000000000",
+		BearerSecret: "test-bearer-secret-not-real-do-not-use-in-production",
 		AgentSource:  src,
 	}
 	result := inst.Install(context.Background(), in)

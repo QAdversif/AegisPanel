@@ -123,8 +123,11 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 			return
 		}
 		// Translate the wire format into the
-		// provisioner's ProvisionRequest.
-		tp := TofuReject
+		// provisioner's ProvisionRequest. The
+		// `var` (not `:=`) avoids the
+		// ineffectual-assignment lint: the
+		// switch below writes to tp.
+		var tp TofuPolicy
 		switch req.TofuPolicy {
 		case "", "reject":
 			tp = TofuReject

@@ -294,7 +294,7 @@ func (s *Service) Provision(
 			Before:        map[string]any{"state": string(prev)},
 			After:         map[string]any{"state": string(target), "stage": result.Stage, "err": errString(result.Err)},
 			ActorID:       claimsFromClaims(claims),
-			ActorUsername: usernameFromClaims(claims),
+			ActorUsername: "", // v0.5.0: resolve via auth.Service.LookupByID(claims.Subject)
 		})
 	}
 	if !result.OK {
@@ -331,33 +331,18 @@ type ProvisionRequest struct {
 	ExpectedFingerprint string
 }
 
-// claimsFromClaims / usernameFromClaims are
-// tiny adapters so we don't have to import the
-// auth package types into every call-site. The
-// JWT subject is the user UUID; the username
-// lives in the admins table and would require a
-// second round-trip. v0.3.0 sets actor_id but
-// leaves actor_username empty; v0.5.0 adds the
-// lookup.
+// claimsFromClaims is a tiny adapter so we
+// don't have to import the auth package types
+// into every call-site. The JWT subject is the
+// user UUID; the username lives in the admins
+// table and would require a second round-trip.
+// v0.3.0 only sets actor_id; the actor_username
+// is left empty (v0.5.0 adds the lookup).
 func claimsFromClaims(c *auth.Claims) string {
 	if c == nil {
 		return ""
 	}
 	return c.Subject
-}
-
-func usernameFromClaims(c *auth.Claims) string {
-	if c == nil {
-		return ""
-	}
-	// v0.3.0: the username is not on the
-	// claims. The audits entry will show
-	// actor_id without actor_username; the
-	// "who" of a self-service action is
-	// implicitly the operator (no admin-
-	// to-admin distinction yet). v0.5.0
-	// adds a LookupUser round-trip.
-	return ""
 }
 
 // errString returns the error message or ""

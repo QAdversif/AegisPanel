@@ -405,7 +405,13 @@ func (c *sshClient) Run(ctx context.Context, cmd string) (string, error) {
 			resCh <- result{"", fmt.Errorf("bootstrap: open session: %w", err)}
 			return
 		}
-		defer session.Close()
+		// Close returns an error on the
+		// "session already closed" path; the
+		// caller has already collected the
+		// output via CombinedOutput, so a
+		// close error is benign. errcheck
+		// wants the explicit discard.
+		defer func() { _ = session.Close() }()
 		// Combine stdout + stderr so the caller
 		// sees the same output as `ssh host
 		// 'cmd' 2>&1`. The systemd unit
@@ -416,8 +422,14 @@ func (c *sshClient) Run(ctx context.Context, cmd string) (string, error) {
 			// Wrap exit-code errors in
 			// *ExecError so the caller can
 			// branch on the code without
-			// string matching.
-			if exitErr, ok := runErr.(*ssh.ExitError); ok {
+			// string matching. errors.As
+			// handles the wrapped-error
+			// path (the chain wraps the
+			// original ExitError in
+			// session.CombinedOutput's
+			// returned error).
+			var exitErr *ssh.ExitError
+			if errors.As(runErr, &exitErr) {
 				resCh <- result{out, &ExecError{
 					Cmd:        cmd,
 					ExitStatus: exitErr.ExitStatus(),
@@ -458,7 +470,7 @@ func (c *sshClient) Upload(ctx context.Context, src, dst string, mode os.FileMod
 			resCh <- result{fmt.Errorf("bootstrap: open local %s: %w", src, err)}
 			return
 		}
-		defer local.Close()
+		defer func() { _ = local.Close() }()
 		if err := c.uploadStream(ctx, local, dst, mode); err != nil {
 			resCh <- result{err}
 			return
@@ -484,7 +496,7 @@ func (c *sshClient) uploadStream(ctx context.Context, src io.Reader, dst string,
 	if err != nil {
 		return fmt.Errorf("bootstrap: sftp create %s: %w", dst, err)
 	}
-	defer remote.Close()
+	defer func() { _ = remote.Close() }()
 	if err := copyContext(ctx, remote, src); err != nil {
 		return fmt.Errorf("bootstrap: sftp write %s: %w", dst, err)
 	}
@@ -499,7 +511,19 @@ func (c *sshClient) uploadStream(ctx context.Context, src io.Reader, dst string,
 // exist. The mkdir -p semantic is the
 // conventional Unix one: a non-existent path
 // is created; an existing path is a no-op.
+//
+// The ctx parameter is reserved for the v0.4.0
+// upload-then-cancel path (a long SFTP write
+// on a slow connection should respect the
+// caller's deadline). v0.3.0 does not use it
+// because the upload is fast and the entire
+// uploadStream call runs inside a single
+// goroutine that already checks ctx in
+// copyContext. The lint flag is silenced via
+// the explicit ctx use; renaming the param
+// would be a larger diff.
 func (c *sshClient) ensureRemoteDir(ctx context.Context, dir string) error {
+	_ = ctx // v0.4.0: wire through to c.sftp.Mkdir
 	if dir == "" || dir == "." || dir == "/" {
 		return nil
 	}
@@ -577,10 +601,10 @@ type ExecError struct {
 // (so a 10-MB log does not blow up the error
 // envelope).
 func (e *ExecError) Error() string {
-	const max = 200
+	const maxStderr = 200
 	stderr := e.Stderr
-	if len(stderr) > max {
-		stderr = stderr[:max] + "...(truncated)"
+	if len(stderr) > maxStderr {
+		stderr = stderr[:maxStderr] + "...(truncated)"
 	}
 	return fmt.Sprintf("bootstrap: remote %q exited %d: %s", e.Cmd, e.ExitStatus, stderr)
 }
@@ -620,7 +644,13 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 	// rename is atomic on POSIX filesystems
 	// (Windows: the rename overwrites the
 	// destination, which is what we want).
-	existing, err := os.ReadFile(path)
+	//
+	// G703 (path traversal) is suppressed: the
+	// `path` is operator-config-controlled via
+	// cfg.KnownHosts at boot, not user input.
+	// The provisioner only writes to a path
+	// the panel itself opened.
+	existing, err := os.ReadFile(path) // #nosec G703 -- operator-config path
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("bootstrap: read known_hosts: %w", err)
 	}
@@ -629,7 +659,7 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 		body += "\n"
 	}
 	body += line + "\n"
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".known_hosts.*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".known_hosts.*") // #nosec G703 -- operator-config path
 	if err != nil {
 		return fmt.Errorf("bootstrap: temp known_hosts: %w", err)
 	}
