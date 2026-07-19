@@ -134,7 +134,7 @@ const (
 type Host struct {
 	ID          uuid.UUID `json:"id"`
 	Remark      string    `json:"remark"`
-	DisplayName string    `json:"display_name,omitempty"`
+	DisplayName string    `json:"displayName,omitempty"`
 	Type        HostType  `json:"type"`
 	Enabled     bool      `json:"enabled"`
 	// Priority orders hosts in the rendered subscription
@@ -145,7 +145,7 @@ type Host struct {
 	Priority int `json:"priority"`
 	// StatusFilter limits the host to users in the
 	// listed statuses. Empty / nil means "all users".
-	StatusFilter []UserStatus `json:"status_filter,omitempty"`
+	StatusFilter []UserStatus `json:"statusFilter,omitempty"`
 	// Country / City are ISO codes / free-form labels
 	// the UI uses for the country flag and the city
 	// name in the rendered subscription URL.
@@ -162,8 +162,8 @@ type Host struct {
 	// be nil for type=direct.
 	Balancer *Balancer `json:"balancer,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Endpoint is one (Node, Inbound) pair + a per-endpoint
@@ -200,14 +200,14 @@ type Endpoint struct {
 	// NodeID is the FK into the `nodes` table. The
 	// Service layer rejects Endpoints whose NodeID does
 	// not resolve.
-	NodeID uuid.UUID `json:"node_id"`
+	NodeID uuid.UUID `json:"nodeId"`
 	// InboundID is the FK into the `inbounds` table
 	// (PR #34). The protocol family, the listen port,
 	// the TLS / Reality / etc. knobs all live on the
 	// referenced Inbound; the Endpoint only carries
 	// per-endpoint overrides on top of the Inbound
 	// defaults.
-	InboundID uuid.UUID `json:"inbound_id"`
+	InboundID uuid.UUID `json:"inboundId"`
 	// InboundID.
 	Protocol string `json:"protocol"`
 	// Weight is the per-endpoint load-balancing
@@ -237,7 +237,7 @@ type Endpoint struct {
 	// operator-controlled and is NOT in the user's
 	// pool — the Service looks it up by id directly.
 	// Nil / zero = no download_settings block.
-	DownloadHostID *uuid.UUID `json:"download_host_id,omitempty"`
+	DownloadHostID *uuid.UUID `json:"downloadHostId,omitempty"`
 }
 
 // Balancer is the per-Host configuration for type=balancer
@@ -253,13 +253,13 @@ type Balancer struct {
 	// HealthcheckURL is just a default and the
 	// subscription service may build a per-endpoint URL
 	// from a template.
-	HealthcheckURL         string `json:"healthcheck_url,omitempty"`
-	HealthcheckIntervalSec int    `json:"healthcheck_interval_sec,omitempty"`
+	HealthcheckURL         string `json:"healthcheckUrl,omitempty"`
+	HealthcheckIntervalSec int    `json:"healthcheckIntervalSec,omitempty"`
 	// FailoverEndpointIDs lists endpoints (by Endpoint.ID)
 	// that the agent should use as cold-standby targets
 	// when all primary endpoints are down. IDs must
 	// reference endpoints in the same host.
-	FailoverEndpointIDs []uuid.UUID `json:"failover_endpoint_ids,omitempty"`
+	FailoverEndpointIDs []uuid.UUID `json:"failoverEndpointIds,omitempty"`
 }
 
 // IsValid is the cheap pre-flight check used by the store
