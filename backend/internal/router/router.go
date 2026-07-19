@@ -21,6 +21,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
 
@@ -37,6 +38,7 @@ func Build(
 	inboundsSvc *inbounds.Service,
 	subscriptionSvc *subscription.Service,
 	panelCfgSvc *panelcfg.Service,
+	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -98,7 +100,7 @@ func Build(
 		// (added below) so the panel always serves
 		// subscriptions, even when the operator has
 		// not yet rotated the sub_path.
-		r.Mount("/sub", subscription.Router(subscriptionSvc))
+		r.Mount("/sub", subscription.RouterWithLimiter(subscriptionSvc, subLimiter))
 
 		// Panel-wide config (the rotating sub_path).
 		// Admin-only. GET the active row, POST
@@ -138,7 +140,7 @@ func Build(
 	// which is wrong; the router skips the mount
 	// when the path is empty).
 	if active, err := panelCfgSvc.GetActive(context.Background()); err == nil && active.SubPath != "" {
-		r.Mount("/"+active.SubPath+"/sub", subscription.Router(subscriptionSvc))
+		r.Mount("/"+active.SubPath+"/sub", subscription.RouterWithLimiter(subscriptionSvc, subLimiter))
 	} else if err != nil {
 		log.Warn().Err(err).Msg("router: panelcfg read failed; rotated sub_path mount skipped")
 	}

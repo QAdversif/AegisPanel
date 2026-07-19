@@ -52,6 +52,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/router"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 )
@@ -298,10 +299,22 @@ func main() {
 	}
 	panelCfgSvc := panelcfg.NewService(panelCfgStore)
 
+	// Subscription endpoint rate limiter. One
+	// instance shared across the default and the
+	// rotated sub_path mount - a stolen sub_token
+	// is therefore rate-limited regardless of which
+	// URL the caller uses. v0.3 swaps the in-memory
+	// map for Redis + TTL (the panel is small enough
+	// today that the in-memory cap of 50k keys is
+	// not a real concern). The limiter is created
+	// before the HTTP server so the first request
+	// already has a budget allocated.
+	subLimiter := newSubscriptionRateLimiter(cfg)
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
@@ -641,6 +654,38 @@ func promptPassword(prompt string) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// newSubscriptionRateLimiter builds the per-sub_token
+// rate limiter the HTTP layer hands to
+// subscription.RouterWithLimiter. The settings are
+// taken from cfg; a non-positive RPS disables
+// throttling (the v0.1.0 behaviour).
+//
+// Defaults (1 rps, 5 burst, 50k keys) are tuned for a
+// single-user-with-multiple-devices usage model: a
+// phone + laptop + tablet + desktop can all wake up
+// at once after a 24h client poll cycle and still fit
+// inside the burst budget.
+func newSubscriptionRateLimiter(cfg *config.Config) *ratelimit.Limiter {
+	if cfg.SubscriptionRateLimitRPS <= 0 {
+		log.Info().Msg("subscription rate limiter disabled (AEGIS_SUBSCRIPTION_RATELIMIT_RPS <= 0)")
+		return nil
+	}
+	l := ratelimit.New(
+		cfg.SubscriptionRateLimitRPS,
+		cfg.SubscriptionRateLimitBurst,
+		10*time.Minute, // idle: a stale token gets a fresh burst on first re-use
+	)
+	if cfg.SubscriptionRateLimitMaxKeys > 0 {
+		l.SetMaxKeys(cfg.SubscriptionRateLimitMaxKeys)
+	}
+	log.Info().
+		Float64("rps", cfg.SubscriptionRateLimitRPS).
+		Float64("burst", cfg.SubscriptionRateLimitBurst).
+		Int("max_keys", cfg.SubscriptionRateLimitMaxKeys).
+		Msg("subscription rate limiter enabled")
+	return l
 }
 
 func adminUsage() {

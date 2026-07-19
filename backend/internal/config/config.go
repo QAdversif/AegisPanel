@@ -107,6 +107,36 @@ type Config struct {
 
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
+
+	// SubscriptionRateLimitRPS is the sustained
+	// requests-per-second per sub_token the
+	// subscription endpoint allows. 0 disables
+	// rate limiting. The default (1 rps) is
+	// generous for a single legitimate user with
+	// multiple devices (a phone, a laptop, a
+	// tablet, a desktop) that all wake up at
+	// once after a 24h client poll cycle.
+	SubscriptionRateLimitRPS float64 `env:"AEGIS_SUBSCRIPTION_RATELIMIT_RPS" envDefault:"1"`
+
+	// SubscriptionRateLimitBurst is the maximum
+	// bucket size per sub_token. A brand-new
+	// sub_token can immediately make this many
+	// requests; subsequent traffic is shaped by
+	// RPS. 5 is the default: enough for "phone
+	// wakes up + laptop wakes up + manual refresh
+	// from the admin UI" without forcing a 429.
+	SubscriptionRateLimitBurst float64 `env:"AEGIS_SUBSCRIPTION_RATELIMIT_BURST" envDefault:"5"`
+
+	// SubscriptionRateLimitMaxKeys caps the
+	// in-memory bucket map. Past the cap, the
+	// least-recently-seen key is evicted. 0
+	// disables the cap (the bucket map grows
+	// unbounded; OK for a single-replica panel
+	// with at most a few thousand unique tokens,
+	// not OK for a long-running production
+	// install with sub_token rotation churn).
+	// 50k is a safe default.
+	SubscriptionRateLimitMaxKeys int `env:"AEGIS_SUBSCRIPTION_RATELIMIT_MAX_KEYS" envDefault:"50000"`
 }
 
 // Load reads `.env` (if present) and then parses the environment.

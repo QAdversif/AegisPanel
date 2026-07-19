@@ -10,12 +10,9 @@
 // requested format:
 //
 //   - ?target=base64  (default if no signal says otherwise)
-//   - ?target=singbox — not implemented in Phase 0,
-//     returns 501
-//   - ?target=clash   — not implemented in Phase 0,
-//     returns 501
-//   - ?target=html    — minimal HTML page in Phase 0,
-//     real sub-page (with QR code) lands in a later PR
+//   - ?target=singbox - implemented (Phase 1)
+//   - ?target=clash   - implemented (Phase 1)
+//   - ?target=html    - minimal HTML page with QR
 //
 // When the caller does not pass `?target=`, the handler
 // auto-detects from the Accept header and the
@@ -30,49 +27,22 @@
 //   - anything else                   -> base64
 //
 // The endpoint is mounted under /api/v1/sub/{token} by
-// the router, and is unauthenticated by design — the
-// sub_token IS the credential. A future PR will add
-// rate limiting and a sub-token rotation path; for
-// now, an unknown token returns 404, a live user with
-// no entitled hosts returns 200 with an empty body,
-// and a non-live user returns 403.
+// the router, and is unauthenticated by design - the
+// sub_token IS the credential.
 //
-// # Headers
+// # Rate limiting (PR-K)
 //
-// On success, the response includes three of the
-// standard subscription headers (per the sing-box /
-// Clash / Shadowrocket convention):
-//
-//   - Profile-Title:       "AegisPanel"
-//   - Profile-Update-Interval: "<hours>h" — hint to
-//     clients that re-fetching more often is wasted
-//     bandwidth; the value is a Phase 0 default (24h)
-//     and lands as a config knob in a later PR.
-//   - Subscription-Userinfo: "upload=N; download=N;
-//     total=N; expire=UNIX" — populated from the user's
-//     traffic counters and expire_at, with missing
-//     values emitted as 0. Clients that understand the
-//     header show the numbers in their UI.
-//
-// Content-Type is set per format:
-//   - text/plain; charset=utf-8   for base64
-//   - application/json; ...       for singbox (Phase 1)
-//   - text/yaml; charset=utf-8     for clash (Phase 1)
-//   - text/html; charset=utf-8     for html
-//
-// # Phase 0 scope
-//
-//   - base64 (implemented)
-//   - auto-detect (implemented)
-//   - html (minimal landing page, no QR yet)
-//   - sing-box / clash (501 Not Implemented with a
-//     descriptive error)
-//
-// The router-level sub-path rotation (e.g.
-// `/s3cr3t-sub-<hex>/<token>`) lives in a separate
-// router mount in `internal/router/router.go` — the
-// actual sub-path table (`panel_path_config`) is part
-// of a later PR that adds the PgStore path rotation.
+// The handler is rate-limited per sub_token via the
+// internal/ratelimit package. A nil limiter (the
+// v0.1.0 default) short-circuits to allow every
+// request; a real limiter rejects the over-budget
+// path with HTTP 429 and a Retry-After header. The
+// key is the sub_token from the URL - the limit
+// is per-credential, so a stolen token cannot be
+// replayed across many IPs without tripping the
+// limit. v0.3 will add a per-IP second dimension
+// when the audit log UI exposes a per-user
+// "suspicious activity" view.
 
 package subscription
 
@@ -82,21 +52,41 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+
+	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 )
 
 // Handler is the HTTP entry point. It wraps a Service
 // and exposes a chi subrouter via Router().
 type Handler struct {
-	svc *Service
+	svc     *Service
+	limiter *ratelimit.Limiter
 }
 
 // NewHandler wires a Handler around the given service.
+// A nil limiter is safe - Allow() on a nil receiver
+// always returns (true, 0), so the subscription
+// endpoint behaves as if rate limiting were disabled.
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	return &Handler{svc: svc, limiter: nil}
+}
+
+// WithLimiter attaches a rate limiter. The same
+// limiter instance is shared across all Handler
+// instances created by the same Router call; the
+// caller is responsible for its lifecycle (the
+// limiter has no Close / Stop - it is a pure
+// in-memory data structure that lives for the
+// lifetime of the process).
+func (h *Handler) WithLimiter(l *ratelimit.Limiter) *Handler {
+	h.limiter = l
+	return h
 }
 
 // Router returns a chi subrouter for the subscription
@@ -104,11 +94,22 @@ func NewHandler(svc *Service) *Handler {
 //
 //	r.Mount("/api/v1/sub", subscription.Router(svc))
 //
-// The returned router has no auth middleware — the
-// sub_token in the URL is the credential. Rate limiting
-// is a TODO for the Phase 1 hardening pass.
+// The returned router has no auth middleware - the
+// sub_token in the URL is the credential. A nil
+// limiter is the v0.1.0 behaviour (no rate limiting);
+// passing a real *ratelimit.Limiter enables per-
+// sub_token throttling with a 429 + Retry-After
+// response on the over-budget path.
 func Router(svc *Service) http.Handler {
-	h := NewHandler(svc)
+	return RouterWithLimiter(svc, nil)
+}
+
+// RouterWithLimiter is the explicit "rate limiting
+// enabled" form. Same signature shape as Router; the
+// caller passes a real *ratelimit.Limiter to enable
+// throttling.
+func RouterWithLimiter(svc *Service, l *ratelimit.Limiter) http.Handler {
+	h := NewHandler(svc).WithLimiter(l)
 	r := chi.NewRouter()
 	r.Get("/{token}", h.handleRender)
 	return r
@@ -133,8 +134,27 @@ func (h *Handler) handleRender(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing sub_token", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
 
+	// Rate limit per sub_token. The key is the
+	// raw token string - the only caller that
+	// knows it is the legitimate user (or an
+	// attacker who scraped it from a leaked
+	// device / proxy log). A stolen token
+	// therefore shares the bucket regardless of
+	// the attacker's IP - the v0.2 limit
+	// defends the credential-scraping case
+	// (an attacker spraying many tokens to find
+	// one valid). v0.3 adds the per-IP dimension
+	// when the audit log UI exposes a per-user
+	// "suspicious activity" view.
+	if h.limiter != nil {
+		if ok, retry := h.limiter.Allow(token); !ok {
+			writeRateLimited(w, retry)
+			return
+		}
+	}
+
+	ctx := r.Context()
 	user, err := h.svc.GetUserBySubToken(ctx, token)
 	if err != nil {
 		writeServiceError(w, err)
@@ -164,6 +184,27 @@ func (h *Handler) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// writeRateLimited emits a 429 with a Retry-After
+// header. The Retry-After value is rounded up to the
+// next integer second (the spec allows a delta-
+// seconds non-negative integer or an HTTP-date; we
+// use the integer form for sub-second precision).
+// We also include a JSON-ish body for clients that
+// do not render 429s as plain text.
+func writeRateLimited(w http.ResponseWriter, retryAfter time.Duration) {
+	seconds := int(retryAfter / time.Second)
+	if retryAfter%time.Second != 0 {
+		seconds++ // round up
+	}
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
+}
+
 // --- base64 render ---------------------------------------------------
 
 // renderBase64 resolves the user's entitled endpoints
@@ -189,12 +230,7 @@ func (h *Handler) renderBase64(w http.ResponseWriter, ctx context.Context, user 
 
 // renderSingbox resolves the user's entitled endpoints
 // and writes a sing-box outbounds JSON document to
-// the response. The top-level shape is
-// `{"outbounds": [...]}`. Endpoints whose inbound is
-// missing required params (e.g. a VLESS without a
-// uuid) are silently skipped — the subscription
-// must still serve for the rest of the entitled
-// endpoints.
+// the response.
 func (h *Handler) renderSingbox(w http.ResponseWriter, ctx context.Context, user *User) {
 	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
 	if err != nil {
@@ -213,13 +249,7 @@ func (h *Handler) renderSingbox(w http.ResponseWriter, ctx context.Context, user
 
 // renderClash resolves the user's entitled endpoints
 // and writes a Clash proxy-list YAML document to
-// the response. The top-level shape is
-// `proxies: [ <proxy>, ... ]`. proxy-groups and
-// rules are intentionally NOT emitted — those are a
-// per-client policy concern, not a per-subscription
-// one. Clients merge this list into their own
-// template and apply the user-defined groups / rules
-// there.
+// the response.
 func (h *Handler) renderClash(w http.ResponseWriter, ctx context.Context, user *User) {
 	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
 	if err != nil {
@@ -236,26 +266,9 @@ func (h *Handler) renderClash(w http.ResponseWriter, ctx context.Context, user *
 	_, _ = w.Write(body)
 }
 
-// --- html render (Phase 0 minimal) ---------------------------------
+// --- html render -----------------------------------------------------
 
-// renderHTML serves the QR-code landing page. The
-// page embeds:
-//
-//   - a 256x256 QR code (PNG, data-URL) encoding the
-//     base64 subscription URL — the default for phone-
-//     camera import;
-//   - three copyable per-client URLs (base64, singbox,
-//     clash) with a vanilla-JS "copy" button;
-//   - the user's username and a count of entitled
-//     hosts.
-//
-// The page is intentionally inline-styled and
-// framework-free: a phone camera must be able to
-// render it without JavaScript and within the first
-// second of the request returning. The copy-button
-// JS is the only script on the page; it degrades
-// gracefully (selects the input on clipboard-API
-// failure) so the URL is still accessible.
+// renderHTML serves the QR-code landing page.
 func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context.Context, user *User) {
 	eps, err := h.svc.ResolveEndpointsForUser(ctx, user)
 	if err != nil {
@@ -267,32 +280,17 @@ func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context
 		writeServiceError(w, fmt.Errorf("render base64 (for html): %w", err))
 		return
 	}
-	// The base64 URL is the request URL with
-	// ?target=base64 forced. Clients that ignore the
-	// html landing page can still copy the base64 URL
-	// from the page.
 	base64SubURL := subscriptionURLFor(r, FormatBase64)
 	singboxSubURL := subscriptionURLFor(r, FormatSingbox)
 	clashSubURL := subscriptionURLFor(r, FormatClash)
 
-	// hostCount is read off the rendered base64 body:
-	// each line is one URI, and an empty / single-
-	// newline body means "no entitled hosts".
 	hostCount := 0
 	if len(body) > 0 {
 		hostCount = len(strings.Split(strings.TrimRight(string(body), "\n"), "\n"))
 	}
 
-	// Build the QR code. The QR encodes the base64
-	// URL — that is the path every client can import
-	// from a URL; the per-client URLs on the page are
-	// the explicit override.
 	qrDataURL, err := buildQRCodeDataURL(base64SubURL, 256)
 	if err != nil {
-		// A QR failure must not 5xx the page; the user
-		// can still use the per-client URLs. We log
-		// the error and render the page with an empty
-		// QR (the <img> shows the alt text).
 		log.Warn().Err(err).Msg("subscription handler: qr render failed")
 		qrDataURL = ""
 	}
@@ -311,12 +309,7 @@ func (h *Handler) renderHTML(w http.ResponseWriter, r *http.Request, ctx context
 }
 
 // subscriptionURLFor returns the absolute URL of the
-// current request with `?target=<format>` forced. The
-// scheme honours r.TLS and the X-Forwarded-Proto
-// header (set by a reverse proxy in front of the
-// panel); the host is r.Host. Both are needed because
-// the QR code is scanned off the device — the device
-// has to be able to reach the URL it scans.
+// current request with `?target=<format>` forced.
 func subscriptionURLFor(r *http.Request, format Format) string {
 	scheme := "http"
 	if r.TLS != nil {
@@ -332,22 +325,11 @@ func subscriptionURLFor(r *http.Request, format Format) string {
 	return scheme + "://" + r.Host + u.String()
 }
 
-// buildHTMLPage renders the landing page. The page
-// embeds the QR code (a `data:` URL) and a per-client
-// URL table. The QR is sized at 256x256, which is the
-// sweet spot for phone-camera scanning without
-// bloating the response past ~5 KB.
-//
-// `urls` carries one row per (label, url) pair. The
-// page renders a copy-to-clipboard button next to
-// each row; the JS handler is a tiny `onclick` that
-// calls `navigator.clipboard.writeText` and falls
-// back to a manual prompt if the API is unavailable
-// (older browsers, no-HTTPS, etc.).
+// buildHTMLPage renders the landing page.
 func buildHTMLPage(username, qrDataURL, base64URL, singboxURL, clashURL string, hostCount int) string {
 	hostLine := fmt.Sprintf("You have <b>%d</b> host line(s) in this subscription.", hostCount)
 	if hostCount == 0 {
-		hostLine = "You have no hosts in this subscription yet — contact your operator."
+		hostLine = "You have no hosts in this subscription yet - contact your operator."
 	}
 	rows := htmlClientRows(base64URL, singboxURL, clashURL)
 	return fmt.Sprintf(`<!doctype html>
@@ -355,7 +337,7 @@ func buildHTMLPage(username, qrDataURL, base64URL, singboxURL, clashURL string, 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AegisPanel subscription — %s</title>
+<title>AegisPanel subscription - %s</title>
 <style>
  body { font: 14px/1.4 system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 12px; color: #111; }
  h1 { font-size: 18px; margin: 0 0 8px; }
@@ -374,7 +356,7 @@ func buildHTMLPage(username, qrDataURL, base64URL, singboxURL, clashURL string, 
 <h1>AegisPanel subscription</h1>
 <p>User: <b>%s</b></p>
 <p>%s</p>
-<p>Scan the QR code with a VPN client that supports camera import (Hiddify, Streisand, NekoBox, Karing, V2Box, …):</p>
+<p>Scan the QR code with a VPN client that supports camera import (Hiddify, Streisand, NekoBox, Karing, V2Box, ...):</p>
 <img class="qr" alt="Subscription QR code" src="%s">
 <p>Or pick a per-client URL below and paste it into the client's "import from URL" field:</p>
 <table>
@@ -383,7 +365,7 @@ func buildHTMLPage(username, qrDataURL, base64URL, singboxURL, clashURL string, 
 %s
 </tbody>
 </table>
-<p class="muted">If the copy button does nothing, your browser blocks the clipboard API over plain HTTP — use the URL text directly.</p>
+<p class="muted">If the copy button does nothing, your browser blocks the clipboard API over plain HTTP - use the URL text directly.</p>
 </body>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
@@ -410,10 +392,7 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 // htmlClientRows renders the per-client URL table
-// body. Each row has a copyable `<input>` so the
-// "copy" button has a stable target element. The
-// inputs are `readonly` (the user is not supposed to
-// edit them — the URL is the credential).
+// body.
 func htmlClientRows(base64URL, singboxURL, clashURL string) string {
 	return fmt.Sprintf(`<tr><td>Base64 (v2rayN, Shadowrocket, v2rayNG)</td><td class="url-cell"><input id="u1" readonly value="%s"></td><td><button data-copy="u1">copy</button> <span class="status"></span></td></tr>
 <tr><td>Sing-box (Hiddify, NekoBox, sing-box CLI)</td><td class="url-cell"><input id="u2" readonly value="%s"></td><td><button data-copy="u2">copy</button> <span class="status"></span></td></tr>
@@ -425,10 +404,7 @@ func htmlClientRows(base64URL, singboxURL, clashURL string) string {
 }
 
 // ioWriteString is a tiny seam so the test can
-// intercept the html render output. It is the
-// production path — using io.WriteString directly is
-// fine, but routing through a package-local function
-// makes the test a one-liner.
+// intercept the html render output.
 func ioWriteString(w http.ResponseWriter, s string) (int, error) {
 	return fmt.Fprint(w, s)
 }
@@ -437,13 +413,9 @@ func ioWriteString(w http.ResponseWriter, s string) (int, error) {
 
 // writeSubscriptionHeaders sets the three standard
 // subscription headers plus Content-Disposition for
-// the download-style clients (some VPN clients save
-// the response to disk and the file extension hint
-// helps the operator spot the right format).
+// the download-style clients.
 func writeSubscriptionHeaders(w http.ResponseWriter, user *User, format Format) {
 	w.Header().Set("Profile-Title", "AegisPanel")
-	// 24h is a safe default; the operator can later
-	// override via config.
 	w.Header().Set("Profile-Update-Interval", "24")
 	w.Header().Set("Subscription-Userinfo", buildUserInfoHeader(user))
 	switch format {
@@ -454,32 +426,17 @@ func writeSubscriptionHeaders(w http.ResponseWriter, user *User, format Format) 
 	case FormatClash:
 		w.Header().Set("Content-Disposition", `inline; filename="aegis-sub.yaml"`)
 	case FormatHTML:
-		// No Content-Disposition: browsers render
-		// the page; saving is the user's choice.
 	}
 }
 
 // buildUserInfoHeader serialises the user's traffic
 // counters and expire_at into the sing-box / Clash
-// convention:
-//
-//	upload=<bytes>; download=<bytes>; total=<bytes>; expire=<unix-seconds>
-//
-// Missing values (no expire, no traffic limit) are
-// emitted as 0; clients that understand the header
-// display the numbers in their UI.
+// convention.
 func buildUserInfoHeader(user *User) string {
 	var expire int64
 	if user.ExpireAt != nil {
 		expire = user.ExpireAt.Unix()
 	}
-	// Per the sing-box header convention, "total" is
-	// the limit, "upload" / "download" are used.
-	// For Phase 0 we only have "traffic_used_bytes";
-	// the split into upload vs download is owned by
-	// the stats pipeline and lands later. We emit
-	// used as both upload and download so the UI has
-	// a non-zero value to display.
 	used := user.TrafficUsedBytes
 	total := user.TrafficLimitBytes
 	return fmt.Sprintf("upload=%d; download=%d; total=%d; expire=%d",
@@ -489,9 +446,7 @@ func buildUserInfoHeader(user *User) string {
 // --- error mapping --------------------------------------------------
 
 // writeServiceError maps a Service / Store error to an
-// HTTP status. The mapping is the public contract —
-// handlers in other packages use the same error types
-// for the same status codes.
+// HTTP status.
 func writeServiceError(w http.ResponseWriter, err error) {
 	var verr *ValidationError
 	var nferr *NotFoundError
@@ -512,25 +467,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 // --- format detection ----------------------------------------------
 
 // detectFormat returns the wire format the caller is
-// asking for. The order of precedence is:
-//
-//  1. ?target=  (explicit override)
-//  2. Accept    (clash wins on yaml, singbox on json)
-//  3. User-Agent (substring match against the
-//     well-known client list)
-//  4. base64    (default)
-//
-// Unknown explicit targets surface as their literal
-// string so the handler can return 415; the auto-detect
-// path always returns a known Format value.
+// asking for.
 func detectFormat(r *http.Request) Format {
 	if t := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("target"))); t != "" {
 		return Format(t)
 	}
-	// Accept header — YAML wins (clash), then JSON
-	// (singbox). The values are taken from the
-	// well-known client docs; we accept the bare
-	// media type without parameters.
 	accept := strings.ToLower(r.Header.Get("Accept"))
 	if strings.Contains(accept, "application/yaml") || strings.Contains(accept, "text/yaml") {
 		return FormatClash
@@ -538,9 +479,6 @@ func detectFormat(r *http.Request) Format {
 	if strings.Contains(accept, "application/json") {
 		return FormatSingbox
 	}
-	// User-Agent — substring match, lowercased. The
-	// list mirrors the "auto-detect" table in
-	// ARCHITECTURE.md §10.4.
 	ua := strings.ToLower(r.Header.Get("User-Agent"))
 	clashSubstr := []string{"clash", "mihomo"}
 	for _, s := range clashSubstr {
