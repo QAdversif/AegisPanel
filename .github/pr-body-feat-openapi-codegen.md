@@ -41,7 +41,7 @@ no infrastructure work.
   git-bash). Output is a single
   `::error::` line that GitHub Actions
   surfaces in the PR's "Files changed" tab
-  + a unified-diff hint pointing at
+  and a unified-diff hint pointing at
   `pnpm run codegen && git diff`.
 
 * `frontend/src/types/api.d.ts` — the
@@ -71,18 +71,17 @@ no infrastructure work.
   ~270 lines (auth-only) to ~970 lines
   covering the v0.2.0 CRUD surface:
 * `paths` — every endpoint mounted by
-    the v0.2.0 router: `/auth/*`, `/nodes`
-    + `/nodes/{id}`, `/nodes/{nodeId}/
-    inbounds` + `/nodes/{nodeId}/
-    inbounds/{id}`, `/hosts` + `/hosts/
-    {id}`, `/users` + `/users/{id}` +
-    `/users/{id}/rotate-token`,
-    `/panelcfg` + `/panelcfg/rotate` +
-    `/panelcfg/rotate-to` + `/panelcfg/
-    reset`, `/sub/{token}`, `/health`,
-    `/cores`. The `429` response on
-    `/sub/{token}` documents the
-    `Retry-After` header that PR-K added.
+    the v0.2.0 router: `/auth/*`, `/nodes`,
+    `/nodes/{id}`, `/nodes/{nodeId}/
+    inbounds`, `/nodes/{nodeId}/inbounds/{id}`,
+    `/hosts`, `/hosts/{id}`, `/users`,
+    `/users/{id}`, `/users/{id}/rotate-token`,
+    `/panelcfg`, `/panelcfg/rotate`,
+    `/panelcfg/rotate-to`, `/panelcfg/reset`,
+    `/sub/{token}`, `/health`, `/cores`. The
+    `429` response on `/sub/{token}`
+    documents the `Retry-After` header that
+    PR-K added.
 * `components.schemas` — every Go
     struct the v0.2.0 handlers return,
     plus request bodies for create /
@@ -146,7 +145,7 @@ no infrastructure work.
 
 * The actual `aegis.ts` → `api.d.ts`
   deprecation. v0.2.0 ships the toolchain
-  + the expanded spec; v0.3 will replace
+  and the expanded spec; v0.3 will replace
   the import in every service / view
   and delete the hand-maintained file.
   Doing it in the same PR would multiply
