@@ -55,8 +55,8 @@ type createRequest struct {
 	Name        string         `json:"name"`
 	Protocol    Protocol       `json:"protocol"`
 	Listen      string         `json:"listen,omitempty"`
-	ListenPort  int            `json:"listen_port"`
-	ListenPorts []int          `json:"listen_ports,omitempty"`
+	ListenPort  int            `json:"listenPort"`
+	ListenPorts []int          `json:"listenPorts,omitempty"`
 	Enabled     *bool          `json:"enabled,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Params      map[string]any `json:"params,omitempty"`
@@ -66,8 +66,8 @@ type updateRequest struct {
 	Name        *string         `json:"name,omitempty"`
 	Protocol    *Protocol       `json:"protocol,omitempty"`
 	Listen      *string         `json:"listen,omitempty"`
-	ListenPort  *int            `json:"listen_port,omitempty"`
-	ListenPorts *[]int          `json:"listen_ports,omitempty"`
+	ListenPort  *int            `json:"listenPort,omitempty"`
+	ListenPorts *[]int          `json:"listenPorts,omitempty"`
 	Enabled     *bool           `json:"enabled,omitempty"`
 	Tags        *[]string       `json:"tags,omitempty"`
 	Params      *map[string]any `json:"params,omitempty"`

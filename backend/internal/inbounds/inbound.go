@@ -83,7 +83,7 @@ type Inbound struct {
 	// Service layer rejects Inbounds whose NodeID
 	// does not resolve, mirroring the host manager's
 	// cross-entity validation.
-	NodeID uuid.UUID `json:"node_id"`
+	NodeID uuid.UUID `json:"nodeId"`
 	// Name is the operator's human-readable label,
 	// unique per node. The DB enforces this through
 	// the UNIQUE (node_id, name) constraint; the
@@ -102,7 +102,7 @@ type Inbound struct {
 	// enforces one-inbound-per-port-per-node at the
 	// storage layer. The agent binds this port plus
 	// every entry in ListenPorts.
-	ListenPort int `json:"listen_port"`
+	ListenPort int `json:"listenPort"`
 	// ListenPorts is the optional list of additional
 	// ports the same inbound also listens on. The
 	// subscription renderer picks one at random per
@@ -115,7 +115,7 @@ type Inbound struct {
 	// ListenPort uniqueness, not the union of
 	// ListenPort and ListenPorts). Nil / empty =
 	// single-port mode (the historical default).
-	ListenPorts []int `json:"listen_ports,omitempty"`
+	ListenPorts []int `json:"listenPorts,omitempty"`
 	// Enabled is a soft-disable. Disabled inbounds
 	// are kept in the database so the operator can
 	// re-enable them without re-entering the
@@ -136,8 +136,8 @@ type Inbound struct {
 	// the authoritative schema check.
 	Params map[string]any `json:"params,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // IsValid reports whether the inbound carries the
