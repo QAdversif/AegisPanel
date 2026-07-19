@@ -20,8 +20,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/QAdversif/AegisPanel/testutil"
 )
+
+// seedAdmin inserts a minimal admin row so the
+// audit_log.actor_id FK (which references admins(id))
+// is satisfied for the integration tests below. The
+// argon2id hash is a placeholder; the audit tests
+// never call Login. The role is "operator" so the
+// Scopes mapping in auth/scopesForRole grants
+// ScopeAudits via the dev seed path, but that
+// mapping is irrelevant here — we just need the
+// row to exist.
+func seedAdmin(t *testing.T, pool *pgxpool.Pool, id, username string) {
+	t.Helper()
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		t.Fatalf("parse seed admin id: %v", err)
+	}
+	const q = `
+		INSERT INTO admins (id, username, email, password_hash, role, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, TRUE, NOW(), NOW())
+		ON CONFLICT (id) DO NOTHING`
+	// The hash is a deterministic placeholder; the
+	// audit tests never try to verify it. The
+	// schema enforces a non-empty password_hash,
+	// so any well-formed argon2id PHC string is
+	// fine.
+	if _, err := pool.Exec(context.Background(), q,
+		uid, username, username+"@example.com",
+		"$argon2id$v=19$m=65536,t=1,p=4$AAAAAAAAAAAAAAAAAAAAAA$BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"operator",
+	); err != nil {
+		t.Fatalf("seed admin %q: %v", username, err)
+	}
+}
 
 // TestPgStore_Insert_AssignsID verifies the pg path
 // mints a fresh bigserial id and the row round-trips
@@ -95,12 +131,17 @@ func TestPgStore_List_FilterByAction(t *testing.T) {
 	store := NewPgStore(pool)
 
 	now := time.Now().UTC()
-	// Two real UUIDs for the actor filter to work;
-	// the schema's `actor_id` is a UUID FK on
-	// admins(id) and rejects non-UUID strings with
-	// an "invalid UUID length" error.
+	// Two real UUIDs for the actor filter to work.
+	// The schema's `actor_id` is a UUID FK on
+	// admins(id) (ON DELETE SET NULL), so the
+	// referenced admin rows have to exist before
+	// the audit inserts. We seed two minimal
+	// admins — the test is about the audits
+	// table, so a bare INSERT is fine.
 	const actorAlice = "11111111-1111-4111-8111-111111111111"
 	const actorBob = "22222222-2222-4222-8222-222222222222"
+	seedAdmin(t, pool, actorAlice, "alice")
+	seedAdmin(t, pool, actorBob, "bob")
 	mk := func(at time.Time, action, resourceType, actorID string) {
 		_, err := store.Insert(context.Background(), Entry{
 			Action: action, ResourceType: resourceType, ActorID: actorID,
