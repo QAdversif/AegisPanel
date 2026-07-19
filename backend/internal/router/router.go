@@ -16,6 +16,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
@@ -40,6 +41,7 @@ func Build(
 	subscriptionSvc *subscription.Service,
 	panelCfgSvc *panelcfg.Service,
 	auditsSvc *audits.Service,
+	bootstrapSvc *bootstrap.Service,
 	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -69,7 +71,7 @@ func Build(
 		// Nodes CRUD — Phase 0. All routes are protected by the
 		// auth middleware + ScopeNodes requirement (applied
 		// inside nodes.Router itself).
-		r.Mount("/nodes", nodes.Router(nodesSvc, authSvc.Middleware()))
+		r.Mount("/nodes", nodes.Router(nodesSvc, authSvc.Middleware(), bootstrapSvc))
 
 		// Per-node inbounds — Phase 1. The inbounds router
 		// is mounted under the nodeId URL parameter so

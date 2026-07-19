@@ -340,7 +340,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil /* bootstrapSvc — wired in v0.3.0 PR */, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
