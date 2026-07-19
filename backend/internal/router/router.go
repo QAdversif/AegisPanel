@@ -80,6 +80,14 @@ func Build(
 		// the nodes service as a dependency.
 		r.Mount("/hosts", hosts.Router(hostsSvc, authSvc.Middleware()))
 
+		// Users CRUD — admin surface. List / get / create /
+		// patch / rotate-token. The /api/v1/users/{id}/sub
+		// sub-token endpoint (the public, per-user
+		// subscription URL) is mounted separately above
+		// under the subscription Router; that path is
+		// unauthenticated by design.
+		r.Mount("/users", subscription.AdminRouter(subscriptionSvc, authSvc.Middleware()))
+
 		// Subscription URL — the public endpoint that
 		// turns a sub_token into a base64 / sing-box /
 		// Clash / html payload. Mounted under /sub so

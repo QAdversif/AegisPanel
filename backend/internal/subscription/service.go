@@ -244,6 +244,72 @@ func newRandomSubToken() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
+// CreateUserInput is the admin-facing shape for
+// creating a user. The Service generates the
+// `sub_token` (32 hex chars) — the caller never
+// supplies one.
+type CreateUserInput struct {
+	Username          string
+	Status            UserStatus
+	PlanID            *uuid.UUID
+	ExpireAt          *time.Time
+	TrafficLimitBytes int64
+	DeviceLimit       int
+	HostsAllowlist    []uuid.UUID
+	HostsBlocklist    []uuid.UUID
+}
+
+// CreateUser validates the input, generates a fresh
+// sub_token, and inserts the row. The Service does
+// NOT set Username uniqueness here — the Store's
+// unique-index check is the source of truth.
+func (s *Service) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
+	if in.Username == "" {
+		return nil, &ValidationError{Field: "username", Message: "must not be empty"}
+	}
+	if len(in.Username) > 64 {
+		return nil, &ValidationError{Field: "username", Message: "must be 64 chars or fewer"}
+	}
+	status := in.Status
+	if status == "" {
+		status = UserStatusActive
+	}
+	deviceLimit := in.DeviceLimit
+	if deviceLimit < 0 {
+		deviceLimit = 0
+	}
+	if deviceLimit > 64 {
+		deviceLimit = 64
+	}
+	tok, err := newRandomSubToken()
+	if err != nil {
+		return nil, fmt.Errorf("create user: generate token: %w", err)
+	}
+	u := &User{
+		Username:              in.Username,
+		Status:                status,
+		PlanID:                in.PlanID,
+		ExpireAt:              in.ExpireAt,
+		TrafficLimitBytes:     in.TrafficLimitBytes,
+		DeviceLimit:           deviceLimit,
+		HostsAllowlist:        in.HostsAllowlist,
+		HostsBlocklist:        in.HostsBlocklist,
+		SubToken:              tok,
+		SubTokenPrev:          "",
+		SubTokenPrevExpiresAt: nil,
+	}
+	if err := s.store.CreateUser(ctx, u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// ListUsers returns every user in the system,
+// sorted by created_at ascending.
+func (s *Service) ListUsers(ctx context.Context) ([]*User, error) {
+	return s.store.ListUsers(ctx)
+}
+
 // ResolveHostsForUser returns every host the user is
 // entitled to see, deduplicated and sorted by host
 // priority ascending (lower = higher in the list, per

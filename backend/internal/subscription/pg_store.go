@@ -57,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -272,6 +273,167 @@ func (s *PgStore) ListPoolMembers(ctx context.Context, poolID uuid.UUID) ([]Pool
 			return nil, fmt.Errorf("scan pool member: %w", err)
 		}
 		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return out, nil
+}
+
+// --- writes on users ---------------------------------------------------
+
+// CreateUser inserts a new row. A zero id is replaced
+// with a fresh uuid.New() before the INSERT. The
+// migration's UNIQUE indexes on `username` and
+// `sub_token` are enforced by the database; a
+// collision surfaces as a 23505 SQLSTATE mapped to
+// ErrDuplicate. The fields the Go model does not yet
+// expose (external_id, last_reset_at, telegram_id,
+// email) are set to NULL on insert — they are
+// nullable columns in the schema.
+func (s *PgStore) CreateUser(ctx context.Context, u *User) error {
+	if u == nil {
+		return fmt.Errorf("create user: nil")
+	}
+	if u.Username == "" {
+		return fmt.Errorf("create user: username is required")
+	}
+	if u.SubToken == "" {
+		return fmt.Errorf("create user: sub_token is required")
+	}
+	if u.ID == uuid.Nil {
+		u.ID = uuid.New()
+	}
+	var (
+		planID                = u.PlanID
+		expireAt              = u.ExpireAt
+		subTokenPrev          = u.SubTokenPrev
+		subTokenPrevExpiresAt = u.SubTokenPrevExpiresAt
+		subTokenRotatedAt     = u.SubTokenRotatedAt
+	)
+	allowJSON, _ := json.Marshal(u.HostsAllowlist)
+	blockJSON, _ := json.Marshal(u.HostsBlocklist)
+	const q = `
+		INSERT INTO users (
+			id, username, status, plan_id, expire_at,
+			traffic_limit_bytes, traffic_used_bytes, device_limit,
+			hosts_allowlist, hosts_blocklist,
+			sub_token, sub_token_prev, sub_token_prev_expires_at,
+			sub_token_rotated_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8,
+			$9, $10,
+			$11, $12, $13,
+			$14, NOW(), NOW()
+		)`
+	_, err := s.pool.Exec(ctx, q,
+		u.ID, u.Username, string(u.Status), planID, expireAt,
+		u.TrafficLimitBytes, u.TrafficUsedBytes, u.DeviceLimit,
+		allowJSON, blockJSON,
+		u.SubToken, subTokenPrev, subTokenPrevExpiresAt,
+		subTokenRotatedAt,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return fmt.Errorf("%w: %s", ErrDuplicate, pgErr.ConstraintName)
+		}
+		return fmt.Errorf("create user: %w", err)
+	}
+	// Read back so the caller sees the canonical
+	// CreatedAt / UpdatedAt.
+	canonical, err := s.GetUserByID(ctx, u.ID)
+	if err != nil {
+		return fmt.Errorf("create user read-back: %w", err)
+	}
+	*u = *canonical
+	return nil
+}
+
+// UpdateUser applies a per-field patch. The query
+// builds the SET clause from the non-nil fields; the
+// result is a fresh read-back. The migration's UNIQUE
+// indexes are enforced by the database (a 23505 maps
+// to ErrDuplicate).
+func (s *PgStore) UpdateUser(ctx context.Context, id uuid.UUID, patch UpdateUserPatch) (*User, error) {
+	// Build the SET clause dynamically. The SET
+	// list always includes `updated_at = NOW()` so
+	// every successful patch refreshes the row.
+	setClauses := []string{"updated_at = NOW()"}
+	args := []any{}
+	next := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if patch.Username != nil {
+		setClauses = append(setClauses, "username = "+next(*patch.Username))
+	}
+	if patch.Status != nil {
+		setClauses = append(setClauses, "status = "+next(string(*patch.Status)))
+	}
+	if patch.PlanID != nil {
+		setClauses = append(setClauses, "plan_id = "+next(*patch.PlanID))
+	}
+	if patch.ExpireAt != nil {
+		setClauses = append(setClauses, "expire_at = "+next(*patch.ExpireAt))
+	}
+	if patch.TrafficLimit != nil {
+		setClauses = append(setClauses, "traffic_limit_bytes = "+next(*patch.TrafficLimit))
+	}
+	if patch.DeviceLimit != nil {
+		setClauses = append(setClauses, "device_limit = "+next(*patch.DeviceLimit))
+	}
+	if patch.HostsAllowlist != nil {
+		allowJSON, _ := json.Marshal(*patch.HostsAllowlist)
+		setClauses = append(setClauses, "hosts_allowlist = "+next(allowJSON))
+	}
+	if patch.HostsBlocklist != nil {
+		blockJSON, _ := json.Marshal(*patch.HostsBlocklist)
+		setClauses = append(setClauses, "hosts_blocklist = "+next(blockJSON))
+	}
+	if len(setClauses) == 1 {
+		// No-op patch (only updated_at). Read back
+		// and return — the user might still want
+		// the canonical row.
+		return s.GetUserByID(ctx, id)
+	}
+	args = append(args, id)
+	q := fmt.Sprintf(`
+		UPDATE users
+		SET %s
+		WHERE id = $%d
+	`, strings.Join(setClauses, ", "), len(args))
+	tag, err := s.pool.Exec(ctx, q, args...)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicate, pgErr.ConstraintName)
+		}
+		return nil, fmt.Errorf("update user: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	return s.GetUserByID(ctx, id)
+}
+
+// ListUsers returns every user, sorted by created_at
+// ascending. The slice is freshly allocated.
+func (s *PgStore) ListUsers(ctx context.Context) ([]*User, error) {
+	q := userSelect + " ORDER BY created_at ASC, id ASC"
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*User, 0)
+	for rows.Next() {
+		u, err := scanUserRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
