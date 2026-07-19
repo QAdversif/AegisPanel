@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
@@ -38,6 +39,7 @@ func Build(
 	inboundsSvc *inbounds.Service,
 	subscriptionSvc *subscription.Service,
 	panelCfgSvc *panelcfg.Service,
+	auditsSvc *audits.Service,
 	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -108,6 +110,12 @@ func Build(
 		// /rotate-to for an explicit path, /reset to
 		// restore the default empty sub_path.
 		r.Mount("/panelcfg", panelcfg.Router(panelCfgSvc, authSvc.Middleware()))
+
+		// Audit log. Read-only. GET / lists entries
+		// (with filters); GET /{id} returns the
+		// full entry with before/after. v0.3+ adds
+		// the mutating-handler write call-sites.
+		r.Mount("/audits", audits.Router(auditsSvc, authSvc.Middleware()))
 
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)
