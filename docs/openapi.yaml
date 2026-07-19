@@ -1,15 +1,27 @@
 openapi: 3.0.3
 info:
   title: Aegis Panel API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Aegis — self-hosted VPN control panel. Multi-core (sing-box / Xray /
     Hysteria 2), BYO Node, Cascade Topology, MCP-driven, decoy sites,
     port masquerading.
 
-    This document covers the Phase 1 surface — currently the auth
-    subrouter. Subsequent phases will add /nodes, /users,
-    /subscriptions, /cabinet, /webhooks.
+    v0.2.0 surface (this document):
+      - /auth/*  (login, refresh, me)
+      - /nodes/*  (CRUD — admin)
+      - /nodes/{nodeId}/inbounds/*  (CRUD — admin)
+      - /hosts/*  (CRUD — admin)
+      - /users/*  (CRUD + rotate-token — admin)
+      - /panelcfg/*  (sub_path rotation — admin)
+      - /sub/{token}  (public subscription render — anonymous)
+      - /health  (liveness — anonymous)
+      - /cores  (provider catalog — admin)
+
+    Out of scope for this spec (added in subsequent v0.2.x PRs):
+      - /admin/*  (admin principal CRUD — PR-J)
+      - /audits/*  (audit log UI — PR-M)
+      - /cabinet/*  (end-user cabinet)
 
   license:
     name: AGPL-3.0-or-later
@@ -27,6 +39,22 @@ security:
   - BearerAuth: []
 
 paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe
+      description: |
+        Returns the panel's health status. Anonymous (no Bearer
+        required); used by the load balancer and the CI smoke test.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
   /auth/login:
     post:
       tags: [auth]
@@ -142,6 +170,827 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /cores:
+    get:
+      tags: [meta]
+      summary: Core provider catalog
+      description: |
+        Returns the list of registered sing-box / Xray / Hysteria 2
+        provider names plus the in-development (noop) dev provider
+        when the panel is in `AEGIS_ENV != production`. The UI uses
+        this to render the "core provider" badge on the Nodes page.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoreListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes:
+    get:
+      tags: [nodes]
+      summary: List nodes
+      description: |
+        Every VPN node registered with the panel. The list is sorted
+        by `name` ascending. v0.1.0 does not paginate — the panel
+        scale is "tens of nodes" so the full list is fine.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [nodes]
+      summary: Register a node
+      description: |
+        Register a new VPN node with the panel. The agent
+        registration handshake is a separate step that lands with
+        the BYO Node flow in v0.3 (per the v9 §3.3 roadmap); for now
+        the panel stores the node metadata and the operator SSHes
+        into the node by hand to install the agent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Name or address already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [nodes]
+      summary: Get a node
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [nodes]
+      summary: Update a node
+      description: |
+        Partial update (the same PUT semantics the rest of the
+        v0.2.0 CRUD surfaces use). Absent keys mean "leave alone".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [nodes]
+      summary: Delete a node
+      responses:
+        '204':
+          description: No content
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes/{nodeId}/inbounds:
+    parameters:
+      - name: nodeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [inbounds]
+      summary: List inbounds for a node
+      description: |
+        Every inbound registered on the given node. The list is
+        sorted by `name` ascending. v0.1.0 does not paginate.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [inbounds]
+      summary: Register an inbound
+      description: |
+        Create a new protocol listener on the given node. The
+        `params` field is a free-form JSON blob whose schema is
+        owned by the sing-box provider; v0.2.0 surfaces a generic
+        JSON editor for it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inbound'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Name or port already in use on this node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /nodes/{nodeId}/inbounds/{id}:
+    parameters:
+      - name: nodeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [inbounds]
+      summary: Get an inbound
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inbound'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [inbounds]
+      summary: Update an inbound
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inbound'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [inbounds]
+      summary: Delete an inbound
+      responses:
+        '204':
+          description: No content
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /hosts:
+    get:
+      tags: [hosts]
+      summary: List hosts
+      description: |
+        Every host (bundle of endpoints) registered with the panel.
+        v0.1.0 does not paginate.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [hosts]
+      summary: Create a host
+      description: |
+        Create a new host. The `endpoints` array is required
+        (cross-field validation: 1 endpoint for `type=direct`,
+        2+ endpoints plus a balancer strategy for `type=balancer`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HostCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Host'
+        '400':
+          description: Validation error (including cross-field)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /hosts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [hosts]
+      summary: Get a host
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Host'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags: [hosts]
+      summary: Update a host
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HostUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Host'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [hosts]
+      summary: Delete a host
+      responses:
+        '204':
+          description: No content
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users:
+    get:
+      tags: [users]
+      summary: List users
+      description: |
+        Every end-user VPN account registered with the panel.
+        v0.1.0 does not paginate.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [users]
+      summary: Create a user
+      description: |
+        Create a new end-user account. The server generates a
+        fresh `sub_token` (32 hex chars) and returns it in the
+        response — the operator hands the token to the user out-
+        of-band (e.g. via the admin UI's "show once" dialog).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [users]
+      summary: Get a user
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [users]
+      summary: Update a user
+      description: |
+        Partial update (the same PATCH semantics the v0.2 CRUD
+        surfaces use). Use the `sub_token` PATCH to rotate the
+        sub_token; use the `status: deleted` PATCH to soft-delete
+        the user. The dedicated `POST /users/{id}/rotate-token`
+        endpoint is a convenience for the rotation case.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/{id}/rotate-token:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [users]
+      summary: Rotate the user's sub_token
+      description: |
+        Generate a fresh sub_token. The previous token stops
+        working immediately (no grace window) — the operator
+        hands the new token to the user out-of-band and the user
+        re-imports the URL on every device.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /panelcfg:
+    get:
+      tags: [panelcfg]
+      summary: Get the active sub_path
+      description: |
+        Returns the current URL prefix for the subscription
+        endpoint. An empty string means the documented
+        `/api/v1/sub/{token}` path is in use (the default).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelPathConfig'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /panelcfg/rotate:
+    post:
+      tags: [panelcfg]
+      summary: Rotate to a fresh random sub_path
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelPathConfig'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PanelPathRotateRequest'
+
+  /panelcfg/rotate-to:
+    post:
+      tags: [panelcfg]
+      summary: Rotate to an explicit sub_path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PanelPathRotateToRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelPathConfig'
+        '400':
+          description: Invalid path (length or charset)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /panelcfg/reset:
+    post:
+      tags: [panelcfg]
+      summary: Reset to the default empty sub_path
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PanelPathConfig'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /sub/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [subscription]
+      summary: Render a subscription
+      description: |
+        The public subscription render endpoint. The
+        `{token}` is the user's `sub_token` (the credential).
+        The `?target=` query parameter selects the wire
+        format (`base64` default, `singbox`, `clash`, `html`).
+        The endpoint is rate-limited per sub_token (1 rps
+        sustained, 5 burst by default); an over-budget
+        request returns 429 with a `Retry-After` header.
+      security: []
+      parameters:
+        - name: target
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [base64, singbox, clash, html]
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: 'vless://uuid@node1.example.com:443?type=tcp&security=none#node1'
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              example:
+                outbounds:
+                  - type: vless
+                    server: node1.example.com
+                    port: 443
+            text/yaml:
+              schema:
+                type: string
+              example: |
+                proxies:
+                  - name: "node1"
+                    type: vless
+                    server: node1.example.com
+                    port: 443
+            text/html:
+              schema:
+                type: string
+              example: |
+                <!doctype html>
+                <html><body><h1>AegisPanel subscription</h1></body></html>
+        '400':
+          description: Missing sub_token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: User is not in a live state (disabled / expired / deleted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown sub_token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '415':
+          description: Unsupported ?target= value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: |
+            Rate limit exceeded. The `Retry-After` header
+            contains the wall-clock seconds to wait before
+            retrying.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -154,6 +1003,55 @@ components:
         `aud=aegis-panel/v1`).
 
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: |
+            Human-readable error message. For security reasons
+            the auth endpoints collapse several failure modes
+            into a single generic message; do not branch on
+            the message text.
+
+    HealthResponse:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+          example: 0.0.0-dev
+        commit:
+          type: string
+          example: deadbeef
+
+    CoreListResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoreProvider'
+
+    CoreProvider:
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          example: singbox
+        version:
+          type: string
+          example: 1.8.0
+        dev:
+          type: boolean
+          description: True when this is a development-only provider (e.g. noop).
+
     LoginRequest:
       type: object
       required: [username, password]
@@ -201,7 +1099,7 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, read, write, nodes, users, subscriptions]
+            enum: [admin, read, write, nodes, users, subscriptions, hosts]
 
     MeResponse:
       type: object
@@ -217,16 +1115,596 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, read, write, nodes, users, subscriptions]
+            enum: [admin, read, write, nodes, users, subscriptions, hosts]
 
-    Error:
+    NodeState:
+      type: string
+      enum: [new, online, draining, offline, disabled]
+
+    Node:
       type: object
-      required: [error]
+      required: [id, name, region, state, address, createdAt, updatedAt]
       properties:
-        error:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 64
+        region:
+          type: string
+          maxLength: 64
+        state:
+          $ref: '#/components/schemas/NodeState'
+        address:
+          type: string
+          description: 'SSH endpoint (host:port) the panel uses to reach the node.'
+        capacityHint:
+          type: string
+          maxLength: 64
+        tags:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    NodeCreateRequest:
+      type: object
+      required: [name, region, address]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        region:
+          type: string
+          minLength: 1
+          maxLength: 64
+        address:
+          type: string
+          minLength: 1
+        capacityHint:
+          type: string
+          maxLength: 64
+
+    NodeUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        region:
+          type: string
+          minLength: 1
+          maxLength: 64
+        address:
+          type: string
+        state:
+          $ref: '#/components/schemas/NodeState'
+        capacityHint:
+          type: string
+          maxLength: 64
+        tags:
+          type: array
+          items:
+            type: string
+
+    NodeListResponse:
+      type: object
+      required: [nodes]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Node'
+
+    Protocol:
+      type: string
+      enum: [vless, hysteria2, shadowsocks, trojan]
+
+    Inbound:
+      type: object
+      required: [id, nodeId, name, protocol, listen, listenPort, enabled, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nodeId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        listen:
+          type: string
+          example: '::'
+        listenPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        listenPorts:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        params:
+          type: object
+          additionalProperties: true
+          description: |
+            Protocol-specific configuration. The shape is owned
+            by the sing-box provider; v0.2.0 surfaces a generic
+            JSON editor for it.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    InboundCreateRequest:
+      type: object
+      required: [name, protocol, listenPort]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        listen:
+          type: string
+        listenPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        listenPorts:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        params:
+          type: object
+          additionalProperties: true
+
+    InboundUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        listen:
+          type: string
+        listenPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        listenPorts:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+            maximum: 65535
+        enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        params:
+          type: object
+          additionalProperties: true
+
+    InboundListResponse:
+      type: object
+      required: [inbounds]
+      properties:
+        inbounds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Inbound'
+
+    HostType:
+      type: string
+      enum: [direct, balancer]
+
+    BalancerStrategy:
+      type: string
+      enum: [round_robin, least_loaded, random, least_ping, urltest]
+
+    Balancer:
+      type: object
+      required: [strategy]
+      properties:
+        strategy:
+          $ref: '#/components/schemas/BalancerStrategy'
+        healthcheckUrl:
+          type: string
+          format: uri
+        healthcheckIntervalSec:
+          type: integer
+          minimum: 1
+          maximum: 3600
+        failoverEndpointIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    Endpoint:
+      type: object
+      required: [nodeId, inboundId, weight]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nodeId:
+          type: string
+          format: uuid
+        inboundId:
+          type: string
+          format: uuid
+        weight:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 1
+        address:
+          type: array
+          items:
+            type: string
+          maxItems: 8
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        sni:
+          type: array
+          items:
+            type: string
+          maxItems: 8
+        host:
+          type: array
+          items:
+            type: string
+          maxItems: 8
+        path:
+          type: string
+          maxLength: 256
+        downloadHostId:
+          type: string
+          format: uuid
+
+    Host:
+      type: object
+      required: [id, remark, type, enabled, priority, endpoints, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        remark:
+          type: string
+          maxLength: 64
+        displayName:
+          type: string
+          maxLength: 128
+        type:
+          $ref: '#/components/schemas/HostType'
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        statusFilter:
+          type: array
+          items:
+            type: string
+            enum: [active, on_hold, expired, limited, disabled]
+        country:
+          type: string
+          maxLength: 2
+          description: ISO 3166-1 alpha-2 country code.
+        city:
+          type: string
+          maxLength: 64
+        tags:
+          type: array
+          items:
+            type: string
+        endpoints:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        balancer:
+          $ref: '#/components/schemas/Balancer'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    HostCreateRequest:
+      type: object
+      required: [remark, type, endpoints]
+      properties:
+        remark:
+          type: string
+          minLength: 1
+          maxLength: 64
+        displayName:
+          type: string
+          maxLength: 128
+        type:
+          $ref: '#/components/schemas/HostType'
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        statusFilter:
+          type: array
+          items:
+            type: string
+            enum: [active, on_hold, expired, limited, disabled]
+        country:
+          type: string
+          maxLength: 2
+        city:
+          type: string
+          maxLength: 64
+        tags:
+          type: array
+          items:
+            type: string
+        endpoints:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        balancer:
+          $ref: '#/components/schemas/Balancer'
+
+    HostUpdateRequest:
+      type: object
+      properties:
+        remark:
+          type: string
+          minLength: 1
+          maxLength: 64
+        displayName:
+          type: string
+          maxLength: 128
+        type:
+          $ref: '#/components/schemas/HostType'
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        statusFilter:
+          type: array
+          items:
+            type: string
+            enum: [active, on_hold, expired, limited, disabled]
+        country:
+          type: string
+          maxLength: 2
+        city:
+          type: string
+          maxLength: 64
+        tags:
+          type: array
+          items:
+            type: string
+        endpoints:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        balancer:
+          $ref: '#/components/schemas/Balancer'
+
+    HostListResponse:
+      type: object
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Host'
+
+    UserLifecycleStatus:
+      type: string
+      enum: [active, grace, disabled, expired, deleted]
+
+    User:
+      type: object
+      required: [id, username, status, trafficLimitBytes, trafficUsedBytes, deviceLimit, subToken, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        status:
+          $ref: '#/components/schemas/UserLifecycleStatus'
+        planId:
+          type: string
+          format: uuid
+        expireAt:
+          type: string
+          format: date-time
+        trafficLimitBytes:
+          type: integer
+          format: int64
+        trafficUsedBytes:
+          type: integer
+          format: int64
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+        hostsAllowlist:
+          type: array
+          items:
+            type: string
+            format: uuid
+        hostsBlocklist:
+          type: array
+          items:
+            type: string
+            format: uuid
+        subToken:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        subTokenRotatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserCreateRequest:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        status:
+          $ref: '#/components/schemas/UserLifecycleStatus'
+        planId:
+          type: string
+          format: uuid
+        expireAt:
+          type: string
+          format: date-time
+        trafficLimitBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        status:
+          $ref: '#/components/schemas/UserLifecycleStatus'
+        planId:
+          type: string
+          format: uuid
+        clearPlanId:
+          type: boolean
+        expireAt:
+          type: string
+          format: date-time
+        clearExpireAt:
+          type: boolean
+        trafficLimitBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+
+    UserListResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+
+    PanelPathConfig:
+      type: object
+      required: [id, subPath, rotatedAt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subPath:
           type: string
           description: |
-            Human-readable error message. Note that for security
-            reasons the auth endpoints collapse several
-            failure modes into a single generic message; do
-            not branch on the message text.
+            The current URL prefix. Empty = the default
+            `/api/v1/sub/{token}` path. Non-empty = a rotated
+            secret prefix.
+        rotatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    PanelPathRotateRequest:
+      type: object
+      properties:
+        graceWindowSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: |
+            Grace window during which the OLD sub_path is
+            still served. 0 = no grace. The server caps at
+            1 hour.
+
+    PanelPathRotateToRequest:
+      type: object
+      required: [subPath]
+      properties:
+        subPath:
+          type: string
+          minLength: 4
+          maxLength: 64
+          pattern: '^[a-z0-9-]+$'
+          description: |
+            The new sub_path. Must match [a-z0-9-]{4,64}.
+        graceWindowSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600

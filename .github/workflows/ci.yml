@@ -136,6 +136,20 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile=false
 
+      - name: Check codegen up to date
+        # Fails the build if `pnpm run codegen` would
+        # produce a diff against the committed
+        # `src/types/api.d.ts`. The PR author must
+        # run `pnpm codegen` locally and commit the
+        # result whenever `docs/openapi.yaml` changes.
+        # The check is `pnpm run codegen:check`, a
+        # cross-platform Node script that compares the
+        # committed file against a fresh regeneration
+        # (no `git diff` so a CI checkout that has
+        # uncommitted local changes does not produce
+        # false positives).
+        run: pnpm run codegen:check
+
       - name: Type-check
         run: pnpm run type-check
 
