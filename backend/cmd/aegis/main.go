@@ -13,12 +13,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,6 +70,17 @@ func main() {
 	// fully-initialised runtime to run.
 	if len(os.Args) >= 2 && os.Args[1] == "migrate" {
 		runMigrate(os.Args[2:])
+		return
+	}
+
+	// `aegis admin …` is a second maintenance subcommand
+	// for managing the panel principals. It needs the
+	// auth.Store (so it can hash + persist) but does not
+	// need the HTTP server or observability. Same
+	// rationale as `migrate`: a maintenance command
+	// should not require a fully-booted panel.
+	if len(os.Args) >= 2 && os.Args[1] == "admin" {
+		runAdmin(os.Args[2:])
 		return
 	}
 
@@ -168,16 +181,26 @@ func main() {
 		authStore = auth.NewPgStore(pool)
 		log.Info().Msg("auth: using pgx-backed store (PgStore)")
 	default:
+		// Dev seed admin. Phase 0 only — production
+		// uses the pg backend with a real operator
+		// minted via `aegis admin add <username>`.
+		// Refuse to boot in production with the dev
+		// password: a real install must not run with
+		// a known-public credential.
+		if cfg.Env == "production" {
+			log.Fatal().Msg("auth: cannot start in production with the dev-only MemoryStore; set AEGIS_AUTH_BACKEND=pg and run `aegis admin add` to seed the first operator")
+		}
 		authStore = auth.NewMemoryStore().WithUser(&auth.User{
-			ID:       "u-bootstrap",
-			Username: "admin",
-			// Dev seed password — Phase 0 only. Phase 1+ forces a
-			// password change on first login and reads from pgx.
+			ID:           "u-bootstrap",
+			Username:     "admin",
+			Email:        "admin@localhost",
 			PasswordHash: mustHash("aegis-dev-password"),
-			Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite},
+			Role:         "super-admin",
+			Enabled:      true,
+			Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite, auth.ScopeNodes, auth.ScopeUsers, auth.ScopeSubscriptions, auth.ScopeHosts},
 			CreatedAt:    time.Now().UTC(),
 		})
-		log.Info().Msg("auth: using in-memory store (MemoryStore, dev only)")
+		log.Warn().Msg("auth: using in-memory store with the dev seed (username: admin, password: aegis-dev-password). DO NOT use in production.")
 	}
 	authSvc := auth.NewService(authSigner, authStore)
 
@@ -392,4 +415,241 @@ func migrateUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  aegis migrate up    [DIR]    apply every .sql in DIR (default migrations)")
 	fmt.Fprintln(os.Stderr, "  aegis migrate down  FILE    roll back FILE inside migrations/ (or DIR)")
+}
+
+// runAdmin implements the `aegis admin …` subcommand.
+// Like migrate, it runs without the rest of the boot
+// sequence (HTTP server, observability, …). The Store
+// is selected at runtime from AEGIS_AUTH_BACKEND; the
+// DSN is read from AEGIS_POSTGRES_DSN for the pg path.
+//
+// Usage:
+//
+//	aegis admin add <username> --email <email> [--role <role>]
+//	aegis admin passwd <username>
+//	aegis admin list
+//
+// `add` and `passwd` prompt for the password on the
+// terminal; stdin is read with the standard readline
+// semantics. The plaintext never leaves the process —
+// it is hashed with argon2id before the Store sees it.
+func runAdmin(args []string) {
+	if len(args) == 0 {
+		adminUsage()
+		os.Exit(2)
+	}
+	authBackend := os.Getenv("AEGIS_AUTH_BACKEND")
+	if authBackend == "" {
+		authBackend = "memory"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var authStore auth.Store
+	switch authBackend {
+	case "pg":
+		dsn := os.Getenv("AEGIS_POSTGRES_DSN")
+		if dsn == "" {
+			log.Fatal().Msg("admin: AEGIS_POSTGRES_DSN is not set (required by AEGIS_AUTH_BACKEND=pg)")
+		}
+		pool, err := db.Open(ctx, dsn)
+		if err != nil {
+			log.Fatal().Err(err).Msg("admin: db.Open")
+		}
+		defer pool.Close()
+		authStore = auth.NewPgStore(pool)
+	default:
+		// Memory store — useful for the dev / CI flow
+		// but the seeded admin is not persisted across
+		// restarts. The CLI prints a warning so the
+		// operator does not mistake it for a real
+		// install.
+		log.Warn().Msg("admin: AEGIS_AUTH_BACKEND not set, using in-memory store (changes will not persist)")
+		authStore = auth.NewMemoryStore()
+	}
+	svc := auth.NewService(auth.NewSigner("cli-tool-not-a-jwt-signer"), authStore)
+
+	switch args[0] {
+	case "add":
+		runAdminAdd(ctx, svc, args[1:])
+	case "passwd":
+		runAdminPasswd(ctx, svc, args[1:])
+	case "list":
+		runAdminList(ctx, svc)
+	default:
+		adminUsage()
+		os.Exit(2)
+	}
+}
+
+// runAdminAdd parses the add-subcommand flags, prompts
+// for a password, and persists the new admin. Flags:
+//
+//	--email   <email>   (required)
+//	--role    <role>    ('super-admin' | 'operator' | 'viewer', default 'operator')
+//
+// The password is read from stdin (the CLI is meant to
+// be invoked from a shell where the operator can pipe
+// the password in or type it directly). v0.3 adds
+// /dev/tty echo suppression for a true `passwd(1)`-like
+// experience.
+func runAdminAdd(ctx context.Context, svc *auth.Service, args []string) {
+	var (
+		username string
+		email    string
+		role     string
+	)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--email":
+			if i+1 >= len(args) {
+				log.Fatal().Msg("admin add: --email requires a value")
+			}
+			email = args[i+1]
+			i++
+		case "--role":
+			if i+1 >= len(args) {
+				log.Fatal().Msg("admin add: --role requires a value")
+			}
+			role = args[i+1]
+			i++
+		default:
+			if username == "" {
+				username = args[i]
+			} else {
+				log.Fatal().Str("arg", args[i]).Msg("admin add: unexpected positional argument")
+			}
+		}
+	}
+	if username == "" {
+		log.Fatal().Msg("admin add: missing username")
+	}
+	if email == "" {
+		log.Fatal().Msg("admin add: missing --email")
+	}
+	if role == "" {
+		role = "operator"
+	}
+	plain, err := promptPassword("New password: ")
+	if err != nil {
+		log.Fatal().Err(err).Msg("admin add: read password")
+	}
+	confirm, err := promptPassword("Confirm:     ")
+	if err != nil {
+		log.Fatal().Err(err).Msg("admin add: read password")
+	}
+	if plain != confirm {
+		log.Fatal().Msg("admin add: passwords do not match")
+	}
+	if len(plain) < 8 {
+		log.Fatal().Msg("admin add: password is too short (min 8 chars)")
+	}
+	u, err := svc.CreateAdmin(ctx, auth.CreateAdminInput{
+		Username:  username,
+		Email:     email,
+		Plaintext: plain,
+		Role:      role,
+	})
+	if err != nil {
+		if errors.Is(err, auth.ErrConflict) {
+			log.Fatal().Err(err).Msg("admin add: conflict (username or email already exists)")
+		}
+		log.Fatal().Err(err).Msg("admin add: failed")
+	}
+	log.Info().
+		Str("id", u.ID).
+		Str("username", u.Username).
+		Str("email", u.Email).
+		Str("role", u.Role).
+		Msg("admin add: created")
+}
+
+// runAdminPasswd prompts for a new password and rotates
+// the existing admin's hash. The username must already
+// exist in the Store. There is no "current password"
+// check — the CLI is for the operator who already has
+// shell access; the on-disk hash is the source of truth.
+func runAdminPasswd(ctx context.Context, svc *auth.Service, args []string) {
+	if len(args) == 0 {
+		log.Fatal().Msg("admin passwd: missing username")
+	}
+	if len(args) > 1 {
+		log.Fatal().Msg("admin passwd: too many arguments")
+	}
+	username := args[0]
+	plain, err := promptPassword("New password: ")
+	if err != nil {
+		log.Fatal().Err(err).Msg("admin passwd: read password")
+	}
+	confirm, err := promptPassword("Confirm:     ")
+	if err != nil {
+		log.Fatal().Err(err).Msg("admin passwd: read password")
+	}
+	if plain != confirm {
+		log.Fatal().Msg("admin passwd: passwords do not match")
+	}
+	if len(plain) < 8 {
+		log.Fatal().Msg("admin passwd: password is too short (min 8 chars)")
+	}
+	u, err := svc.LookupByUsername(ctx, username)
+	if err != nil {
+		log.Fatal().Err(err).Str("username", username).Msg("admin passwd: user not found")
+	}
+	if err := svc.ChangePassword(ctx, u.ID, plain); err != nil {
+		log.Fatal().Err(err).Msg("admin passwd: failed")
+	}
+	log.Info().
+		Str("username", u.Username).
+		Msg("admin passwd: rotated")
+}
+
+// runAdminList dumps every user the Store knows about.
+// The output is human-readable, not machine-parseable;
+// this is a maintenance command, not a daily-driver
+// UI.
+func runAdminList(ctx context.Context, svc *auth.Service) {
+	users, err := svc.ListUsers(ctx)
+	if err != nil {
+		log.Fatal().Err(err).Msg("admin list: failed")
+	}
+	if len(users) == 0 {
+		log.Info().Msg("admin list: no users")
+		return
+	}
+	for _, u := range users {
+		log.Info().
+			Str("id", u.ID).
+			Str("username", u.Username).
+			Str("email", u.Email).
+			Str("role", u.Role).
+			Bool("enabled", u.Enabled).
+			Msg("admin")
+	}
+}
+
+// promptPassword reads a single line from stdin. v0.3
+// will replace this with a /dev/tty-echo-suppressed
+// reader that hides the password on the terminal (the
+// `passwd(1)` UX). For v0.2 the CLI is good enough for
+// scripted operators and the dev seed.
+func promptPassword(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func adminUsage() {
+	fmt.Fprintln(os.Stderr, "usage: aegis admin <add|passwd|list> [args]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  aegis admin add     <username> --email <email> [--role <role>]")
+	fmt.Fprintln(os.Stderr, "  aegis admin passwd  <username>")
+	fmt.Fprintln(os.Stderr, "  aegis admin list")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "The store is selected from AEGIS_AUTH_BACKEND (memory | pg).")
+	fmt.Fprintln(os.Stderr, "The pg path requires AEGIS_POSTGRES_DSN.")
 }

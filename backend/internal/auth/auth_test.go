@@ -4,6 +4,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,132 @@ func TestScopesHelpers(t *testing.T) {
 	got := s.Strings()
 	if len(got) != 2 {
 		t.Fatalf("Strings() = %v, want 2 unique entries", got)
+	}
+}
+
+// TestArgon2id_HashAndVerify exercises the password
+// verifier directly. The Login integration test covers
+// the happy path; this test pins the PHC string format
+// and the wrong-password branch.
+func TestArgon2id_HashAndVerify(t *testing.T) {
+	hash, err := HashPassword("hunter2-correct-horse")
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	// PHC format: `$argon2id$v=19$m=...,t=...,p=...$salt$hash`.
+	// We assert the prefix only - the parameters and the
+	// salt are random per hash.
+	if !strings.HasPrefix(hash, "$argon2id$v=19$m=") {
+		t.Fatalf("hash does not start with the argon2id PHC prefix: %q", hash)
+	}
+
+	u := &User{PasswordHash: hash}
+	if err := u.VerifyPassword("hunter2-correct-horse"); err != nil {
+		t.Fatalf("verify correct password: %v", err)
+	}
+	if err := u.VerifyPassword("nope"); err == nil {
+		t.Fatal("expected error for wrong password")
+	} else if !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("expected ErrUnauthorised, got %v", err)
+	}
+}
+
+// TestArgon2id_VerifyEmptyHash confirms the verifier
+// rejects a User with no hash (the "first admin" race).
+func TestArgon2id_VerifyEmptyHash(t *testing.T) {
+	u := &User{Username: "noone"}
+	if err := u.VerifyPassword("anything"); err == nil {
+		t.Fatal("expected error for empty hash")
+	}
+}
+
+// TestCreateUser_PasswordIsHashed confirms CreateAdmin
+// never persists the plaintext. The seed user is
+// reloaded through LookupUser; the new hash is a
+// different PHC string from the plaintext.
+func TestCreateUser_PasswordIsHashed(t *testing.T) {
+	svc := newTestService(t)
+	plaintext := "the-new-admin-password-9F3k!"
+	if _, err := svc.CreateAdmin(context.Background(), CreateAdminInput{
+		Username:  "alice",
+		Email:     "alice@example.com",
+		Plaintext: plaintext,
+		Role:      "operator",
+	}); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	// The plaintext must NOT appear in the stored
+	// PasswordHash. The PHC format encodes the hash,
+	// not the password.
+	stored, err := svc.store.LookupUser(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if strings.Contains(stored.PasswordHash, plaintext) {
+		t.Fatalf("plaintext appears in stored hash: %q", stored.PasswordHash)
+	}
+	// Login with the new admin must succeed.
+	if _, err := svc.Login(context.Background(), "alice", plaintext); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+}
+
+// TestCreateUser_DuplicateUsername confirms the Store
+// returns ErrConflict on a username collision.
+func TestCreateUser_DuplicateUsername(t *testing.T) {
+	svc := newTestService(t)
+	if _, err := svc.CreateAdmin(context.Background(), CreateAdminInput{
+		Username:  "admin",
+		Email:     "different@example.com",
+		Plaintext: "doesnt-matter",
+		Role:      "operator",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict on username collision, got %v", err)
+	}
+}
+
+// TestCreateUser_DuplicateEmail confirms the Store
+// returns ErrConflict on an email collision.
+func TestCreateUser_DuplicateEmail(t *testing.T) {
+	svc := newTestService(t)
+	if _, err := svc.CreateAdmin(context.Background(), CreateAdminInput{
+		Username:  "alice",
+		Email:     "admin@example.com", // not in the seed, so this is the first email
+		Plaintext: "x",
+		Role:      "operator",
+	}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if _, err := svc.CreateAdmin(context.Background(), CreateAdminInput{
+		Username:  "bob",
+		Email:     "admin@example.com", // collision
+		Plaintext: "x",
+		Role:      "operator",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict on email collision, got %v", err)
+	}
+}
+
+// TestChangePassword confirms ChangePassword hashes the
+// new plaintext, persists it, and the OLD password no
+// longer verifies.
+func TestChangePassword(t *testing.T) {
+	svc := newTestService(t)
+	u, err := svc.store.LookupUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	oldPassword := "hunter2-correct-horse"
+	newPassword := "rotated-2nd-factor-XK4p!"
+	if err := svc.ChangePassword(context.Background(), u.ID, newPassword); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	// Old password must no longer work.
+	if _, err := svc.Login(context.Background(), "admin", oldPassword); err == nil {
+		t.Fatal("old password still works after ChangePassword")
+	}
+	// New password must work.
+	if _, err := svc.Login(context.Background(), "admin", newPassword); err != nil {
+		t.Fatalf("new password does not work after ChangePassword: %v", err)
 	}
 }
