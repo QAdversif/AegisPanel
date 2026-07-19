@@ -26,6 +26,14 @@ import (
 // looks up a single row when the row is missing.
 var ErrNotFound = errors.New("subscription: not found")
 
+// ErrDuplicate is returned by CreateUser /
+// UpdateUser when a username or sub_token would
+// collide with an existing row. The Store's
+// uniqueness check is the first line of defense; the
+// database UNIQUE index is the second (a 23505 in the
+// pgx path maps to this error).
+var ErrDuplicate = errors.New("subscription: duplicate")
+
 // Store is the persistence boundary for users, plans,
 // and host pools.
 type Store interface {
@@ -45,6 +53,31 @@ type Store interface {
 	GetUserByPrevSubToken(ctx context.Context, token string) (*User, error)
 	// GetUserByID returns the user with the given id.
 	GetUserByID(ctx context.Context, id uuid.UUID) (*User, error)
+	// CreateUser inserts a new user row. The caller
+	// is responsible for filling every field on the
+	// passed User (id, username, status, plan_id,
+	// expire_at, traffic_limit_bytes, device_limit,
+	// sub_token, sub_token_prev, etc.). The Store
+	// enforces only the uniqueness invariants (no
+	// duplicate username, no duplicate sub_token) and
+	// returns ErrDuplicate for either violation. A
+	// zero id is allowed; the Store sets a fresh
+	// uuid.New() before the insert.
+	CreateUser(ctx context.Context, u *User) error
+	// UpdateUser applies a partial patch to the user
+	// with the given id. Fields left at the zero
+	// value of their pointer type are NOT touched;
+	// the patch is opt-in per field. A non-nil
+	// Username / SubToken must satisfy the same
+	// uniqueness invariants as CreateUser.
+	UpdateUser(ctx context.Context, id uuid.UUID, patch UpdateUserPatch) (*User, error)
+	// ListUsers returns every user in the system,
+	// sorted by created_at ascending (oldest first).
+	// Phase 0 returns the full list — the v0.2 admin
+	// UI does not paginate (panel scale is small
+	// enough). Pagination lands in v0.3 if the
+	// dashboard ever serves > 1k users.
+	ListUsers(ctx context.Context) ([]*User, error)
 	// UpdateSubToken rotates the user's sub_token:
 	// the current token is moved to `sub_token_prev`
 	// with `sub_token_prev_expires_at = now + grace`,
@@ -76,6 +109,21 @@ type Store interface {
 	// slice is freshly allocated; callers may mutate
 	// it.
 	ListPoolMembers(ctx context.Context, poolID uuid.UUID) ([]PoolMember, error)
+}
+
+// UpdateUserPatch is the per-field patch for
+// UpdateUser. Pointer types so the absence of a
+// value is distinguishable from the zero value;
+// the Store applies only the non-nil fields.
+type UpdateUserPatch struct {
+	Username       *string
+	Status         *UserStatus
+	PlanID         *uuid.UUID
+	ExpireAt       *time.Time
+	TrafficLimit   *int64
+	DeviceLimit    *int
+	HostsAllowlist *[]uuid.UUID
+	HostsBlocklist *[]uuid.UUID
 }
 
 // MemoryStore is the in-memory Store implementation. It
@@ -321,6 +369,123 @@ func (s *MemoryStore) GetUserByID(_ context.Context, id uuid.UUID) (out *User, e
 	}
 	cp := *u
 	return &cp, nil
+}
+
+// CreateUser inserts a new user. The caller is
+// responsible for filling every field. A zero id
+// is set to a fresh uuid.New() before the insert.
+// ErrDuplicate is returned for a username or
+// sub_token collision.
+func (s *MemoryStore) CreateUser(_ context.Context, u *User) error {
+	if u == nil {
+		return fmt.Errorf("create user: nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u.ID == uuid.Nil {
+		u.ID = uuid.New()
+	}
+	if u.Username == "" {
+		return fmt.Errorf("create user: username is required")
+	}
+	if u.SubToken == "" {
+		return fmt.Errorf("create user: sub_token is required")
+	}
+	// Uniqueness checks (mirrors the migration's
+	// UNIQUE indexes).
+	for _, existing := range s.users {
+		if existing.Username == u.Username {
+			return fmt.Errorf("%w: username %q", ErrDuplicate, u.Username)
+		}
+		if existing.SubToken == u.SubToken {
+			return fmt.Errorf("%w: sub_token", ErrDuplicate)
+		}
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = s.now().UTC()
+	}
+	u.UpdatedAt = s.now().UTC()
+	cp := *u
+	s.users[cp.ID] = &cp
+	if cp.SubToken != "" {
+		s.usersByToken[cp.SubToken] = cp.ID
+	}
+	if cp.SubTokenPrev != "" {
+		s.usersByPrevToken[cp.SubTokenPrev] = cp.ID
+	}
+	return nil
+}
+
+// UpdateUser applies a per-field patch. The Store
+// touches only the non-nil fields on the patch and
+// stamps UpdatedAt. The function returns the
+// post-update user (a fresh read-back so the
+// caller sees the canonical row).
+func (s *MemoryStore) UpdateUser(_ context.Context, id uuid.UUID, patch UpdateUserPatch) (*User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	// Username + SubToken uniqueness: if either is
+	// being patched, scan the rest of the map.
+	if patch.Username != nil {
+		for otherID, existing := range s.users {
+			if otherID == id {
+				continue
+			}
+			if existing.Username == *patch.Username {
+				return nil, fmt.Errorf("%w: username %q", ErrDuplicate, *patch.Username)
+			}
+		}
+		u.Username = *patch.Username
+	}
+	if patch.Status != nil {
+		u.Status = *patch.Status
+	}
+	if patch.PlanID != nil {
+		u.PlanID = patch.PlanID
+	}
+	if patch.ExpireAt != nil {
+		u.ExpireAt = patch.ExpireAt
+	}
+	if patch.TrafficLimit != nil {
+		u.TrafficLimitBytes = *patch.TrafficLimit
+	}
+	if patch.DeviceLimit != nil {
+		u.DeviceLimit = *patch.DeviceLimit
+	}
+	if patch.HostsAllowlist != nil {
+		u.HostsAllowlist = *patch.HostsAllowlist
+	}
+	if patch.HostsBlocklist != nil {
+		u.HostsBlocklist = *patch.HostsBlocklist
+	}
+	u.UpdatedAt = s.now().UTC()
+	cp := *u
+	s.users[id] = &cp
+	return &cp, nil
+}
+
+// ListUsers returns every user, sorted by created_at
+// ascending. The slice is freshly allocated; callers
+// may mutate it.
+func (s *MemoryStore) ListUsers(_ context.Context) ([]*User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*User, 0, len(s.users))
+	for _, u := range s.users {
+		cp := *u
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	return out, nil
 }
 
 // ListPoolsForUser resolves users.plan_id through
