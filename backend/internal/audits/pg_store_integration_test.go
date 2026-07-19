@@ -95,6 +95,12 @@ func TestPgStore_List_FilterByAction(t *testing.T) {
 	store := NewPgStore(pool)
 
 	now := time.Now().UTC()
+	// Two real UUIDs for the actor filter to work;
+	// the schema's `actor_id` is a UUID FK on
+	// admins(id) and rejects non-UUID strings with
+	// an "invalid UUID length" error.
+	const actorAlice = "11111111-1111-4111-8111-111111111111"
+	const actorBob = "22222222-2222-4222-8222-222222222222"
 	mk := func(at time.Time, action, resourceType, actorID string) {
 		_, err := store.Insert(context.Background(), Entry{
 			Action: action, ResourceType: resourceType, ActorID: actorID,
@@ -104,10 +110,10 @@ func TestPgStore_List_FilterByAction(t *testing.T) {
 			t.Fatalf("Insert: %v", err)
 		}
 	}
-	mk(now.Add(-3*time.Hour), "user.create", "user", "u-1")
-	mk(now.Add(-2*time.Hour), "user.update", "user", "u-1")
-	mk(now.Add(-1*time.Hour), "user.create", "user", "u-2")
-	mk(now, "host.create", "host", "u-1")
+	mk(now.Add(-3*time.Hour), "user.create", "user", actorAlice)
+	mk(now.Add(-2*time.Hour), "user.update", "user", actorAlice)
+	mk(now.Add(-1*time.Hour), "user.create", "user", actorBob)
+	mk(now, "host.create", "host", actorAlice)
 
 	t.Run("no_filter", func(t *testing.T) {
 		got, err := store.List(context.Background(), ListFilter{Limit: 100})
@@ -130,7 +136,7 @@ func TestPgStore_List_FilterByAction(t *testing.T) {
 	})
 
 	t.Run("filter_by_actor", func(t *testing.T) {
-		got, err := store.List(context.Background(), ListFilter{ActorID: "u-1", Limit: 100})
+		got, err := store.List(context.Background(), ListFilter{ActorID: actorAlice, Limit: 100})
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}

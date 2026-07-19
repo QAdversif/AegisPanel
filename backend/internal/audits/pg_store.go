@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -278,7 +279,7 @@ func scanAuditRow(rows pgx.Rows, elideBeforeAfter bool) (*AuditEntry, error) {
 		action        string
 		resourceType  string
 		resourceID    *string
-		ip            *string
+		ip            *netip.Addr
 		userAgent     *string
 		createdAt     time.Time
 	)
@@ -304,7 +305,7 @@ func scanAuditRow(rows pgx.Rows, elideBeforeAfter bool) (*AuditEntry, error) {
 		out.ResourceID = *resourceID
 	}
 	if ip != nil {
-		out.IP = *ip
+		out.IP = ip.String()
 	}
 	if userAgent != nil {
 		out.UserAgent = *userAgent
@@ -332,7 +333,7 @@ func scanAuditRowFull(row rowScanner) (*AuditEntry, error) {
 		action        string
 		resourceType  string
 		resourceID    *string
-		ip            *string
+		ip            *netip.Addr
 		userAgent     *string
 		createdAt     time.Time
 		before        []byte
@@ -360,7 +361,7 @@ func scanAuditRowFull(row rowScanner) (*AuditEntry, error) {
 		out.ResourceID = *resourceID
 	}
 	if ip != nil {
-		out.IP = *ip
+		out.IP = ip.String()
 	}
 	if userAgent != nil {
 		out.UserAgent = *userAgent
