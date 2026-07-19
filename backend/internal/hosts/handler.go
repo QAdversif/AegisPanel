@@ -49,11 +49,11 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler) http.H
 type createRequest struct {
 	ID           *uuid.UUID       `json:"id,omitempty"`
 	Remark       string           `json:"remark"`
-	DisplayName  string           `json:"display_name,omitempty"`
+	DisplayName  string           `json:"displayName,omitempty"`
 	Type         HostType         `json:"type"`
 	Enabled      *bool            `json:"enabled,omitempty"`
 	Priority     *int             `json:"priority,omitempty"`
-	StatusFilter []UserStatus     `json:"status_filter,omitempty"`
+	StatusFilter []UserStatus     `json:"statusFilter,omitempty"`
 	Country      string           `json:"country,omitempty"`
 	City         string           `json:"city,omitempty"`
 	Tags         []string         `json:"tags,omitempty"`
@@ -66,8 +66,8 @@ type createRequest struct {
 // weights; we accept zero values here.
 type createEndpoint struct {
 	ID        *uuid.UUID `json:"id,omitempty"`
-	NodeID    uuid.UUID  `json:"node_id"`
-	InboundID uuid.UUID  `json:"inbound_id"`
+	NodeID    uuid.UUID  `json:"nodeId"`
+	InboundID uuid.UUID  `json:"inboundId"`
 	Weight    int        `json:"weight,omitempty"`
 	Address   []string   `json:"address,omitempty"`
 	Port      *int       `json:"port,omitempty"`
@@ -78,11 +78,11 @@ type createEndpoint struct {
 
 type updateRequest struct {
 	Remark       *string           `json:"remark,omitempty"`
-	DisplayName  *string           `json:"display_name,omitempty"`
+	DisplayName  *string           `json:"displayName,omitempty"`
 	Type         *HostType         `json:"type,omitempty"`
 	Enabled      *bool             `json:"enabled,omitempty"`
 	Priority     *int              `json:"priority,omitempty"`
-	StatusFilter *[]UserStatus     `json:"status_filter,omitempty"`
+	StatusFilter *[]UserStatus     `json:"statusFilter,omitempty"`
 	Country      *string           `json:"country,omitempty"`
 	City         *string           `json:"city,omitempty"`
 	Tags         *[]string         `json:"tags,omitempty"`
@@ -92,8 +92,8 @@ type updateRequest struct {
 
 type updateEndpoint struct {
 	ID        *uuid.UUID `json:"id,omitempty"`
-	NodeID    uuid.UUID  `json:"node_id"`
-	InboundID uuid.UUID  `json:"inbound_id"`
+	NodeID    uuid.UUID  `json:"nodeId"`
+	InboundID uuid.UUID  `json:"inboundId"`
 	Weight    int        `json:"weight,omitempty"`
 	Address   []string   `json:"address,omitempty"`
 	Port      *int       `json:"port,omitempty"`
