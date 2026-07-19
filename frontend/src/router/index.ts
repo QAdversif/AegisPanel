@@ -66,6 +66,18 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.settings', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/audits',
+    name: 'audits',
+    component: () => import('@/views/AuditsView.vue'),
+    meta: { titleKey: 'nav.audits', requiresAuth: true, layout: 'app' },
+  },
+  {
+    path: '/me',
+    name: 'profile',
+    component: () => import('@/views/ProfileView.vue'),
+    meta: { titleKey: 'nav.profile', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

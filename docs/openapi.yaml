@@ -8,19 +8,19 @@ info:
     port masquerading.
 
     v0.2.0 surface (this document):
-      - /auth/*  (login, refresh, me)
+      - /auth/*  (login, refresh, me, change-password)
       - /nodes/*  (CRUD — admin)
       - /nodes/{nodeId}/inbounds/*  (CRUD — admin)
       - /hosts/*  (CRUD — admin)
       - /users/*  (CRUD + rotate-token — admin)
       - /panelcfg/*  (sub_path rotation — admin)
       - /sub/{token}  (public subscription render — anonymous)
+      - /audits/*  (audit log read — admin)
       - /health  (liveness — anonymous)
       - /cores  (provider catalog — admin)
 
     Out of scope for this spec (added in subsequent v0.2.x PRs):
       - /admin/*  (admin principal CRUD — PR-J)
-      - /audits/*  (audit log UI — PR-M)
       - /cabinet/*  (end-user cabinet)
 
   license:
@@ -991,6 +991,224 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /auth/me/password:
+    post:
+      tags: [auth]
+      summary: Change my password
+      description: |
+        Rotate the calling operator's argon2id password. The current
+        password is verified to defend against a stolen bearer token
+        being used to lock the operator out of their own account —
+        the security model is "an attacker with a stolen token must
+        also know the password before they can change it".
+
+        On success, the existing refresh tokens are KEPT (the user
+        is not logged out); the operator's other browsers and
+        devices stay authenticated. A future PR adds an
+        "invalidate all sessions" toggle for the
+        "I think I lost my laptop" path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '400':
+          description: |
+            Malformed body, missing fields, or new password too
+            short (< 8 chars) or unchanged from the current one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: |
+            Missing/invalid bearer token, or the current password
+            is wrong (collapsed to the same code as the
+            "no such user" 401 to avoid leaking which is which).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /audits:
+    get:
+      tags: [audits]
+      summary: List audit log entries
+      description: |
+        Returns the most recent audit entries, ordered by
+        `createdAt` DESC. The default cap is 100; the maximum
+        is 1000 (the server clamps above that). The list path
+        elides the `before` / `after` JSONB blobs to keep the
+        response compact; the `/{id}` path returns them in full.
+
+        Every entry is the v0.2.0 wire shape: `actorId`,
+        `actorUsername`, `action`, `resourceType`,
+        `resourceId`, `ip`, `userAgent`, `createdAt`. The
+        `actorUsername` is denormalised from `admins.username`
+        at write time so the read path does not need to join.
+
+        The v0.2.0 read API is the entire surface — the write
+        path (the in-handler `audits.Record(...)` call) is
+        internal. v0.3+ adds the mutating-handler call-sites
+        for the nodes / hosts / inbounds / users / panelcfg
+        endpoints; this PR ships the read surface + the
+        change-password trigger.
+      parameters:
+        - name: actor_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Filter by `actorId` (exact match).
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Filter by `action` (exact match, e.g.
+            `user.create`, `host.update`).
+        - name: resource_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Filter by `resourceType` (exact match, e.g.
+            `user`, `host`, `inbound`).
+        - name: resource_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by `resourceId` (exact match).
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: |
+            RFC3339 timestamp. Entries with
+            `createdAt < since` are excluded.
+        - name: until
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: |
+            RFC3339 timestamp. Entries with
+            `createdAt > until` are excluded.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          description: |
+            Maximum entries to return. The server clamps
+            values above 1000 down to 1000. A value below
+            1 is treated as 0 and the default cap is used.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditListResponse'
+        '400':
+          description: |
+            Bad query parameter (e.g. malformed `since` /
+            `until`, or `until < since`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Missing `audits` scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /audits/{id}:
+    get:
+      tags: [audits]
+      summary: Get a single audit entry
+      description: |
+        Returns a single entry by id, with the `before` /
+        `after` JSONB blobs in full. The `id` is the
+        bigserial from the `audit_log` table rendered
+        as a string for stable cross-language parsing.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The audit entry id.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntry'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Missing `audits` scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such audit entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1099,7 +1317,7 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, read, write, nodes, users, subscriptions, hosts]
+            enum: [admin, read, write, nodes, users, subscriptions, hosts, audits]
 
     MeResponse:
       type: object
@@ -1115,7 +1333,7 @@ components:
           type: array
           items:
             type: string
-            enum: [admin, read, write, nodes, users, subscriptions, hosts]
+            enum: [admin, read, write, nodes, users, subscriptions, hosts, audits]
 
     NodeState:
       type: string
@@ -1708,3 +1926,80 @@ components:
           type: integer
           minimum: 0
           maximum: 3600
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          description: The operator's CURRENT password. Verified to defend against a stolen access token.
+        new_password:
+          type: string
+          minLength: 8
+          description: The NEW password. Must differ from the current one and be at least 8 chars.
+
+    AuditEntry:
+      type: object
+      required: [id, action, resourceType, createdAt]
+      properties:
+        id:
+          type: string
+          description: |
+            The bigserial id rendered as a string for stable
+            cross-language parsing.
+        actorId:
+          type: string
+          format: uuid
+          description: The admin UUID that triggered the action. Empty for system-driven entries.
+        actorUsername:
+          type: string
+          description: |
+            Denormalised from `admins.username` at write time
+            so the read path does not need to join.
+        action:
+          type: string
+          description: |
+            The action verb (e.g. `user.create`,
+            `user.update`, `host.rotate_token`). Closed set
+            in v0.3; free-form in v0.2.
+        resourceType:
+          type: string
+          description: |
+            The noun side of the action (`user`, `host`,
+            `inbound`, `node`, `panelcfg`).
+        resourceId:
+          type: string
+          description: The target's primary key. Empty for collection-level actions.
+        before:
+          description: |
+            The pre-mutation state as a JSONB blob. Returned
+            in full only on the `/{id}` path; the list path
+            elides it (`null` on the wire).
+        after:
+          description: |
+            The post-mutation state. Same caveats as
+            `before`.
+        ip:
+          type: string
+          description: The client IP, copied from `r.RemoteAddr` (after RealIP middleware).
+        userAgent:
+          type: string
+          description: The raw User-Agent header. Capped at 512 chars on the pgx-INSERT path.
+        createdAt:
+          type: string
+          format: date-time
+          description: Wall-clock time the entry was minted (UTC).
+
+    AuditListResponse:
+      type: object
+      required: [audits]
+      properties:
+        audits:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+          description: |
+            The list of entries matching the filter. The
+            list path elides `before` / `after`; the
+            `/{id}` path returns them in full.

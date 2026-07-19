@@ -22,7 +22,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Link2, LogOut, Menu, Moon, Server, Settings, Shield, Sun, Users, Wifi } from 'lucide-vue-next'
+import { History, LayoutDashboard, Link2, LogOut, Menu, Moon, Server, Settings, Shield, Sun, User, Users, Wifi } from 'lucide-vue-next'
 
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -66,7 +66,9 @@ const navItems: NavItem[] = [
   { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: true },
   { key: 'subscription', to: '/subscription', label: t('nav.subscription'), icon: Link2, enabled: true },
   { key: 'users', to: '/users', label: t('nav.users'), icon: Users, enabled: true },
+  { key: 'audits', to: '/audits', label: t('nav.audits'), icon: History, enabled: true },
   { key: 'settings', to: '/settings', label: t('nav.settings'), icon: Settings, enabled: true },
+  { key: 'profile', to: '/me', label: t('nav.profile'), icon: User, enabled: true },
 ]
 
 const statusLabel = computed(() => t(`dashboard.status.${auth.status}`))
@@ -218,8 +220,9 @@ onMounted(() => {
                 :side-offset="6"
               >
                 <DropdownMenuLabel>{{ username }}</DropdownMenuLabel>
-                <DropdownMenuItem disabled>
-                  {{ t('topbar.profileSoon') }}
+                <DropdownMenuItem @select="() => router.push({ name: 'profile' })">
+                  <User class="h-4 w-4" />
+                  {{ t('topbar.profile') }}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem @select="handleLogout">
