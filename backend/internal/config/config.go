@@ -105,6 +105,15 @@ type Config struct {
 	// by the `panel_path_config` table (migration 0010).
 	PanelcfgBackend string `env:"AEGIS_PANELCFG_BACKEND" envDefault:"memory"`
 
+	// AuditsBackend selects the persistence layer for the
+	// audit log. "memory" (default) keeps entries in
+	// RAM — dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the existing `audit_log` table
+	// from migration 0001. The pg path is the only
+	// mode that survives a restart; the dev seed
+	// leaves an empty list on every boot.
+	AuditsBackend string `env:"AEGIS_AUDITS_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 

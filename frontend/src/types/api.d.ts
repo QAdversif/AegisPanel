@@ -1690,6 +1690,300 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change my password
+         * @description Rotate the calling operator's argon2id password. The current
+         *     password is verified to defend against a stolen bearer token
+         *     being used to lock the operator out of their own account —
+         *     the security model is "an attacker with a stolen token must
+         *     also know the password before they can change it".
+         *
+         *     On success, the existing refresh tokens are KEPT (the user
+         *     is not logged out); the operator's other browsers and
+         *     devices stay authenticated. A future PR adds an
+         *     "invalidate all sessions" toggle for the
+         *     "I think I lost my laptop" path.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MeResponse"];
+                    };
+                };
+                /**
+                 * @description Malformed body, missing fields, or new password too
+                 *     short (< 8 chars) or unchanged from the current one.
+                 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /**
+                 * @description Missing/invalid bearer token, or the current password
+                 *     is wrong (collapsed to the same code as the
+                 *     "no such user" 401 to avoid leaking which is which).
+                 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Internal error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List audit log entries
+         * @description Returns the most recent audit entries, ordered by
+         *     `createdAt` DESC. The default cap is 100; the maximum
+         *     is 1000 (the server clamps above that). The list path
+         *     elides the `before` / `after` JSONB blobs to keep the
+         *     response compact; the `/{id}` path returns them in full.
+         *
+         *     Every entry is the v0.2.0 wire shape: `actorId`,
+         *     `actorUsername`, `action`, `resourceType`,
+         *     `resourceId`, `ip`, `userAgent`, `createdAt`. The
+         *     `actorUsername` is denormalised from `admins.username`
+         *     at write time so the read path does not need to join.
+         *
+         *     The v0.2.0 read API is the entire surface — the write
+         *     path (the in-handler `audits.Record(...)` call) is
+         *     internal. v0.3+ adds the mutating-handler call-sites
+         *     for the nodes / hosts / inbounds / users / panelcfg
+         *     endpoints; this PR ships the read surface + the
+         *     change-password trigger.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Filter by `actorId` (exact match). */
+                    actor_id?: string;
+                    /**
+                     * @description Filter by `action` (exact match, e.g.
+                     *     `user.create`, `host.update`).
+                     */
+                    action?: string;
+                    /**
+                     * @description Filter by `resourceType` (exact match, e.g.
+                     *     `user`, `host`, `inbound`).
+                     */
+                    resource_type?: string;
+                    /** @description Filter by `resourceId` (exact match). */
+                    resource_id?: string;
+                    /**
+                     * @description RFC3339 timestamp. Entries with
+                     *     `createdAt < since` are excluded.
+                     */
+                    since?: string;
+                    /**
+                     * @description RFC3339 timestamp. Entries with
+                     *     `createdAt > until` are excluded.
+                     */
+                    until?: string;
+                    /**
+                     * @description Maximum entries to return. The server clamps
+                     *     values above 1000 down to 1000. A value below
+                     *     1 is treated as 0 and the default cap is used.
+                     */
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuditListResponse"];
+                    };
+                };
+                /**
+                 * @description Bad query parameter (e.g. malformed `since` /
+                 *     `until`, or `until < since`).
+                 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing `audits` scope */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Internal error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audits/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a single audit entry
+         * @description Returns a single entry by id, with the `before` /
+         *     `after` JSONB blobs in full. The `id` is the
+         *     bigserial from the `audit_log` table rendered
+         *     as a string for stable cross-language parsing.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description The audit entry id. */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuditEntry"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing `audits` scope */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No such audit entry */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Internal error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1751,14 +2045,14 @@ export interface components {
             token_type: "Bearer";
             /** Format: date-time */
             expires_at: string;
-            scopes: ("admin" | "read" | "write" | "nodes" | "users" | "subscriptions" | "hosts")[];
+            scopes: ("admin" | "read" | "write" | "nodes" | "users" | "subscriptions" | "hosts" | "audits")[];
         };
         MeResponse: {
             /** @example u-bootstrap */
             user_id: string;
             /** @example admin */
             username: string;
-            scopes: ("admin" | "read" | "write" | "nodes" | "users" | "subscriptions" | "hosts")[];
+            scopes: ("admin" | "read" | "write" | "nodes" | "users" | "subscriptions" | "hosts" | "audits")[];
         };
         /** @enum {string} */
         NodeState: "new" | "online" | "draining" | "offline" | "disabled";
@@ -2005,6 +2299,70 @@ export interface components {
             /** @description The new sub_path. Must match [a-z0-9-]{4,64}. */
             subPath: string;
             graceWindowSeconds?: number;
+        };
+        ChangePasswordRequest: {
+            /** @description The operator's CURRENT password. Verified to defend against a stolen access token. */
+            current_password: string;
+            /** @description The NEW password. Must differ from the current one and be at least 8 chars. */
+            new_password: string;
+        };
+        AuditEntry: {
+            /**
+             * @description The bigserial id rendered as a string for stable
+             *     cross-language parsing.
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description The admin UUID that triggered the action. Empty for system-driven entries.
+             */
+            actorId?: string;
+            /**
+             * @description Denormalised from `admins.username` at write time
+             *     so the read path does not need to join.
+             */
+            actorUsername?: string;
+            /**
+             * @description The action verb (e.g. `user.create`,
+             *     `user.update`, `host.rotate_token`). Closed set
+             *     in v0.3; free-form in v0.2.
+             */
+            action: string;
+            /**
+             * @description The noun side of the action (`user`, `host`,
+             *     `inbound`, `node`, `panelcfg`).
+             */
+            resourceType: string;
+            /** @description The target's primary key. Empty for collection-level actions. */
+            resourceId?: string;
+            /**
+             * @description The pre-mutation state as a JSONB blob. Returned
+             *     in full only on the `/{id}` path; the list path
+             *     elides it (`null` on the wire).
+             */
+            before?: unknown;
+            /**
+             * @description The post-mutation state. Same caveats as
+             *     `before`.
+             */
+            after?: unknown;
+            /** @description The client IP, copied from `r.RemoteAddr` (after RealIP middleware). */
+            ip?: string;
+            /** @description The raw User-Agent header. Capped at 512 chars on the pgx-INSERT path. */
+            userAgent?: string;
+            /**
+             * Format: date-time
+             * @description Wall-clock time the entry was minted (UTC).
+             */
+            createdAt: string;
+        };
+        AuditListResponse: {
+            /**
+             * @description The list of entries matching the filter. The
+             *     list path elides `before` / `after`; the
+             *     `/{id}` path returns them in full.
+             */
+            audits: components["schemas"]["AuditEntry"][];
         };
     };
     responses: never;

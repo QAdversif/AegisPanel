@@ -10,4 +10,5 @@ export * from './hosts'
 export * from './subscription'
 export * from './panelcfg'
 export * from './users'
+export * from './audits'
 

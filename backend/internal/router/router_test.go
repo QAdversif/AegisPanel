@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -148,8 +149,9 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
+	auditsSvc := audits.NewService(audits.NewMemoryStore())
 
-	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, nil)
+	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil)
 }
 
 // contains is a small strings.Contains alias to keep

@@ -40,6 +40,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
@@ -151,7 +152,8 @@ func main() {
 			cfg.NodesBackend == "pg" ||
 			cfg.InboundsBackend == "pg" ||
 			cfg.SubscriptionBackend == "pg" ||
-			cfg.PanelcfgBackend == "pg"
+			cfg.PanelcfgBackend == "pg" ||
+			cfg.AuditsBackend == "pg"
 	)
 	if needsPg {
 		p, err := db.Open(ctx, cfg.PostgresDSN)
@@ -198,7 +200,7 @@ func main() {
 			PasswordHash: mustHash("aegis-dev-password"),
 			Role:         "super-admin",
 			Enabled:      true,
-			Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite, auth.ScopeNodes, auth.ScopeUsers, auth.ScopeSubscriptions, auth.ScopeHosts},
+			Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite, auth.ScopeNodes, auth.ScopeUsers, auth.ScopeSubscriptions, auth.ScopeHosts, auth.ScopeAudits},
 			CreatedAt:    time.Now().UTC(),
 		})
 		log.Warn().Msg("auth: using in-memory store with the dev seed (username: admin, password: aegis-dev-password). DO NOT use in production.")
@@ -299,6 +301,30 @@ func main() {
 	}
 	panelCfgSvc := panelcfg.NewService(panelCfgStore)
 
+	// Audit log service. The v0.2.0 surface is
+	// read-only (the GET /api/v1/audits and
+	// GET /api/v1/audits/{id} endpoints); the
+	// write path (Service.Record) is exported for
+	// the v0.3+ wiring that will be added to the
+	// nodes / hosts / inbounds / users / panelcfg
+	// mutating handlers.
+	//
+	// Backend is selected at startup:
+	//   AEGIS_AUDITS_BACKEND=memory (default) uses
+	//   the Phase 0 MemoryStore; =pg uses PgStore
+	//   backed by the existing `audit_log` table
+	//   from migration 0001.
+	var auditsStore audits.Store
+	switch cfg.AuditsBackend {
+	case "pg":
+		auditsStore = audits.NewPgStore(pool)
+		log.Info().Msg("audits: using pgx-backed store (PgStore)")
+	default:
+		auditsStore = audits.NewMemoryStore()
+		log.Info().Msg("audits: using in-memory store (MemoryStore, dev only)")
+	}
+	auditsSvc := audits.NewService(auditsStore)
+
 	// Subscription endpoint rate limiter. One
 	// instance shared across the default and the
 	// rotated sub_path mount - a stolen sub_token
@@ -314,7 +340,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.

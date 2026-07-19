@@ -310,19 +310,23 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 // This is the only place where the wire format of the role enum
 // (from migration 0001) meets our internal Scope vocabulary.
 //
-//	super-admin -> admin, read, write
-//	operator    -> read, write
-//	viewer      -> read
+//	super-admin -> admin, read, write, hosts, audits
+//	operator    -> read, write, hosts, audits
+//	viewer      -> read, audits
 //
-// Unknown roles get only `read` — fail-closed.
+// Unknown roles get only `read` — fail-closed. The `audits` scope
+// is granted to every role because the audit log is the
+// operator's primary observability surface for the v0.2.0
+// `change password` flow — a viewer who cannot see who changed
+// their own password cannot verify it was their change.
 func scopesForRole(role string) Scopes {
 	switch role {
 	case "super-admin":
-		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions}
+		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopeAudits}
 	case "operator":
-		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions}
+		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopeAudits}
 	case "viewer":
-		return Scopes{ScopeRead}
+		return Scopes{ScopeRead, ScopeAudits}
 	default:
 		return Scopes{ScopeRead}
 	}

@@ -36,3 +36,20 @@ export async function me(): Promise<MeResponse> {
   return data
 }
 
+export interface ChangePasswordRequest {
+  /** The operator's CURRENT password. Verified to defend
+   * against a stolen access token. */
+  current_password: string
+  /** The NEW password. Must differ from the current one
+   * and be at least 8 chars. */
+  new_password: string
+}
+
+export async function changePassword(req: ChangePasswordRequest): Promise<MeResponse> {
+  const { data } = await api.post<MeResponse>('/api/v1/auth/me/password', {
+    current_password: req.current_password,
+    new_password: req.new_password,
+  })
+  return data
+}
+

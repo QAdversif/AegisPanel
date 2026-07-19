@@ -49,6 +49,15 @@ const (
 	// Distinct from ScopeNodes: a node is the server
 	// itself, a host is the product the operator sells.
 	ScopeHosts Scope = "hosts"
+
+	// ScopeAudits lets a principal read the audit log.
+	// The scope is read-only by design — the audit log
+	// is the system-of-record for who-did-what, and the
+	// only writer is the panel's internal mutating
+	// handlers (no HTTP path inserts an entry). The
+	// v0.2.0 GET /api/v1/audits and GET /api/v1/audits/
+	// {id} endpoints are gated by this scope.
+	ScopeAudits Scope = "audits"
 )
 
 // Scopes is a non-empty set of Scope values.

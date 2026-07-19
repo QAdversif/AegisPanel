@@ -96,9 +96,10 @@ func bearerToken(r *http.Request) string {
 //
 // Routes:
 //
-//	POST /auth/login    public
-//	POST /auth/refresh  public
-//	GET  /auth/me       Bearer-protected
+//	POST /auth/login              public
+//	POST /auth/refresh            public
+//	GET  /auth/me                 Bearer-protected
+//	POST /auth/me/password        Bearer-protected
 func (s *Service) Mount() http.Handler {
 	r := chi.NewRouter()
 
@@ -109,6 +110,11 @@ func (s *Service) Mount() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.Middleware())
 		r.Get("/me", s.handleMe())
+		// The change-password endpoint lives
+		// under /me because the resource is the
+		// caller. /me/password is the REST
+		// convention for "mutate the caller".
+		r.Post("/me/password", s.handleChangePassword())
 	})
 
 	return r

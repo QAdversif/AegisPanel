@@ -219,3 +219,39 @@ export interface ListResponse<T> {
   items: T[]
   total: number
 }
+
+// ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the v0.2.0 audit log. The shape mirrors
+ * the Go `AuditEntry` struct (camelCase json tags per
+ * the v0.2.0 wire-format normalisation). The `before` /
+ * `after` fields are elided on the list path and only
+ * returned in full on the `/{id}` path; consumers
+ * that want the diff should call `getAudit(id)`.
+ */
+export interface AuditEntry {
+  id: string
+  actorId?: string
+  actorUsername?: string
+  action: string
+  resourceType: string
+  resourceId?: string
+  before?: unknown
+  after?: unknown
+  ip?: string
+  userAgent?: string
+  createdAt: ISODateTime
+}
+
+/**
+ * Shape of the change-password form. Snake-case
+ * field names match the Go json tags so the request
+ * body round-trips through the auth handler.
+ */
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
+}
