@@ -522,7 +522,7 @@ func (c *sshClient) uploadStream(ctx context.Context, src io.Reader, dst string,
 // copyContext. The lint flag is silenced via
 // `//nolint:unparam` — the explicit `_ = ctx`
 // line is NOT enough to fool golangci-lint v2.
-func (c *sshClient) ensureRemoteDir(ctx context.Context, dir string) error { //nolint:unparam
+func (c *sshClient) ensureRemoteDir(ctx context.Context, dir string) error { //nolint:unparam // ctx reserved for v0.4.0 deadline-aware SFTP writes
 	_ = ctx // v0.4.0: wire through to c.sftp.Mkdir
 	if dir == "" || dir == "." || dir == "/" {
 		return nil
@@ -676,7 +676,14 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 	// operator-config-controlled via cfg.KnownHosts at
 	// boot, not user input. The same lint suppression
 	// applies to the os.CreateTemp call above.
-	if err := os.Rename(tmpName, path); err != nil { // #nosec G703 -- operator-config path
+	//
+	// gosec's trailing `// #nosec` on the same line
+	// works for os.ReadFile / os.CreateTemp above but
+	// does NOT silence the taint analysis on os.Rename's
+	// destination argument, so we use the standalone
+	// comment form here.
+	// #nosec G703 -- operator-config path
+	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("bootstrap: rename known_hosts: %w", err)
 	}
 	return nil
