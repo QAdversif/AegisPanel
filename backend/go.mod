@@ -13,7 +13,7 @@ require (
 	// Configuration from env / files
 	github.com/caarlos0/env/v11 v11.2.2
 	// HTTP router
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/joho/godotenv v1.5.1
 
 	// Metrics
