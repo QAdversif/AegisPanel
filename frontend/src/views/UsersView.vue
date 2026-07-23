@@ -310,8 +310,12 @@ async function softDelete(user: User): Promise<void> {
   <section class="users">
     <header class="users__header">
       <div>
-        <h1 class="users__title">{{ t('users.title') }}</h1>
-        <p class="users__subtitle">{{ t('users.subtitle') }}</p>
+        <h1 class="users__title">
+          {{ t('users.title') }}
+        </h1>
+        <p class="users__subtitle">
+          {{ t('users.subtitle') }}
+        </p>
       </div>
       <Button @click="startCreate">
         <UserPlus class="h-4 w-4" />
@@ -390,7 +394,10 @@ async function softDelete(user: User): Promise<void> {
               />
             </template>
           </FormField>
-          <FormField name="status" :label="t('users.status')">
+          <FormField
+            name="status"
+            :label="t('users.status')"
+          >
             <template #default="{ onBlur, hasError }">
               <Select
                 :model-value="createForm.values.status"
@@ -401,18 +408,32 @@ async function softDelete(user: User): Promise<void> {
                   <SelectValue :placeholder="t('users.status')" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active">{{ t('users.statuses.active') }}</SelectItem>
-                  <SelectItem value="grace">{{ t('users.statuses.grace') }}</SelectItem>
-                  <SelectItem value="disabled">{{ t('users.statuses.disabled') }}</SelectItem>
+                  <SelectItem value="active">
+                    {{ t('users.statuses.active') }}
+                  </SelectItem>
+                  <SelectItem value="grace">
+                    {{ t('users.statuses.grace') }}
+                  </SelectItem>
+                  <SelectItem value="disabled">
+                    {{ t('users.statuses.disabled') }}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </template>
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="createForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="createForm.isSubmitting.value"
+            >
               {{ t('common.create') }}
             </Button>
           </DialogFooter>
@@ -431,7 +452,11 @@ async function softDelete(user: User): Promise<void> {
           :is-submitting="editForm.isSubmitting.value"
           @submit="editForm.handleSubmit"
         >
-          <FormField name="username" :label="t('users.username')" required>
+          <FormField
+            name="username"
+            :label="t('users.username')"
+            required
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -442,7 +467,10 @@ async function softDelete(user: User): Promise<void> {
               />
             </template>
           </FormField>
-          <FormField name="deviceLimit" :label="t('users.deviceLimit')">
+          <FormField
+            name="deviceLimit"
+            :label="t('users.deviceLimit')"
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -456,7 +484,10 @@ async function softDelete(user: User): Promise<void> {
               />
             </template>
           </FormField>
-          <FormField name="trafficLimitBytes" :label="t('users.trafficLimit')">
+          <FormField
+            name="trafficLimitBytes"
+            :label="t('users.trafficLimit')"
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -469,7 +500,10 @@ async function softDelete(user: User): Promise<void> {
               />
             </template>
           </FormField>
-          <FormField name="status" :label="t('users.status')">
+          <FormField
+            name="status"
+            :label="t('users.status')"
+          >
             <template #default="{ onBlur, hasError }">
               <Select
                 :model-value="editForm.values.status"
@@ -480,20 +514,38 @@ async function softDelete(user: User): Promise<void> {
                   <SelectValue :placeholder="t('users.status')" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active">{{ t('users.statuses.active') }}</SelectItem>
-                  <SelectItem value="grace">{{ t('users.statuses.grace') }}</SelectItem>
-                  <SelectItem value="disabled">{{ t('users.statuses.disabled') }}</SelectItem>
-                  <SelectItem value="expired">{{ t('users.statuses.expired') }}</SelectItem>
-                  <SelectItem value="deleted">{{ t('users.statuses.deleted') }}</SelectItem>
+                  <SelectItem value="active">
+                    {{ t('users.statuses.active') }}
+                  </SelectItem>
+                  <SelectItem value="grace">
+                    {{ t('users.statuses.grace') }}
+                  </SelectItem>
+                  <SelectItem value="disabled">
+                    {{ t('users.statuses.disabled') }}
+                  </SelectItem>
+                  <SelectItem value="expired">
+                    {{ t('users.statuses.expired') }}
+                  </SelectItem>
+                  <SelectItem value="deleted">
+                    {{ t('users.statuses.deleted') }}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </template>
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="editForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="editForm.isSubmitting.value"
+            >
               {{ t('common.save') }}
             </Button>
           </DialogFooter>

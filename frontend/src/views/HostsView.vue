@@ -639,8 +639,12 @@ const balancerStrategies: BalancerStrategy[] = [
   <section class="hosts">
     <header class="hosts__header">
       <div>
-        <h1 class="hosts__title">{{ t('hosts.title') }}</h1>
-        <p class="hosts__subtitle">{{ t('hosts.subtitle') }}</p>
+        <h1 class="hosts__title">
+          {{ t('hosts.title') }}
+        </h1>
+        <p class="hosts__subtitle">
+          {{ t('hosts.subtitle') }}
+        </p>
       </div>
       <Button @click="startCreate">
         <Plus class="h-4 w-4" />
@@ -668,7 +672,12 @@ const balancerStrategies: BalancerStrategy[] = [
           @submit="createForm.handleSubmit"
         >
           <div class="hosts__grid">
-            <FormField name="remark" :label="t('hosts.remark')" required :hint="t('hosts.remarkHint')">
+            <FormField
+              name="remark"
+              :label="t('hosts.remark')"
+              required
+              :hint="t('hosts.remarkHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -679,7 +688,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="displayName" :label="t('hosts.displayName')" :hint="t('hosts.displayNameHint')">
+            <FormField
+              name="displayName"
+              :label="t('hosts.displayName')"
+              :hint="t('hosts.displayNameHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -690,7 +703,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="type" :label="t('hosts.type')" required>
+            <FormField
+              name="type"
+              :label="t('hosts.type')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="createForm.values.type"
@@ -701,13 +718,21 @@ const balancerStrategies: BalancerStrategy[] = [
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="direct">{{ t('hosts.types.direct') }}</SelectItem>
-                    <SelectItem value="balancer">{{ t('hosts.types.balancer') }}</SelectItem>
+                    <SelectItem value="direct">
+                      {{ t('hosts.types.direct') }}
+                    </SelectItem>
+                    <SelectItem value="balancer">
+                      {{ t('hosts.types.balancer') }}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </template>
             </FormField>
-            <FormField name="priority" :label="t('hosts.priority')" :hint="t('hosts.priorityHint')">
+            <FormField
+              name="priority"
+              :label="t('hosts.priority')"
+              :hint="t('hosts.priorityHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -721,7 +746,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="country" :label="t('hosts.country')" :hint="t('hosts.countryHint')">
+            <FormField
+              name="country"
+              :label="t('hosts.country')"
+              :hint="t('hosts.countryHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -733,7 +762,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="city" :label="t('hosts.city')" :hint="t('hosts.cityHint')">
+            <FormField
+              name="city"
+              :label="t('hosts.city')"
+              :hint="t('hosts.cityHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -748,7 +781,9 @@ const balancerStrategies: BalancerStrategy[] = [
 
           <div class="hosts__section">
             <header class="hosts__section-header">
-              <h3 class="hosts__section-title">{{ t('hosts.endpoints') }}</h3>
+              <h3 class="hosts__section-title">
+                {{ t('hosts.endpoints') }}
+              </h3>
               <small class="hosts__section-hint">{{ t('hosts.endpointsHint') }}</small>
             </header>
 
@@ -770,7 +805,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 </Button>
               </div>
               <div class="hosts__grid">
-                <FormField :name="`endpoints.${idx}.nodeId`" :label="t('hosts.node')" required>
+                <FormField
+                  :name="`endpoints.${idx}.nodeId`"
+                  :label="t('hosts.node')"
+                  required
+                >
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(createForm.values as CreateFormValues).endpoints[idx]?.nodeId"
@@ -795,7 +834,11 @@ const balancerStrategies: BalancerStrategy[] = [
                     </Select>
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.inboundId`" :label="t('hosts.inbound')" required>
+                <FormField
+                  :name="`endpoints.${idx}.inboundId`"
+                  :label="t('hosts.inbound')"
+                  required
+                >
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(createForm.values as CreateFormValues).endpoints[idx]?.inboundId"
@@ -817,7 +860,11 @@ const balancerStrategies: BalancerStrategy[] = [
                     </Select>
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.weight`" :label="t('hosts.weight')" :hint="t('hosts.weightHint')">
+                <FormField
+                  :name="`endpoints.${idx}.weight`"
+                  :label="t('hosts.weight')"
+                  :hint="t('hosts.weightHint')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Input
                       :id="id"
@@ -831,7 +878,11 @@ const balancerStrategies: BalancerStrategy[] = [
                     />
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.addressText`" :label="t('hosts.address')" :hint="t('hosts.addressHint')">
+                <FormField
+                  :name="`endpoints.${idx}.addressText`"
+                  :label="t('hosts.address')"
+                  :hint="t('hosts.addressHint')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Textarea
                       :id="id"
@@ -843,7 +894,11 @@ const balancerStrategies: BalancerStrategy[] = [
                     />
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.portText`" :label="t('hosts.port')" :hint="t('hosts.portHint')">
+                <FormField
+                  :name="`endpoints.${idx}.portText`"
+                  :label="t('hosts.port')"
+                  :hint="t('hosts.portHint')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Input
                       :id="id"
@@ -875,9 +930,15 @@ const balancerStrategies: BalancerStrategy[] = [
             class="hosts__section"
           >
             <header class="hosts__section-header">
-              <h3 class="hosts__section-title">{{ t('hosts.balancer') }}</h3>
+              <h3 class="hosts__section-title">
+                {{ t('hosts.balancer') }}
+              </h3>
             </header>
-            <FormField name="balancerStrategy" :label="t('hosts.balancerStrategy')" required>
+            <FormField
+              name="balancerStrategy"
+              :label="t('hosts.balancerStrategy')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="(createForm.values as CreateFormValues).balancerStrategy"
@@ -903,9 +964,17 @@ const balancerStrategies: BalancerStrategy[] = [
 
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="createForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="createForm.isSubmitting.value"
+            >
               {{ t('common.create') }}
             </Button>
           </DialogFooter>
@@ -925,7 +994,11 @@ const balancerStrategies: BalancerStrategy[] = [
           @submit="editForm.handleSubmit"
         >
           <div class="hosts__grid">
-            <FormField name="remark" :label="t('hosts.remark')" required>
+            <FormField
+              name="remark"
+              :label="t('hosts.remark')"
+              required
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -936,7 +1009,10 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="displayName" :label="t('hosts.displayName')">
+            <FormField
+              name="displayName"
+              :label="t('hosts.displayName')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -947,7 +1023,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="type" :label="t('hosts.type')" required>
+            <FormField
+              name="type"
+              :label="t('hosts.type')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="editForm.values.type"
@@ -958,13 +1038,20 @@ const balancerStrategies: BalancerStrategy[] = [
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="direct">{{ t('hosts.types.direct') }}</SelectItem>
-                    <SelectItem value="balancer">{{ t('hosts.types.balancer') }}</SelectItem>
+                    <SelectItem value="direct">
+                      {{ t('hosts.types.direct') }}
+                    </SelectItem>
+                    <SelectItem value="balancer">
+                      {{ t('hosts.types.balancer') }}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </template>
             </FormField>
-            <FormField name="priority" :label="t('hosts.priority')">
+            <FormField
+              name="priority"
+              :label="t('hosts.priority')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -978,7 +1065,10 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="country" :label="t('hosts.country')">
+            <FormField
+              name="country"
+              :label="t('hosts.country')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -990,7 +1080,10 @@ const balancerStrategies: BalancerStrategy[] = [
                 />
               </template>
             </FormField>
-            <FormField name="city" :label="t('hosts.city')">
+            <FormField
+              name="city"
+              :label="t('hosts.city')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -1005,7 +1098,9 @@ const balancerStrategies: BalancerStrategy[] = [
 
           <div class="hosts__section">
             <header class="hosts__section-header">
-              <h3 class="hosts__section-title">{{ t('hosts.endpoints') }}</h3>
+              <h3 class="hosts__section-title">
+                {{ t('hosts.endpoints') }}
+              </h3>
               <small class="hosts__section-hint">{{ t('hosts.endpointsHint') }}</small>
             </header>
 
@@ -1027,7 +1122,11 @@ const balancerStrategies: BalancerStrategy[] = [
                 </Button>
               </div>
               <div class="hosts__grid">
-                <FormField :name="`endpoints.${idx}.nodeId`" :label="t('hosts.node')" required>
+                <FormField
+                  :name="`endpoints.${idx}.nodeId`"
+                  :label="t('hosts.node')"
+                  required
+                >
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(editForm.values as EditFormValues).endpoints?.[idx]?.nodeId"
@@ -1052,7 +1151,11 @@ const balancerStrategies: BalancerStrategy[] = [
                     </Select>
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.inboundId`" :label="t('hosts.inbound')" required>
+                <FormField
+                  :name="`endpoints.${idx}.inboundId`"
+                  :label="t('hosts.inbound')"
+                  required
+                >
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(editForm.values as EditFormValues).endpoints?.[idx]?.inboundId"
@@ -1074,7 +1177,10 @@ const balancerStrategies: BalancerStrategy[] = [
                     </Select>
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.weight`" :label="t('hosts.weight')">
+                <FormField
+                  :name="`endpoints.${idx}.weight`"
+                  :label="t('hosts.weight')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Input
                       :id="id"
@@ -1088,7 +1194,10 @@ const balancerStrategies: BalancerStrategy[] = [
                     />
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.addressText`" :label="t('hosts.address')">
+                <FormField
+                  :name="`endpoints.${idx}.addressText`"
+                  :label="t('hosts.address')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Textarea
                       :id="id"
@@ -1100,7 +1209,10 @@ const balancerStrategies: BalancerStrategy[] = [
                     />
                   </template>
                 </FormField>
-                <FormField :name="`endpoints.${idx}.portText`" :label="t('hosts.port')">
+                <FormField
+                  :name="`endpoints.${idx}.portText`"
+                  :label="t('hosts.port')"
+                >
                   <template #default="{ id, value, onBlur, hasError }">
                     <Input
                       :id="id"
@@ -1132,9 +1244,15 @@ const balancerStrategies: BalancerStrategy[] = [
             class="hosts__section"
           >
             <header class="hosts__section-header">
-              <h3 class="hosts__section-title">{{ t('hosts.balancer') }}</h3>
+              <h3 class="hosts__section-title">
+                {{ t('hosts.balancer') }}
+              </h3>
             </header>
-            <FormField name="balancerStrategy" :label="t('hosts.balancerStrategy')" required>
+            <FormField
+              name="balancerStrategy"
+              :label="t('hosts.balancerStrategy')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="(editForm.values as EditFormValues).balancerStrategy"
@@ -1160,9 +1278,17 @@ const balancerStrategies: BalancerStrategy[] = [
 
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="editForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="editForm.isSubmitting.value"
+            >
               {{ t('common.save') }}
             </Button>
           </DialogFooter>

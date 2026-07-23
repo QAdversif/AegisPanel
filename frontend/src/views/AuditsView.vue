@@ -223,8 +223,12 @@ onMounted(() => {
   <section class="audits">
     <header class="audits__header">
       <div>
-        <h1 class="audits__title">{{ t('audits.title') }}</h1>
-        <p class="audits__subtitle">{{ t('audits.subtitle') }}</p>
+        <h1 class="audits__title">
+          {{ t('audits.title') }}
+        </h1>
+        <p class="audits__subtitle">
+          {{ t('audits.subtitle') }}
+        </p>
       </div>
       <div class="audits__toolbar">
         <Button
@@ -345,7 +349,12 @@ onMounted(() => {
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
             <Button
               type="submit"
@@ -371,13 +380,18 @@ onMounted(() => {
           <dl class="audits__meta-list">
             <div class="audits__meta-row">
               <dt>{{ t('audits.timestamp') }}</dt>
-              <dd class="audits__mono">{{ formatTimestamp(detail.createdAt) }}</dd>
+              <dd class="audits__mono">
+                {{ formatTimestamp(detail.createdAt) }}
+              </dd>
             </div>
             <div class="audits__meta-row">
               <dt>{{ t('audits.actor') }}</dt>
               <dd class="audits__mono">
                 {{ detail.actorUsername ?? t('audits.systemActor') }}
-                <span v-if="detail.actorId" class="audits__dim">({{ detail.actorId }})</span>
+                <span
+                  v-if="detail.actorId"
+                  class="audits__dim"
+                >({{ detail.actorId }})</span>
               </dd>
             </div>
             <div class="audits__meta-row">
@@ -390,25 +404,44 @@ onMounted(() => {
                 {{ detail.resourceType }}<span v-if="detail.resourceId">/{{ detail.resourceId }}</span>
               </dd>
             </div>
-            <div v-if="detail.ip" class="audits__meta-row">
+            <div
+              v-if="detail.ip"
+              class="audits__meta-row"
+            >
               <dt>{{ t('audits.ip') }}</dt>
-              <dd class="audits__mono">{{ detail.ip }}</dd>
+              <dd class="audits__mono">
+                {{ detail.ip }}
+              </dd>
             </div>
-            <div v-if="detail.userAgent" class="audits__meta-row">
+            <div
+              v-if="detail.userAgent"
+              class="audits__meta-row"
+            >
               <dt>{{ t('audits.userAgent') }}</dt>
-              <dd class="audits__mono audits__ua">{{ detail.userAgent }}</dd>
+              <dd class="audits__mono audits__ua">
+                {{ detail.userAgent }}
+              </dd>
             </div>
           </dl>
 
-          <div v-if="detailLoading" class="audits__loading">
+          <div
+            v-if="detailLoading"
+            class="audits__loading"
+          >
             {{ t('audits.detailLoading') }}
           </div>
           <template v-else>
-            <div v-if="detail.before !== undefined" class="audits__diff">
+            <div
+              v-if="detail.before !== undefined"
+              class="audits__diff"
+            >
               <h4>{{ t('audits.before') }}</h4>
               <pre class="audits__code">{{ asJsonString(detail.before) || '—' }}</pre>
             </div>
-            <div v-if="detail.after !== undefined" class="audits__diff">
+            <div
+              v-if="detail.after !== undefined"
+              class="audits__diff"
+            >
               <h4>{{ t('audits.after') }}</h4>
               <pre class="audits__code">{{ asJsonString(detail.after) || '—' }}</pre>
             </div>
@@ -422,7 +455,12 @@ onMounted(() => {
         </div>
         <DialogFooter>
           <DialogClose>
-            <Button type="button" variant="outline">{{ t('common.close') }}</Button>
+            <Button
+              type="button"
+              variant="outline"
+            >
+              {{ t('common.close') }}
+            </Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>
