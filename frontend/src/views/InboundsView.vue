@@ -502,8 +502,12 @@ const columns: ColumnDef<Inbound, unknown>[] = [
   <section class="inbounds">
     <header class="inbounds__header">
       <div>
-        <h1 class="inbounds__title">{{ t('inbounds.title') }}</h1>
-        <p class="inbounds__subtitle">{{ t('inbounds.subtitle') }}</p>
+        <h1 class="inbounds__title">
+          {{ t('inbounds.title') }}
+        </h1>
+        <p class="inbounds__subtitle">
+          {{ t('inbounds.subtitle') }}
+        </p>
       </div>
       <div class="inbounds__actions">
         <Select
@@ -550,7 +554,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
           @submit="createForm.handleSubmit"
         >
           <div class="inbounds__grid">
-            <FormField name="nodeId" :label="t('inbounds.node')" required>
+            <FormField
+              name="nodeId"
+              :label="t('inbounds.node')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="(createForm.values as CreateFormValues).nodeId"
@@ -572,7 +580,12 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 </Select>
               </template>
             </FormField>
-            <FormField name="name" :label="t('inbounds.name')" required :hint="t('inbounds.nameHint')">
+            <FormField
+              name="name"
+              :label="t('inbounds.name')"
+              required
+              :hint="t('inbounds.nameHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -583,7 +596,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="protocol" :label="t('inbounds.protocol')" required>
+            <FormField
+              name="protocol"
+              :label="t('inbounds.protocol')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="(createForm.values as CreateFormValues).protocol"
@@ -594,15 +611,27 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="vless">vless</SelectItem>
-                    <SelectItem value="hysteria2">hysteria2</SelectItem>
-                    <SelectItem value="shadowsocks">shadowsocks</SelectItem>
-                    <SelectItem value="trojan">trojan</SelectItem>
+                    <SelectItem value="vless">
+                      vless
+                    </SelectItem>
+                    <SelectItem value="hysteria2">
+                      hysteria2
+                    </SelectItem>
+                    <SelectItem value="shadowsocks">
+                      shadowsocks
+                    </SelectItem>
+                    <SelectItem value="trojan">
+                      trojan
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </template>
             </FormField>
-            <FormField name="listen" :label="t('inbounds.listen')" :hint="t('inbounds.listenHint')">
+            <FormField
+              name="listen"
+              :label="t('inbounds.listen')"
+              :hint="t('inbounds.listenHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -613,7 +642,12 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="listenPort" :label="t('inbounds.listenPort')" required :hint="t('inbounds.listenPortHint')">
+            <FormField
+              name="listenPort"
+              :label="t('inbounds.listenPort')"
+              required
+              :hint="t('inbounds.listenPortHint')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -627,7 +661,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="listenPortsText" :label="t('inbounds.listenPorts')" :hint="t('inbounds.listenPortsHint')">
+            <FormField
+              name="listenPortsText"
+              :label="t('inbounds.listenPorts')"
+              :hint="t('inbounds.listenPortsHint')"
+            >
               <template #default="{ id, value, onBlur }">
                 <Textarea
                   :id="id"
@@ -640,7 +678,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
               </template>
             </FormField>
           </div>
-          <FormField name="tagsText" :label="t('inbounds.tags')" :hint="t('inbounds.tagsHint')">
+          <FormField
+            name="tagsText"
+            :label="t('inbounds.tags')"
+            :hint="t('inbounds.tagsHint')"
+          >
             <template #default="{ id, value, onBlur }">
               <Input
                 :id="id"
@@ -651,7 +693,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
               />
             </template>
           </FormField>
-          <FormField name="paramsText" :label="t('inbounds.params')" :hint="t('inbounds.paramsHint')">
+          <FormField
+            name="paramsText"
+            :label="t('inbounds.params')"
+            :hint="t('inbounds.paramsHint')"
+          >
             <template #default="{ id, value, onBlur }">
               <Textarea
                 :id="id"
@@ -665,9 +711,17 @@ const columns: ColumnDef<Inbound, unknown>[] = [
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="createForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="createForm.isSubmitting.value"
+            >
               {{ t('common.create') }}
             </Button>
           </DialogFooter>
@@ -687,7 +741,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
           @submit="editForm.handleSubmit"
         >
           <div class="inbounds__grid">
-            <FormField name="name" :label="t('inbounds.name')" required>
+            <FormField
+              name="name"
+              :label="t('inbounds.name')"
+              required
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -698,7 +756,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="protocol" :label="t('inbounds.protocol')" required>
+            <FormField
+              name="protocol"
+              :label="t('inbounds.protocol')"
+              required
+            >
               <template #default="{ onBlur, hasError }">
                 <Select
                   :model-value="(editForm.values as EditFormValues).protocol"
@@ -709,15 +771,26 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="vless">vless</SelectItem>
-                    <SelectItem value="hysteria2">hysteria2</SelectItem>
-                    <SelectItem value="shadowsocks">shadowsocks</SelectItem>
-                    <SelectItem value="trojan">trojan</SelectItem>
+                    <SelectItem value="vless">
+                      vless
+                    </SelectItem>
+                    <SelectItem value="hysteria2">
+                      hysteria2
+                    </SelectItem>
+                    <SelectItem value="shadowsocks">
+                      shadowsocks
+                    </SelectItem>
+                    <SelectItem value="trojan">
+                      trojan
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </template>
             </FormField>
-            <FormField name="listen" :label="t('inbounds.listen')">
+            <FormField
+              name="listen"
+              :label="t('inbounds.listen')"
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -728,7 +801,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="listenPort" :label="t('inbounds.listenPort')" required>
+            <FormField
+              name="listenPort"
+              :label="t('inbounds.listenPort')"
+              required
+            >
               <template #default="{ id, value, onBlur, hasError }">
                 <Input
                   :id="id"
@@ -742,7 +819,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                 />
               </template>
             </FormField>
-            <FormField name="listenPortsText" :label="t('inbounds.listenPorts')" :hint="t('inbounds.listenPortsHint')">
+            <FormField
+              name="listenPortsText"
+              :label="t('inbounds.listenPorts')"
+              :hint="t('inbounds.listenPortsHint')"
+            >
               <template #default="{ id, value, onBlur }">
                 <Textarea
                   :id="id"
@@ -755,7 +836,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
               </template>
             </FormField>
           </div>
-          <FormField name="tagsText" :label="t('inbounds.tags')" :hint="t('inbounds.tagsHint')">
+          <FormField
+            name="tagsText"
+            :label="t('inbounds.tags')"
+            :hint="t('inbounds.tagsHint')"
+          >
             <template #default="{ id, value, onBlur }">
               <Input
                 :id="id"
@@ -766,7 +851,11 @@ const columns: ColumnDef<Inbound, unknown>[] = [
               />
             </template>
           </FormField>
-          <FormField name="paramsText" :label="t('inbounds.params')" :hint="t('inbounds.paramsHint')">
+          <FormField
+            name="paramsText"
+            :label="t('inbounds.params')"
+            :hint="t('inbounds.paramsHint')"
+          >
             <template #default="{ id, value, onBlur }">
               <Textarea
                 :id="id"
@@ -780,9 +869,17 @@ const columns: ColumnDef<Inbound, unknown>[] = [
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">{{ t('common.cancel') }}</Button>
+              <Button
+                type="button"
+                variant="outline"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
-            <Button type="submit" :disabled="editForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="editForm.isSubmitting.value"
+            >
               {{ t('common.save') }}
             </Button>
           </DialogFooter>

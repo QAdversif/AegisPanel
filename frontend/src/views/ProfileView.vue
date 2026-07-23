@@ -136,8 +136,12 @@ const sortedScopes = computed(() => {
   <section class="profile">
     <header class="profile__header">
       <div>
-        <h1 class="profile__title">{{ t('profile.title') }}</h1>
-        <p class="profile__subtitle">{{ t('profile.subtitle') }}</p>
+        <h1 class="profile__title">
+          {{ t('profile.title') }}
+        </h1>
+        <p class="profile__subtitle">
+          {{ t('profile.subtitle') }}
+        </p>
       </div>
     </header>
 
@@ -152,15 +156,27 @@ const sortedScopes = computed(() => {
         <CardDescription>{{ t('profile.identityDescription') }}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div v-if="loading" class="profile__loading">{{ t('profile.loading') }}</div>
-        <dl v-else-if="me_" class="profile__meta-list">
+        <div
+          v-if="loading"
+          class="profile__loading"
+        >
+          {{ t('profile.loading') }}
+        </div>
+        <dl
+          v-else-if="me_"
+          class="profile__meta-list"
+        >
           <div class="profile__meta-row">
             <dt>{{ t('profile.username') }}</dt>
-            <dd class="profile__mono">{{ me_.username }}</dd>
+            <dd class="profile__mono">
+              {{ me_.username }}
+            </dd>
           </div>
           <div class="profile__meta-row">
             <dt>{{ t('profile.userId') }}</dt>
-            <dd class="profile__mono">{{ me_.userId }}</dd>
+            <dd class="profile__mono">
+              {{ me_.userId }}
+            </dd>
           </div>
           <div class="profile__meta-row">
             <dt>{{ t('profile.scopesLabel') }}</dt>
@@ -263,7 +279,10 @@ const sortedScopes = computed(() => {
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">
+              <Button
+                type="button"
+                variant="outline"
+              >
                 <RefreshCw class="h-4 w-4" />
                 {{ t('common.cancel') }}
               </Button>

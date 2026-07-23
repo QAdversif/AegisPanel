@@ -142,8 +142,12 @@ onMounted(() => {
   <section class="settings">
     <header class="settings__header">
       <div>
-        <h1 class="settings__title">{{ t('settings.title') }}</h1>
-        <p class="settings__subtitle">{{ t('settings.subtitle') }}</p>
+        <h1 class="settings__title">
+          {{ t('settings.title') }}
+        </h1>
+        <p class="settings__subtitle">
+          {{ t('settings.subtitle') }}
+        </p>
       </div>
     </header>
 
@@ -156,14 +160,23 @@ onMounted(() => {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div v-if="loading" class="settings__stack">
+        <div
+          v-if="loading"
+          class="settings__stack"
+        >
           <Skeleton class="h-4 w-1/2" />
           <Skeleton class="h-4 w-1/3" />
         </div>
-        <div v-else-if="active" class="settings__stack">
+        <div
+          v-else-if="active"
+          class="settings__stack"
+        >
           <div class="settings__row">
             <code class="settings__path">{{ active.subPath || t('settings.defaultPath') }}</code>
-            <Badge v-if="isDefault" variant="secondary">
+            <Badge
+              v-if="isDefault"
+              variant="secondary"
+            >
               {{ t('settings.default') }}
             </Badge>
           </div>
@@ -210,7 +223,10 @@ onMounted(() => {
         <CardDescription>{{ t('settings.explicitDescription') }}</CardDescription>
       </CardHeader>
       <CardContent>
-        <Form :is-submitting="explicitForm.isSubmitting.value" @submit="explicitForm.handleSubmit">
+        <Form
+          :is-submitting="explicitForm.isSubmitting.value"
+          @submit="explicitForm.handleSubmit"
+        >
           <FormField
             name="subPath"
             :label="t('settings.explicitLabel')"
