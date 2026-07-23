@@ -151,7 +151,7 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
 	auditsSvc := audits.NewService(audits.NewMemoryStore())
 
-	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil)
+	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil /* bootstrapSvc */, nil)
 }
 
 // contains is a small strings.Contains alias to keep
