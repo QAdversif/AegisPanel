@@ -664,7 +664,7 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 		return fmt.Errorf("bootstrap: temp known_hosts: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
+	defer func() { _ = os.Remove(tmpName) }() // #nosec G703 -- operator-config path
 	if _, err := tmp.WriteString(body); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("bootstrap: write temp known_hosts: %w", err)
@@ -672,18 +672,23 @@ func appendKnownHosts(path, addr string, key ssh.PublicKey) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("bootstrap: close temp known_hosts: %w", err)
 	}
-	// G703 (path traversal) is suppressed: `path` is
-	// operator-config-controlled via cfg.KnownHosts at
-	// boot, not user input. The same lint suppression
-	// applies to the os.CreateTemp call above.
+	// G703 (path traversal) is suppressed at every sink
+	// that receives the `path` taint (operator-config via
+	// cfg.KnownHosts at boot, not user input):
 	//
-	// gosec's trailing `// #nosec` on the same line
-	// works for os.ReadFile / os.CreateTemp above but
-	// does NOT silence the taint analysis on os.Rename's
-	// destination argument, so we use the standalone
-	// comment form here.
-	// #nosec G703 -- operator-config path
-	if err := os.Rename(tmpName, path); err != nil {
+	//   - os.CreateTemp(filepath.Dir(path), ...)   — line 672
+	//   - os.Remove(tmpName)                       — line 667 (tmpName derives from `path`)
+	//   - os.Rename(tmpName, path)                 — line 686
+	//
+	// gosec v2 taint analysis tracks `path` through
+	// filepath.Dir → os.CreateTemp → tmp.Name() → tmpName
+	// and flags every os.* call receiving a tainted arg.
+	// The standalone `// #nosec` form (comment on its own
+	// line above) is NOT honored by gosec v2 — only the
+	// trailing-on-the-same-line form is. We keep the
+	// annotations next to each call to make the suppression
+	// auditable per sink.
+	if err := os.Rename(tmpName, path); err != nil { // #nosec G703 -- operator-config path
 		return fmt.Errorf("bootstrap: rename known_hosts: %w", err)
 	}
 	return nil
