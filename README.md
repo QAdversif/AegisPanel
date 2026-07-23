@@ -7,8 +7,8 @@
 > (v2.6+), full-client compatibility (Hiddify, v2rayNG/N, Streisand,
 > Clash), anti-censorship via Caddy + decoy sites + port masquerading.
 >
-> **Stack:** Go 1.22+ backend, Vue 3 + TypeScript frontend, Caddy,
-> fail2ban, PostgreSQL, Redis. **License:** AGPL-3.0.
+> **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend, Caddy,
+> fail2ban, PostgreSQL. **License:** AGPL-3.0.
 > **Tenancy:** single-tenant (one panel = one operator, multiple admin
 > accounts). See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for full
 > design and [`docs/adr/0003-mvp-singbox-vertical-slice.md`](./docs/adr/0003-mvp-singbox-vertical-slice.md)
@@ -16,49 +16,56 @@
 
 ## Status
 
-**v0.1.0-mvp-render.** The renderable MVP is the first of three
-sub-phases on the path to v1.0.0-mvp-soft-launch:
+**v0.3.0-mvp-byo-node, sub-slice `v0.3.0-a` (backend provisioner)
+shipped.** v0.3.0-a closes the operator's first half of the BYO
+Node flow — the panel can install the placeholder agent on a remote
+node, but the frontend "Add node" dialog (v0.3.0-b) and the real
+Go agent binary (v0.3.0-c) are still pending:
 
-| Milestone | Status | What |
-|---|---|---|
-| v0.1.0-mvp-render | **shipped** | The renderable MVP — admin UI + subscription endpoint + sing-box (no-op core in dev) |
-| v0.2.0-mvp-agent | next | Real `cores/singbox.Apply` (dev) + per-node agent lifecycle |
-| v0.3.0-mvp-byo-node | planned | BYO Node flow + Ansible provisioning |
-| v0.4.0-mvp-batched | planned | Batched Apply + HY2 reconnect-under-reload load-test |
-| v1.0.0-mvp-soft-launch | planned | Polish + clean-VM smoke + on-prem install |
+| Milestone | Status | Tag | What |
+| --- | --- | --- | --- |
+| v0.1.0-mvp-render | **shipped** | `v0.1.0-mvp-render` (on `5840c13`) | Renderable MVP — admin UI + subscription endpoint + sing-box (no-op core in dev) |
+| v0.2.0-mvp-agent | **shipped** | `v0.2.0-mvp-agent` (on `c2e773c`) | Per-sub_token rate limit, OpenAPI codegen, audit log, operator CLI, per-resource handler surfaces |
+| v0.3.0-mvp-byo-node | **wip** (a done, b/c pending) | (tag after `c`) | BYO Node flow: SSH probe + agent install + state machine |
+| v0.4.0-mvp-batched | planned | — | Batched Apply + HY2 reconnect-under-reload load-test |
+| v1.0.0-mvp-soft-launch | planned | — | Polish + clean-VM smoke + on-prem install |
 
 See [`ARCHITECTURE.md`](./ARCHITECTURE.md) §21 for the full roadmap
-and [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md) for the v0.1.0
+and [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md) for the current
 gap list.
 
 ## Repository layout (monorepo)
 
 ```
 aegis/
-├── ARCHITECTURE.md         # the design document (v9)
+├── ARCHITECTURE.md         # the design document (v9.2)
 ├── CHANGELOG.md            # per-version release notes
-├── KNOWN_LIMITATIONS.md    # v0.1.0 gap list
+├── KNOWN_LIMITATIONS.md    # current gap list
 ├── README.md               # this file
 ├── LICENSE                 # AGPL-3.0
 ├── Makefile                # top-level orchestration
 ├── .gitattributes          # LF / CRLF policy (LF in repo, CRLF on .bat/.cmd/.ps1)
-├── backend/                # Go 1.22+ service
+├── backend/                # Go 1.26+ service
 │   ├── cmd/aegis/          # the `aegis` binary entrypoint
-│   ├── internal/           # auth / config / cores / db / hosts / inbounds / migrations / nodes / panelcfg / router / subscription
-│   ├── migrations/         # native migrator + 0001..NNNN.sql
+│   ├── internal/           # audits / auth / bootstrap / config / cores / db / hosts / inbounds / migrations / nodes / panelcfg / ratelimit / router / subscription
+│   ├── migrations/         # native migrator + 0001..0012.sql
 │   └── testutil/           # shared Postgres test fixtures
 ├── frontend/               # Vue 3 + TS admin UI (shadcn-vue)
-│   ├── src/components/ui/  # 15 base shadcn-vue components (PR-B)
-│   ├── src/components/     # Form / DataTable / FormField (PR-C)
-│   ├── src/api/services/   # typed API clients (PR-D)
-│   ├── src/schemas/        # zod schemas (PR-C)
-│   ├── src/views/          # Dashboard / Nodes / Inbounds / Hosts / Subscription / Users / Settings / Login
+│   ├── src/components/ui/  # 44 base shadcn-vue components
+│   ├── src/components/     # Form / DataTable / FormField (typed wrapper around vee-validate + zod)
+│   ├── src/api/services/   # typed API clients (auth / nodes / inbounds / hosts / users / subscription / panelcfg / audits)
+│   ├── src/schemas/        # zod schemas
+│   ├── src/views/          # Dashboard / Nodes / Inbounds / Hosts / Subscription / Users / Settings / Audits / Profile / Login
 │   ├── src/i18n/           # vue-i18n (en + ru)
-│   └── tools/scripts/      # check-raw-text.mjs (i18n lint)
+│   ├── src/types/          # aegis.ts (hand mirror) + api.d.ts (codegen from openapi.yaml)
+│   └── tools/scripts/      # check-raw-text.mjs (i18n lint) + check-codegen.mjs (openapi-typescript freshness)
 ├── deploy/                 # Ansible, Caddy, fail2ban, docker, systemd
 ├── docs/
-│   ├── adr/                # Architecture Decision Records
-│   └── guide/              # rendered ARCHITECTURE.md (for GitHub Pages)
+│   ├── adr/                # Architecture Decision Records (0001–0004)
+│   ├── guide/              # rendered ARCHITECTURE.md (for GitHub Pages)
+│   ├── user-guide/         # placeholder; populated in v1.0.0
+│   ├── api/                # placeholder; populated in v1.0.0
+│   └── openapi.yaml        # OpenAPI 3.0 spec (codegen source of truth)
 └── tools/scripts/          # branch-start.sh, smoke-frontend.sh
 ```
 
