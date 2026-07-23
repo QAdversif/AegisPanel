@@ -146,6 +146,50 @@ type Config struct {
 	// install with sub_token rotation churn).
 	// 50k is a safe default.
 	SubscriptionRateLimitMaxKeys int `env:"AEGIS_SUBSCRIPTION_RATELIMIT_MAX_KEYS" envDefault:"50000"`
+
+	// AgentBinaryPath is the local filesystem
+	// path of the `aegis-agent` binary the panel
+	// uploads to a node during `POST /v1/nodes/{id}/provision`.
+	// v0.3.0 ships the binary in the same monorepo
+	// (`backend/cmd/aegis-agent/`) and the release
+	// pipeline builds it next to the panel binary.
+	//
+	// Required: there is no fallback. A missing
+	// or unreadable file fails the provision
+	// call with a 5xx (the operator can either
+	// build the agent locally or mount a
+	// pre-built image in production).
+	AgentBinaryPath string `env:"AEGIS_AGENT_BINARY,required" envDefault:"./bin/aegis-agent"`
+
+	// AgentSSHPort is the default SSH port the
+	// installer uses when the operator does not
+	// supply a per-call override. 22 is the SSH
+	// standard; the constant lives here so a
+	// future "non-standard port" deploy
+	// (operators running sshd on 2222 to dodge
+	// naive scanners) is a single env-var change.
+	AgentSSHPort int `env:"AEGIS_AGENT_SSH_PORT" envDefault:"22"`
+
+	// AgentSSHUser is the default SSH user the
+	// installer uses when the operator does not
+	// supply a per-call override. `root` is the
+	// default because the bootstrap install
+	// writes `/usr/local/bin/`, `/etc/aegis/`,
+	// and `/etc/systemd/system/` — three paths
+	// that require root on a stock Linux box.
+	// Operators running sshd as a non-root user
+	// (and granting passwordless sudo) can
+	// override here.
+	AgentSSHUser string `env:"AEGIS_AGENT_SSH_USER" envDefault:"root"`
+
+	// AgentKnownHosts is the panel-side
+	// `known_hosts` file. The bootstrap installer
+	// appends a new entry on first contact
+	// (TOFU) when the operator picks
+	// `tofu_policy=accept-and-append`. The file
+	// must be writable by the panel process; the
+	// installer creates it if absent.
+	AgentKnownHosts string `env:"AEGIS_AGENT_KNOWN_HOSTS" envDefault:"./var/known_hosts"`
 }
 
 // Load reads `.env` (if present) and then parses the environment.

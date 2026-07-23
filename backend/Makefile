@@ -8,12 +8,14 @@ SHELL := /bin/sh
 
 GO         := go
 BINARY     := aegis
+AGENT      := aegis-agent
 CMD_DIR    := ./cmd/aegis
+AGENT_DIR  := ./cmd/aegis-agent
 PKG        := ./...
 COVERAGE   := coverage.out
 LINTER_CFG := .golangci.yml
 
-.PHONY: help build run test test-integration test-coverage lint fmt tidy clean docker docker-build
+.PHONY: help build build-agent run test test-integration test-coverage lint fmt tidy clean docker docker-build
 
 help: ## Show this help.
 	@printf "Backend Makefile\n\nUsage: make <target>\n\nTargets:\n"
@@ -21,12 +23,17 @@ help: ## Show this help.
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-build: ## Compile the binary to ./bin/aegis.
+build: build-agent ## Compile both binaries (alias for now — agent is required for v0.3.0).
 	@mkdir -p bin
-	@$(GO) build -trimpath -ldflags "-s -w" -o bin/$(BINARY) $(CMD_DIR)
+	@$(GO) build -trimpath -ldflags "-s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" -o bin/$(BINARY) $(CMD_DIR)
 	@echo "✓ built ./bin/$(BINARY)"
 
-run: ## Run the service in the foreground.
+build-agent: ## Compile the per-node agent binary to ./bin/aegis-agent.
+	@mkdir -p bin
+	@$(GO) build -trimpath -ldflags "-s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)" -o bin/$(AGENT) $(AGENT_DIR)
+	@echo "✓ built ./bin/$(AGENT)"
+
+run: ## Run the panel service in the foreground.
 	@$(GO) run $(CMD_DIR)
 
 test: ## Run unit tests.
@@ -59,7 +66,10 @@ tidy: ## Tidy go.mod / go.sum.
 clean: ## Remove build artefacts.
 	@rm -rf bin/ $(COVERAGE) coverage.html
 
-docker: docker-build ## Alias for docker-build.
+docker: docker-build docker-build-agent ## Build both panel + agent Docker images.
 
 docker-build: ## Build the panel Docker image.
 	@docker build -t QAdversif/AegisPanel:dev -f Dockerfile ..
+
+docker-build-agent: ## Build the per-node agent Docker image.
+	@docker build -t QAdversif/aegis-agent:dev -f cmd/aegis-agent/Dockerfile .
