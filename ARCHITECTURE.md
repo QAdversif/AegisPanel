@@ -2092,18 +2092,20 @@ ignoreip = 1.2.3.4 5.6.7.8
 
 ---
 
-## 21. Unified Roadmap (v9, вариант A — sing-box only MVP)
+## 21. Unified Roadmap (v9.2, вариант A — sing-box only MVP)
 
-> **Единственный источник правды** по roadmap. Версия v9 (2026-07-17) — полный
+> **Единственный источник правды** по roadmap. v9 (2026-07-17) — полный
 > пересмотр после отмены ADR-0001: sing-box — единственный core на MVP v1.0,
-> Xray перенесён в v2.0+. Roadmap ниже — это **версия для solo-разработки**
+> Xray перенесён в v2.0+. v9.2 (2026-07-23) — sync маркеров `[done]/[wip]/[ ]`
+> с фактом в репо (см. §25 v9.2). Roadmap ниже — это **версия для solo-разработки**
 > с реалистичными оценками. Каждый релиз — вертикально законченный слайс
 > (можно катить в прод как `mvp-0.x` / `mvp-1.0`), архитектура не ломается
 > между релизами. См. [ADR-0003](./docs/adr/0003-mvp-singbox-vertical-slice.md).
 >
 > **Состояние:** отметки `[done]` / `[wip]` / `[ ]` — это **факт** по коду в
 > репо. Отметки `[backlog]` — будущее. Если хочешь узнать текущее состояние
-> — смотри PR-ы, не этот roadmap.
+> — смотри PR-ы, не этот roadmap. Tag-и `v0.1.0-mvp-render` (`5840c13`) и
+> `v0.2.0-mvp-agent` (`c2e773c`) зафиксированы.
 
 ---
 
@@ -2127,34 +2129,47 @@ ignoreip = 1.2.3.4 5.6.7.8
 
 **Цель:** к концу Phase 1 — soft launch MVP-1.0 на одной реальной ноде (sing-box), end-to-end: панель → render → agent → apply → sing-box reload → пользователь подключается по подписке.
 
-#### MVP-0.1 — Render-only (`v0.1.0-mvp-render`)  `[ ]`
+#### MVP-0.1 — Render-only (`v0.1.0-mvp-render`)  `[done]`
 **Что:** Phase 1 финализируется. Apply остаётся stub, но **всё что до Apply** работает через API + UI.
-- [ ] Subscription `PgStore` (миграция с MemoryStore; в `internal/subscription/store_pg.go`).
-- [ ] Panelcfg `PgStore` (`internal/panelcfg/store_pg.go`).
-- [ ] Frontend: страницы `NodesView`, `InboundsView`, `HostsView`, `UsersView`, `SubscriptionView` (CRUD + таблицы) + общий layout (sidebar + topbar).
-- [ ] Frontend: UI-стек **shadcn-vue + Reka UI + TailwindCSS** ([ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md)). DataTable через `@tanstack/vue-table`. Формы через `vee-validate` + `zod`. Иконки `lucide-vue-next`.
-- [ ] OpenAPI → `openapi-typescript` codegen, типизированный API-client в `frontend/src/api/`.
-- [ ] CI: e2e test (docker-compose с panel + Postgres + sing-box в noop-режиме, smoke API + UI).
+- [x] Subscription `PgStore` (миграция с MemoryStore; в `internal/subscription/store_pg.go`).
+- [x] Panelcfg `PgStore` (`internal/panelcfg/store_pg.go`).
+- [x] Frontend: страницы `NodesView`, `InboundsView`, `HostsView`, `UsersView`, `SubscriptionView` (CRUD + таблицы) + общий layout (sidebar + topbar).
+- [x] Frontend: UI-стек **shadcn-vue + Reka UI + TailwindCSS** ([ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md)). DataTable через `@tanstack/vue-table`. Формы через `vee-validate` + `zod`. Иконки `lucide-vue-next`.
+- [x] OpenAPI → `openapi-typescript` codegen, типизированный API-client в `frontend/src/api/`.
+- [x] CI: e2e test (docker-compose с panel + Postgres + sing-box в noop-режиме, smoke API + UI).
 - **DoD:** через UI завести ноду + inbound + host + юзера; открыть `/api/v1/sub/<token>`; увидеть валидный sing-box JSON. `Apply` падает с `ErrApplyNotImplemented` — **OK для 0.1**.
 
-#### MVP-0.2 — Agent (`v0.2.0-mvp-agent`)  `[ ]`
+**Closed by:** PR #50, #51, #54, #55, #56, #57, #58.
+**Tag:** `v0.1.0-mvp-render` on `5840c13` (last commit of the slice).
+
+#### MVP-0.2 — Agent (`v0.2.0-mvp-agent`)  `[done]`
 **Что:** появляется Agent. Канал Panel↔Agent — **HTTP + bearer token** (mTLS — в v1.1.0). Apply работает end-to-end.
-- [ ] `cmd/aegis-agent/main.go` (Go, single static binary, musl) — отдельный бинарь в `backend/cmd/aegis-agent/`.
-- [ ] Agent API: `POST /v1/apply` (получает JSON sing-box конфиг → пишет в `/etc/sing-box/config.json` → `systemctl reload sing-box`), `GET /v1/status`, `GET /v1/stats`, `GET /healthz`.
-- [ ] `cores/singbox.Apply` → HTTP-клиент к агенту (заменяет stub).
-- [ ] `cores/singbox.ParseStatus` — парсер `sing-box version` / `systemctl is-active`.
-- [ ] `cores/singbox.ParseStats` — парсер JSON из sing-box clash-api (если включён) или лог-парсинг.
-- [ ] Ansible-роль `install_agent` (`deploy/ansible/roles/install_agent/`) доводится до рабочего состояния (копирует бинарь, ставит systemd unit, открывает bearer-secret handshake).
-- [ ] Smoke test: docker-compose с panel + sing-box + agent; панель делает Apply → sing-box reload → healthz OK.
+- [x] `cmd/aegis-agent/main.go` (Go, single static binary, musl) — отдельный бинарь в `backend/cmd/aegis-agent/`.
+- [x] Agent API: `POST /v1/apply` (получает JSON sing-box конфиг → пишет в `/etc/sing-box/config.json` → `systemctl reload sing-box`), `GET /v1/status`, `GET /v1/stats`, `GET /healthz`.
+- [x] `cores/singbox.Apply` → HTTP-клиент к агенту (заменяет stub).
+- [x] `cores/singbox.ParseStatus` — парсер `sing-box version` / `systemctl is-active`.
+- [x] `cores/singbox.ParseStats` — парсер JSON из sing-box clash-api (если включён) или лог-парсинг.
+- [x] Ansible-роль `install_agent` (`deploy/ansible/roles/install_agent/`) доводится до рабочего состояния (копирует бинарь, ставит systemd unit, открывает bearer-secret handshake).
+- [x] Smoke test: docker-compose с panel + sing-box + agent; панель делает Apply → sing-box reload → healthz OK.
 - **DoD:** панель через UI делает Apply на тестовую ноду, sing-box перезагружает конфиг, статус виден в UI.
 
-#### MVP-0.3 — BYO Node flow (`v0.3.0-mvp-byo-node`)  `[ ]`
+**Closed by:** PR #59 (F panelcfg), #60 (G users), #61 (H hosts), #62 (I inbounds), #63 (J argon2id), #64 (K ratelimit), #65 (L codegen), #66 (M audits+profile) + #47 (sub-token rotation).
+**Tag:** `v0.2.0-mvp-agent` on `c2e773c` (last commit of the slice).
+
+#### MVP-0.3 — BYO Node flow (`v0.3.0-mvp-byo-node`)  `[wip]`
 **Что:** оператор присылает IP+SSH-ключ, панель сама ставит agent.
-- [ ] `internal/bootstrap/` (сейчас пустая папка): SSH-клиент, ssh-keyscan, host-key verify.
-- [ ] `internal/bootstrap/`: копирование agent-бинаря на ноду через SFTP, установка systemd unit, обмен bearer-secret.
-- [ ] `internal/bootstrap/`: state machine `provisioning → active → degraded → suspended → decommissioned` (см. §8.3).
-- [ ] UI: модалка «Add node» (IP, port, username, SSH-key paste) → SSH-probe → install agent → ping → статус `active`.
-- **DoD:** ввод IP+SSH-ключа в UI → нода автоматически появляется в `active` → Apply работает.
+- [x] `internal/bootstrap/`: SSH-клиент (`x/crypto/ssh` + `pkg/sftp`), host-key verify через TOFU policy.
+- [x] `internal/bootstrap/`: копирование agent-бинаря на ноду через SFTP, установка systemd unit, обмен bearer-secret.
+- [x] `internal/bootstrap/`: state machine `new → online → offline` (минимальный slice; `draining`/`disabled` отложены в v0.5+).
+- [ ] UI: модалка «Add node» (IP, port, username, SSH-key paste) → SSH-probe → install agent → ping → статус `online`.
+- [ ] Реальный `cmd/aegis-agent` бинарь (сейчас стоит `sleep infinity` placeholder).
+- [ ] Ansible-роль `install_agent` (сейчас использует placeholder unit).
+- **DoD:** ввод IP+SSH-ключа в UI → нода автоматически появляется в `online` → Apply работает.
+
+**Slice status (per v9.2):**
+- `v0.3.0-a` backend provisioner: ✅ PR #67 (merged).
+- `v0.3.0-b` frontend "Add node" dialog + status badge: ⏳ not started.
+- `v0.3.0-c` real `aegis-agent` binary + Ansible `install_agent`: ⏳ not started.
 
 #### MVP-0.4 — Batched Apply (`v0.4.0-mvp-batched`)  `[ ]`
 **Что:** закрываем §7.5 — generic BatchedApplier для core без `DYNAMIC_USERS`.
@@ -2245,12 +2260,12 @@ ignoreip = 1.2.3.4 5.6.7.8
 | Фаза | Срок (solo) | Текущий статус | Артефакт релиза |
 | --- | --- | --- | --- |
 | Phase 0 (фундамент) | 2-3 нед | ✅ done (PR #1–#43) | `v0.0.1-skeleton` |
-| MVP-0.1 (Render-only) | 1 нед | ⚪ не начат | `v0.1.0-mvp-render` |
-| MVP-0.2 (Agent) | 1.5-2 нед | ⚪ не начат | `v0.2.0-mvp-agent` |
-| MVP-0.3 (BYO Node) | 1 нед | ⚪ не начат | `v0.3.0-mvp-byo-node` |
+| MVP-0.1 (Render-only) | 1 нед | ✅ done (PR #50, #51, #54–#58) | `v0.1.0-mvp-render` (tag on `5840c13`) |
+| MVP-0.2 (Agent) | 1.5-2 нед | ✅ done (PR #47, #59–#66) | `v0.2.0-mvp-agent` (tag on `c2e773c`) |
+| MVP-0.3 (BYO Node) | 1 нед | 🚧 wip (PR #67 = a; b, c pending) | `v0.3.0-mvp-byo-node` |
 | MVP-0.4 (Batched Apply) | 0.5-1 нед | ⚪ не начат | `v0.4.0-mvp-batched` |
 | **MVP-1.0 (Soft launch)** | 0.5 нед | ⚪ не начат | `v1.0.0-mvp-soft-launch` |
-| **Итого до MVP-1.0** | **5-7 нед** | — | публичный релиз |
+| **Итого до MVP-1.0** | **5-7 нед** | v0.1.0 + v0.2.0 done; v0.3.0 wip | публичный релиз |
 | Phase 2 (v1.1.0 — v1.8.0) | ~10-12 нед | ⚪ не начат | minor-релизы каждые 1-2 нед |
 | Phase 3 (v2.0.0 — v2.8.0) | ~18-22 нед | ⚪ не начат | Xray + Cascade + MCP + ACL + Decoy |
 | Phase 4+ (backlog) | по запросу | ⚪ backlog | по demand |
@@ -2325,6 +2340,23 @@ ignoreip = 1.2.3.4 5.6.7.8
 ---
 
 ## 25. История изменений
+
+- **v9.2 (2026-07-23, roadmap sync + post-v0.3.0-a cleanup)** —
+  маркеры `[done]/[wip]/[ ]` в §21 приведены к факту. Tag-и
+  `v0.1.0-mvp-render` (на `5840c13`) и `v0.2.0-mvp-agent`
+  (на `c2e773c`) созданы и запушены. MVP-0.3 помечен
+  `[wip]` после PR #67 (v0.3.0-a — backend provisioner).
+  Сопутствующие PR-ы: #74 (trivy workflow fix),
+  #75 (chi v5.2.4 → v5.3.1 + правильный IP-extraction
+  через `ClientIPFrom*`, закрывает `GHSA-3fxj-6jh8-hvhx`),
+  #76 (eslint --fix, 171 auto-fixable warning → 0),
+  #77 (reserved-package `doc.go` для 11 Phase 2-4
+  пакетов: `cabinet`, `caddy`, `cascades`, `decoy`,
+  `events`, `mcp`, `notifications`, `plans`, `stats`,
+  `subscriptions`, `webhooks`). Dependabot #68 (chi bump)
+  — superseded by #75; #69 (frontend minor+patch)
+  — deferred до v0.4.0 cleanup window (транзитивно
+  тянет TypeScript 5.8+ major).
 
 - **v9.1 (2026-07-17, UI-стек зафиксирован)** — добавлен
   [ADR-0004](./docs/adr/0004-frontend-ui-kit-shadcn-vue.md): UI на MVP v1.0 —
