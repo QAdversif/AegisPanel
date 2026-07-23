@@ -108,10 +108,10 @@ type applyResponse struct {
 // include sing-box process info (PID, uptime, last
 // reload time).
 type statusResponse struct {
-	Running       bool   `json:"running"`
-	Core          string `json:"core"`
-	CoreVersion   string `json:"core_version"`
-	LastApplyISO  string `json:"last_apply_iso,omitempty"`
+	Running      bool   `json:"running"`
+	Core         string `json:"core"`
+	CoreVersion  string `json:"core_version"`
+	LastApplyISO string `json:"last_apply_iso,omitempty"`
 }
 
 // statsResponse is the /v1/stats payload. v0.3.0
@@ -399,8 +399,14 @@ func run(ctx context.Context, listenAddr string) error {
 		log.Printf("shutdown signal received; draining in-flight requests")
 		// 10-second drain matches the systemd
 		// `TimeoutStopSec=10` set in the
-		// `install_agent` role.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// `install_agent` role. We use
+		// `context.WithoutCancel` so the timeout
+		// starts from now (not from when the
+		// signal arrived) — `srv.Shutdown` will
+		// only return early if the deadline fires,
+		// not if the parent context was already
+		// cancelled by the SIGINT.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("graceful shutdown: %w", err)
