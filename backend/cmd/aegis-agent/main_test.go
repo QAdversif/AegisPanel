@@ -272,13 +272,22 @@ func TestStats_AcceptsAndReturnsEmptyShape(t *testing.T) {
 }
 
 func TestSubtleCmp_EqualAndDifferent(t *testing.T) {
-	if subtleCmp("aegis-secret-1234567890", "aegis-secret-1234567890") != 0 {
+	// Use plain fixture strings (low entropy) so
+	// gitleaks' generic-api-key rule does not
+	// flag the test as a real secret. The
+	// constant-time compare's correctness is
+	// not affected by the entropy of the inputs.
+	const a = "aegis-fixture-secret"
+	const b = "aegis-fixture-secret"
+	const c = "aegis-fixture-secreX" // same length, last byte differs
+	const d = "aegis-fixture"        // shorter
+	if subtleCmp(a, b) != 0 {
 		t.Fatalf("equal strings should compare equal")
 	}
-	if subtleCmp("aegis-secret-1234567890", "aegis-secret-1234567891") == 0 {
+	if subtleCmp(a, c) == 0 {
 		t.Fatalf("differing last char should not compare equal")
 	}
-	if subtleCmp("aegis-secret-1234567890", "different-length") == 0 {
+	if subtleCmp(a, d) == 0 {
 		t.Fatalf("differing length should not compare equal")
 	}
 }
