@@ -1,29 +1,68 @@
----
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Install the Aegis agent binary on a node.
-# Phase 0 stub: the agent binary is downloaded from the panel's
-# release endpoint (authenticated via the bootstrap token in
-# `aegis_bootstrap_token`). Real implementation lands in Phase 1.
+# Install the Aegis agent on a node.
+#
+# The role is for the manual-operator playbook path
+# (`deploy/ansible/playbooks/node.yml`); the
+# panel-driven install path uses
+# `internal/bootstrap.Installer` which uploads the
+# binary via SFTP instead of via `get_url`. The
+# two paths converge on the same on-disk layout
+# (binary at /usr/local/bin/aegis-agent, env at
+# /etc/aegis/agent.env, unit at
+# /etc/systemd/system/aegis-agent.service).
+#
+# Required extra-vars:
+#   aegis_panel_url        — e.g. https://panel.example.com
+#   aegis_agent_bearer     — per-node hex secret (the panel
+#                            generates this at provision time)
 
-- name: Download the Aegis agent binary from the panel
-  ansible.builtin.get_url:
-    url: "{{ aegis_panel_url }}/api/v1/agents/{{ ansible_facts['system'] | lower }}/{{ ansible_facts['architecture'] }}/bin"
-    dest: /opt/aegis-agent/bin/aegis-agent
-    owner: aegis
-    group: aegis
+- name: Create the agent's working directory
+  ansible.builtin.file:
+    path: /etc/aegis
+    state: directory
+    owner: "{{ aegis_agent_user }}"
+    group: "{{ aegis_agent_user }}"
     mode: "0750"
-    headers:
-      Authorization: "Bearer {{ aegis_bootstrap_token }}"
+  become: true
+
+- name: Ensure the agent's log directory exists
+  ansible.builtin.file:
+    path: /var/log/aegis
+    state: directory
+    owner: "{{ aegis_agent_user }}"
+    group: "{{ aegis_agent_user }}"
+    mode: "0755"
+  become: true
+
+- name: Copy the agent binary from the control host
+  # The operator pre-builds the binary on the
+  # control host (`go build -o ./bin/aegis-agent ./cmd/aegis-agent/`)
+  # and passes the path via `-e
+  # aegis_agent_local_path=./bin/aegis-agent`. The
+  # bootstrap install path (SFTP) does not need
+  # this variable.
+  ansible.builtin.copy:
+    src: "{{ aegis_agent_local_path }}"
+    dest: /usr/local/bin/aegis-agent
+    owner: "{{ aegis_agent_user }}"
+    group: "{{ aegis_agent_user }}"
+    mode: "0755"
   become: true
   notify: restart aegis-agent
+  when: aegis_agent_local_path is defined
 
 - name: Write the agent environment file
+  # Mode 0640: only root can read the bearer. The
+  # agent's user (root) is the owner, so it can
+  # read; the aegis group is the group so future
+  # non-root agent users can be added without
+  # re-running the role.
   ansible.builtin.template:
     src: agent.env.j2
     dest: /etc/aegis/agent.env
-    owner: aegis
-    group: aegis
+    owner: "{{ aegis_agent_user }}"
+    group: "{{ aegis_agent_user }}"
     mode: "0640"
   become: true
   notify: restart aegis-agent

@@ -1,0 +1,30 @@
+[Unit]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Aegis Agent systemd unit. The unit is rendered
+# verbatim by the install_agent Ansible role; the
+# EnvironmentFile is the per-host secret + node
+# config, written by the same role.
+Description=Aegis Agent
+Documentation=https://github.com/QAdversif/AegisPanel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/aegis/agent.env
+ExecStart=/usr/local/bin/aegis-agent
+Restart=always
+RestartSec=5
+User=root
+# Hardening: keep the agent from writing outside
+# the panel-known set of paths. /etc/aegis is the
+# only writable directory the agent ever needs
+# (it reads the env file; v0.4.0 writes the
+# applied sing-box config to a path the panel
+# whitelists via ProtectSystem=strict).
+ProtectSystem=strict
+ReadWritePaths=/etc/aegis /var/log/aegis
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
@@ -325,6 +326,43 @@ func main() {
 	}
 	auditsSvc := audits.NewService(auditsStore)
 
+	// Bootstrap (BYO Node) service. Wired in
+	// v0.3.0: the panel previously built the
+	// package and the routes but passed `nil` to
+	// the router, which made `POST /api/v1/nodes/{id}/provision`
+	// a 404 in production. The wiring is the only
+	// delta from v0.3.0-a; the package itself
+	// (and the 24 tests) shipped in PR #67.
+	//
+	// The NodeProvider adapter is a thin row
+	// projection: bootstrap needs only (id, name,
+	// state, address), the nodes.Service.Get
+	// returns a full *Node, and we map. Keeping
+	// the adapter in the nodes package (not here)
+	// would force main.go to know the bootstrap
+	// internals; the inline adapter is the
+	// v0.3.0-c compromise until v0.4.0 splits it
+	// into a dedicated `internal/bootstrap/adapter.go`.
+	nodesAdapter := &nodes.BootstrapNodeProvider{Svc: nodesSvc}
+	bootstrapSvc := bootstrap.NewService(bootstrap.ServiceConfig{
+		Nodes:       nodesAdapter,
+		Audits:      auditsSvc,
+		AgentBinary: cfg.AgentBinaryPath,
+		KnownHosts:  cfg.AgentKnownHosts,
+		SSHUser:     cfg.AgentSSHUser,
+		SSHPort:     cfg.AgentSSHPort,
+	})
+	if err := bootstrap.EnsureKnownHosts(cfg.AgentKnownHosts); err != nil {
+		// Not fatal: the installer falls back to
+		// a per-install TempFile if the panel's
+		// known_hosts is unwritable. Log and
+		// continue so the rest of the panel can
+		// start; the operator sees the warning in
+		// the boot log.
+		log.Warn().Err(err).Str("path", cfg.AgentKnownHosts).
+			Msg("bootstrap: known_hosts setup failed; installer will use a per-call TempFile")
+	}
+
 	// Subscription endpoint rate limiter. One
 	// instance shared across the default and the
 	// rotated sub_path mount - a stolen sub_token
@@ -340,7 +378,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil /* bootstrapSvc — wired in v0.3.0 PR */, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, bootstrapSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
