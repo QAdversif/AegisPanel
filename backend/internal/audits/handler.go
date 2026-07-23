@@ -25,15 +25,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 // Router returns a chi subrouter for the audit
@@ -249,33 +248,24 @@ func RecordFromRequest(svc *Service, r *http.Request, e Entry) {
 }
 
 // clientIP returns the best-effort client IP for
-// an http.Request. The X-Forwarded-For header is
-// honoured only when it is the only address in
-// the chain; a typical CDN setup emits a list and
-// the leftmost entry is the original client.
+// an http.Request. The IP is resolved by the chi
+// v5.3 ClientIPFrom* middleware family, which is
+// mounted in router.go before this handler is
+// reached. The previous local implementation
+// re-parsed X-Forwarded-For / X-Real-IP itself,
+// which duplicated the (now-deprecated) chi
+// `middleware.RealIP` behaviour and made the trust
+// boundary implicit. Routing through GetClientIP
+// keeps a single source of truth for IP extraction
+// and lets the chi middleware decide which proxy
+// headers to honour (e.g. trusting only the
+// X-Real-IP that Caddy overwrites on every
+// request, falling back to the TCP peer for the
+// dev-mode direct-exposure path).
+//
+// Returns "" if no IP was set (e.g. the request
+// path bypasses the router's middleware chain —
+// tests that construct a bare *http.Request).
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Leftmost first, comma-separated.
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				candidate := xff[:i]
-				if ip := net.ParseIP(strings.TrimSpace(candidate)); ip != nil {
-					return ip.String()
-				}
-			}
-		}
-		if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
-			return ip.String()
-		}
-	}
-	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
-		if ip := net.ParseIP(strings.TrimSpace(xrip)); ip != nil {
-			return ip.String()
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return middleware.GetClientIP(r.Context())
 }

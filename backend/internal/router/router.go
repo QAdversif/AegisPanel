@@ -47,8 +47,29 @@ func Build(
 	r := chi.NewRouter()
 
 	// Built-in middlewares (recover, real IP, request ID, logger).
+	//
+	// Real-IP extraction uses the chi v5.3 ClientIPFrom* family
+	// (read the resolved IP with `middleware.GetClientIP(ctx)`).
+	// The previous `middleware.RealIP` is deprecated in chi
+	// v5.3.x because it mutates `r.RemoteAddr` to the leftmost
+	// X-Forwarded-For value, which any unauthenticated client can
+	// forge (GHSA-3fxj-6jh8-hvhx + GHSAs cited in the deprecation
+	// notice). The replacement is two composed middlewares:
+	//
+	//   - ClientIPFromHeader("X-Real-IP") — trust the X-Real-IP
+	//     header that Caddy (and any other reverse proxy using the
+	//     conventional realip pattern) overwrites on every request.
+	//   - ClientIPFromRemoteAddr — fall back to the TCP peer
+	//     when the header is missing (dev mode, direct exposure
+	//     behind a load balancer that strips headers, etc.).
+	//
+	// The order matters: ClientIPFromHeader runs first; if it
+	// finds a parseable value it sets the context IP, and the
+	// subsequent ClientIPFromRemoteAddr is a no-op. If the header
+	// is absent, ClientIPFromRemoteAddr fills in the TCP peer.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(middleware.ClientIPFromHeader("X-Real-IP"))
+	r.Use(middleware.ClientIPFromRemoteAddr)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Heartbeat("/healthz"))
 

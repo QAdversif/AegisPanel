@@ -109,9 +109,15 @@ type AuditEntry struct {
 	After any `json:"after,omitempty"`
 
 	// IP is the client IP, copied from
-	// r.RemoteAddr (after RealIP middleware). The
-	// pgx column is INET; empty string serialises
-	// to NULL.
+	// `middleware.GetClientIP(r.Context())` in
+	// `RecordFromRequest`. The chi v5.3
+	// ClientIPFrom* middlewares (mounted in
+	// router.go) set the IP — we never read
+	// `r.RemoteAddr` directly because the
+	// deprecated `middleware.RealIP` used to
+	// mutate it and the new middlewares do not.
+	// The pgx column is INET; empty string
+	// serialises to NULL.
 	IP string `json:"ip,omitempty"`
 
 	// UserAgent is the raw User-Agent header value.
