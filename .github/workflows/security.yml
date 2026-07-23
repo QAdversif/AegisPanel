@@ -158,7 +158,13 @@ jobs:
           # we accept (today: Caddy's stale Go stdlib). Every entry
           # there has a re-evaluation plan — silence without context
           # would just be debt.
-          ignorefile: '.trivyignore'
+          #
+          # `trivyignores:` is the trivy-action input (not `ignorefile:`,
+          # which the action rejects with `Unexpected input(s)
+          # 'ignorefile'...`). Updated 2026-07-23 after upgrading
+          # trivy-action — the old key was silently ignored and the
+          # .trivyignore file was never read.
+          trivyignores: '.trivyignore'
           exit-code: '1'
 
   # -----------------------------------------------------------------------
