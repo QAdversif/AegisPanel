@@ -341,6 +341,73 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /nodes/{id}/provision:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [nodes]
+      summary: Provision a node (v0.3.0 BYO Node flow)
+      description: |
+        Runs the bootstrap workflow: SSH probe with
+        the supplied key, install the placeholder agent
+        systemd unit, and transition the node to either
+        `online` (success) or `offline` (failure). Only
+        nodes in a provisionable state (`new` or
+        `offline`) accept the call; a node already
+        `online` returns 409.
+
+        v0.3.0 ships the synchronous `Provision` method.
+        v0.5.0 adds a kick-off+poll mode for large
+        fleets (returns 202 Accepted with a job id).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeProvisionRequest'
+      responses:
+        '200':
+          description: Provision completed (state is now online or offline)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeProvisionResponse'
+        '400':
+          description: Validation error (missing ssh_private_key, unknown tofu_policy, malformed body)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Node is not in a provisionable state (e.g. already online)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Provision failed (SSH unreachable, install error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /nodes/{nodeId}/inbounds:
     parameters:
       - name: nodeId
@@ -1339,6 +1406,20 @@ components:
       type: string
       enum: [new, online, draining, offline, disabled]
 
+    TofuPolicy:
+      type: string
+      enum: [reject, accept-and-append]
+      description: |
+        Trust-on-first-use policy for the SSH host key.
+
+        - `reject` (default): the operator must paste the
+          expected SHA256 fingerprint in `expected_fingerprint`
+          before the panel will connect. Safe mode.
+        - `accept-and-append`: on first contact, accept the
+          server's key, append it to the panel's known_hosts,
+          and continue. The fingerprint is returned in
+          the response so the operator can verify it after.
+
     Node:
       type: object
       required: [id, name, region, state, address, createdAt, updatedAt]
@@ -1412,6 +1493,57 @@ components:
           type: array
           items:
             type: string
+
+    NodeProvisionRequest:
+      type: object
+      required: [ssh_private_key]
+      properties:
+        ssh_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Per-call override. Zero/omitted means "use the service-wide default (22)".
+        ssh_user:
+          type: string
+          description: Per-call override. Empty/omitted means "use the service-wide default (root)".
+        ssh_private_key:
+          type: string
+          format: password
+          description: |
+            Operator-pasted private key (PEM, no passphrase).
+            The panel does NOT store this; the install is
+            the only consumer.
+        tofu_policy:
+          $ref: '#/components/schemas/TofuPolicy'
+        expected_fingerprint:
+          type: string
+          description: |
+            Operator-confirmed SHA256 fingerprint. Required
+            when `tofu_policy` is `reject`; ignored when
+            `accept-and-append`. Format: `SHA256:base64`.
+
+    NodeProvisionResponse:
+      type: object
+      required: [node_id, new_state]
+      properties:
+        node_id:
+          type: string
+          format: uuid
+        new_state:
+          $ref: '#/components/schemas/NodeState'
+        install_stage:
+          type: string
+          description: |
+            Best-effort stage tag from the provisioner
+            (`connect` / `upload` / `env` / `unit` /
+            `verify`). Surface in the UI tooltip for the
+            "retry" button.
+        install_error:
+          type: string
+          description: Set when `new_state` is `offline`. Empty string on success.
+        verify_latency:
+          type: string
+          description: ISO-8601 duration string (e.g. `PT2.5S`) for the systemd is-active poll.
 
     NodeListResponse:
       type: object
