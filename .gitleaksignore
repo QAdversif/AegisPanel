@@ -1,1 +1,10 @@
 0982bb0ffd2b4acf0f99ea0bede2ee4f3864b7dd:backend/internal/bootstrap/installer_test.go:generic-api-key:77
+# Test fixture for constant-time-compare. The fixup in 5cd055b
+# replaced the high-entropy strings with low-entropy plain words
+# ("aegis-fixture-secret"). The OLD commit's high-entropy
+# strings are in the gitleaks diff-scope (ec3564e^..5cd055b)
+# until the PR merges and the OLD commit falls out of any new
+# diff. After merge, the next `git rebase` will move the
+# PR forward and these entries can be deleted.
+ec3564e3d8aa6acd4e897b142c38a2fe2bf58be5:backend/cmd/aegis-agent/main_test.go:generic-api-key:275
+ec3564e3d8aa6acd4e897b142c38a2fe2bf58be5:backend/cmd/aegis-agent/main_test.go:generic-api-key:278
