@@ -1,51 +1,103 @@
-# Known Limitations — AegisPanel v0.1.0
+# Known Limitations — AegisPanel v0.3.0
 
 This document tracks the gaps between what
-`v0.1.0-mvp-render` ships and the full design
-in `ARCHITECTURE.md` §21. Every entry points
-to the milestone that closes it.
+`v0.3.0-mvp-byo-node` ships (sub-slice `v0.3.0-a`
+merged) and the full design in `ARCHITECTURE.md`
+§21. Every open entry points to the milestone
+that closes it. **Closed** items are kept for
+context — the PR that closed each one is named
+so future readers can find the diff.
 
-## Frontend
+## v0.3.0 — currently open
 
-### Per-node inbounds editor — v0.2
+### Frontend
 
-`/inbounds` lists every inbound across every
-node with a per-node filter. The create /
-update dialogs are not built — the `params`
-JSONB payload is protocol-specific (VLESS-
-Reality, Hysteria 2, Shadowsocks-2022, Trojan)
-and the editor is non-trivial. Until v0.2
-the operator registers inbounds via the Go
-admin path or by editing the DB directly.
+#### "Add node" dialog (v0.3.0-b)
 
-### Host create / edit dialogs — v0.2
+The backend provisioner is wired (PR #67): the
+panel can `POST /api/v1/nodes/{id}/provision` to
+run the install + state-transition flow. The
+UI for it does not exist yet. v0.3.0-b adds:
 
-`/hosts` lists + deletes. The create / edit
-dialogs need a nested-endpoint editor (per
-the v3 model in `ARCHITECTURE.md` §10) plus
-the cross-field invariants (direct = 1
-endpoint; balancer ≥ 2 + strategy required)
-encoded in the zod schema. PR-C ships the
-schema; PR-D ships the dialog. v0.2 finishes
-the wiring.
+- A modal in `NodesView` for "Add node" (IP,
+  port, username, SSH-key paste).
+- A status badge per node showing the current
+  state (`new` / `online` / `offline`).
+- i18n strings (en + ru) + OpenAPI spec
+  extension + `pnpm run codegen:check` pass.
 
-### User CRUD — v0.2
+#### Real `aegis-agent` binary (v0.3.0-c)
 
-`/users` is a placeholder. The full CRUD
-surface (list / create / edit / delete +
-per-user subscription URL + soft-delete via
-`status='deleted'`) lands with the user
-module in v0.2.
+The bootstrap install workflow writes a
+`sleep infinity` systemd unit today. The real
+Go agent binary (`cmd/aegis-agent/`) and the
+Ansible `install_agent` role land in v0.3.0-c.
+Without these two, the panel can "install"
+the placeholder but the placeholder is not a
+running agent — Apply end-to-end is a stub
+until c lands.
 
-### Settings UI — v0.2
+### Backend
 
-`/settings` is a placeholder. Panel sub-path
-rotation, audit log, and operator profile
-land in v0.2 (the backend services exist
-for all three but the panelcfg HTTP handler
-is not wired).
+#### `/admin` HTTP surface
 
-### Light theme polish — v1.5
+`internal/auth` exposes the operator CLI
+(`aegis admin add` / `passwd` / `list`) but
+no HTTP handler — the panel UI cannot
+manage principals without DB access. v0.3+
+(per the `v0.2.0` "What's next" note in
+`KNOWN_LIMITATIONS-v0.1.0`).
+
+#### Batched apply (`cores/singbox.Apply`) — v0.4
+
+The sing-box CoreProvider is a no-op in dev
+mode (per `ARCHITECTURE.md` §7.5). The
+generic BatchedApplier lands in v0.4.
+HY2 reconnect-under-reload load-test is
+deferred to v0.4 (or v1.0 if we ship
+Batched Apply later than the load-test).
+
+### Operations
+
+#### Backup / restore — v0.4
+
+The DB schema is straightforward Postgres
+but there is no automated backup / restore
+flow yet. v0.4 ships `pg_dump`-based backup
+with rotation + a smoke-tested restore
+playbook. Originally planned for v0.2, but
+`tools/scripts/backup.sh` was de-prioritised
+in favour of the v0.2 handler surfaces.
+
+#### Smoke on a fresh VM — v1.0
+
+The Definition of Done in `ADR-0003` requires
+a clean-VM smoke. v1.0 is the first milestone
+that lands it. The intermediate v0.x milestones
+skip the fresh-VM step because the deploy story
+is not yet final.
+
+### Cross-cutting
+
+#### Dependabot majors for the v0.x window
+
+Dependabot PRs #70 (vitest 3→4), #71
+(vue-router 4→5), #72 (eslint 8→10), #73
+(zod 3→4) are open and deferred to the
+v0.4.0 cleanup window. They were opened on
+2026-07-20 and held back because each carries
+a breaking change in downstream packages
+(typescript 5.8+ for #73, vue-router 5 API
+rename, vitest 4 internal restructure, eslint
+10 flat-config migration). PR #68 (chi bump
+with the `RealIP` deprecation fix) and PR #69
+(frontend minor+patch) were handled
+separately — #68 superseded by #75, #69
+deferred to v0.4.0 because the `@vue/tsconfig
+0.9.1` minor transitively requires a
+TypeScript 5.8+ major.
+
+#### Light theme polish — v1.5
 
 The light + dark pair ships but the light
 theme is unstyled beyond the CSS variable
@@ -53,7 +105,7 @@ swap. The Aegis long-term look is a slate
 base, but the light variant of the same
 base needs a design pass. v1.5.
 
-### Tailwind v4 migration — v1.5
+#### Tailwind v4 migration — v1.5
 
 `tailwindcss@3.4` is the v0.1.0 baseline. v4
 ships oxide engine + container queries; the
@@ -61,108 +113,24 @@ move is deferred until the rest of the
 ecosystem (forms / typography / animate)
 publishes v4-compatible releases.
 
-### OpenAPI codegen for the TS types — v0.2
+## Closed in v0.2.0
 
-`src/types/aegis.ts` is a hand-maintained
-mirror of the Go wire format. A codegen
-step (generate from an OpenAPI schema) lands
-in v0.2 once the API surface stabilises. The
-mirror is a v0.1.0 shortcut.
+These items are kept here so a reader of
+`ARCHITECTURE.md §21 / MVP-0.2` can see what
+was actually delivered, and so the diff
+between v0.1.0 and v0.2.0 is auditable.
 
-## Backend
-
-### Argon2id for the admin password — closed in v0.2 (PR-J)
-
-The `internal/auth` package already uses
-Argon2id with `DefaultParams` (m=64 MiB,
-t=1, p=4) via the `alexedwards/argon2id`
-library, and the migration declares
-`password_hash TEXT NOT NULL -- argon2id
-encoded`. PR-J closes the operational gap:
-the `aegis admin add <user> --email <email>
-[--role <role>]` and `aegis admin passwd
-<user>` subcommands now exist for the
-operator to seed the first admin and rotate
-passwords without writing SQL by hand. The
-`MemoryStore` dev seed is gated behind
-`AEGIS_ENV != "production"` (a real install
-that boots in production with the dev seed
-fails fast with a clear error). v0.3 adds
-the `/admin` HTTP surface so the panel can
-manage principals from the UI.
-
-### Panelcfg HTTP handler — v0.2
-
-`internal/panelcfg` ships a service plus a
-MemoryStore and a PgStore, but no HTTP handler. The router
-mounts the service for the rotated sub_path
-prefix read at boot. The UI cannot rotate
-the sub_path until v0.2.
-
-### Batched apply (`cores/singbox.Apply`) — v0.2/v0.4
-
-The sing-box CoreProvider is a no-op in dev
-mode (per `ARCHITECTURE.md` §7.5). Real
-`RenderConfig` lands with the Batched
-Applier in v0.4. HY2 reconnect-under-reload
-load-test is deferred to v0.4 (or v1.0 if we
-ship before Batched Apply lands).
-
-### Real subscription rate-limiting — v0.2
-
-The subscription handler has no rate-limit
-gate yet. v0.2 adds an in-memory token
-bucket per sub_token (or per IP, behind a
-config flag).
-
-## Operations
-
-### BYO Node flow + Ansible — v0.3
-
-The node registration path is documented
-(SSH + the agent's first-run handshake) but
-not automated. v0.3 ships the Ansible
-playbook that provisions a host, installs
-the agent, and joins it to the panel.
-
-### Backup / restore — v0.2
-
-The DB schema is straightforward Postgres
-but there is no automated backup / restore
-flow yet. v0.2 ships `pg_dump`-based
-backup with rotation + a smoke-tested
-restore playbook.
-
-### Smoke on a fresh VM — v1.0
-
-The Definition of Done in `ADR-0003`
-requires a clean-VM smoke. v1.0 is the
-first milestone that lands it. The
-intermediate v0.x milestones skip the
-fresh-VM step because the deploy story is
-not yet final.
-
-## Cross-cutting
-
-### CI parallel-package test flakes — v0.2
-
-The `mustNewPool` advisory lock is supposed
-to serialise Go integration-test packages
-that share a Postgres, but flakes still
-surface. v0.2 adds an explicit per-test
-schema-namespace strategy that removes the
-shared-state risk.
-
-### Dependabot for the v0.x window
-
-Several dependabot PRs were closed without
-merging during the v0.1.0 window because the
-bumps carried unrelated breaking changes
-(see the `.gitattributes` PR's discussion of
-`@vue/tsconfig`). v0.2 lands a dependabot
-config that scopes to devDeps only and
-ignores any package whose upstream doesn't
-yet support the pinned TS / Go toolchain.
+| Item | Closed by |
+| --- | --- |
+| Per-node inbounds editor | PR #62 (PR-I) |
+| Host create / edit dialogs | PR #61 (PR-H) |
+| User CRUD | PR #60 (PR-G) |
+| Settings UI (panelcfg HTTP) | PR #59 (PR-F) |
+| OpenAPI codegen for the TS types | PR #65 (PR-L) |
+| Real subscription rate-limiting | PR #64 (PR-K) |
+| Argon2id for the admin password (operational gap closed by `aegis admin` CLI; production seed guard) | PR #63 (PR-J) |
+| Audit log + operator profile (read surface) | PR #66 (PR-M) |
+| Sub-token rotation + URL-prefix rotation | #47 |
 
 ## What's NOT a limitation
 
