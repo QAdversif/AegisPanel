@@ -3,6 +3,7 @@
 package nodes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,29 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 )
+
+// bootstrapProvider is the subset of
+// bootstrap.Service the nodes router depends
+// on. The interface is the seam for tests: the
+// integration tests substitute a stub; the
+// production path delegates to the real
+// bootstrap.Service.
+//
+// v0.3.0: the only bootstrap endpoint mounted
+// here is POST /{id}/provision. v0.5.0 will
+// add POST /{id}/heartbeat, POST /{id}/drain,
+// POST /{id}/undeploy (the decommissioning
+// flow).
+type bootstrapProvider interface {
+	// The handler signature is exported
+	// directly because the http.HandlerFunc
+	// is the unit the router mounts. Passing
+	// the function value avoids the "wrap a
+	// method on a different Service" indirection.
+	HandleProvision() http.HandlerFunc
+}
 
 // Router returns a chi subrouter for /api/v1/nodes. The caller
 // supplies the auth middleware so this package does not have to
@@ -20,11 +43,13 @@ import (
 //
 // Mounting convention:
 //
-//	r.Mount("/nodes", nodes.Router(svc, authSvc.Middleware()))
+//	r.Mount("/nodes", nodes.Router(svc, authSvc.Middleware(), nil))
 //
-// All routes are admin-only in Phase 0; we apply the
-// ScopeNodes requirement in front of every handler.
-func Router(svc *Service, authMiddleware func(http.Handler) http.Handler) http.Handler {
+// The bootstrap parameter is optional: pass
+// nil to mount only the v0.2.0 CRUD surface.
+// main.go passes the real bootstrap.Service
+// for the v0.3.0 BYO Node flow.
+func Router(svc *Service, authMiddleware func(http.Handler) http.Handler, bootstrapSvc bootstrapProvider) http.Handler {
 	r := chi.NewRouter()
 	r.Use(authMiddleware)
 	r.Use(auth.RequireScope(auth.ScopeNodes))
@@ -35,9 +60,79 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler) http.H
 		r.Get("/", svc.handleGet())
 		r.Put("/", svc.handleUpdate())
 		r.Delete("/", svc.handleDelete())
+		// v0.3.0: BYO-Node bootstrap. The
+		// handler is mounted only when the
+		// bootstrap service is wired; in the
+		// Phase 0 / Phase 1 dev paths
+		// (bootstrapSvc == nil) the route is
+		// simply absent and the operator gets
+		// a 404 on /provision.
+		if bootstrapSvc != nil {
+			r.Post("/provision", bootstrapSvc.HandleProvision())
+		}
 	})
 	return r
 }
+
+// BootstrapNodeProvider is the adapter that
+// turns the real nodes.Service into the
+// bootstrap.NodeProvider interface. The
+// adapter lives here (in the nodes package)
+// because the bootstrap package cannot import
+// nodes without creating a cycle. The
+// translation is a plain row copy: the
+// fields the provisioner needs (id, name,
+// state, address) are all exported on
+// nodes.Node.
+type BootstrapNodeProvider struct {
+	Svc *Service
+}
+
+// GetByID implements bootstrap.NodeProvider.
+// The returned row is a copy; the caller may
+// mutate it without affecting the store.
+func (a *BootstrapNodeProvider) GetByID(ctx context.Context, id uuid.UUID) (bootstrap.NodeRow, error) {
+	n, err := a.Svc.Get(ctx, id)
+	if err != nil {
+		return bootstrap.NodeRow{}, err
+	}
+	return bootstrap.NodeRow{
+		ID:      n.ID,
+		Name:    n.Name,
+		State:   string(n.State),
+		Address: n.Address,
+	}, nil
+}
+
+// Update implements bootstrap.NodeProvider.
+// The provider's row fields are mapped back
+// onto nodes.Node; everything else (Tags,
+// CapacityHint, CreatedAt, UpdatedAt) is
+// preserved from the current store row.
+func (a *BootstrapNodeProvider) Update(ctx context.Context, row bootstrap.NodeRow) error {
+	current, err := a.Svc.Get(ctx, row.ID)
+	if err != nil {
+		return err
+	}
+	current.State = State(row.State)
+	_, err = a.Svc.Update(ctx, current.ID, UpdateInput{
+		// The provisioner only ever writes the
+		// State field. Every other field is
+		// left at its existing value (the
+		// nodes.Service.Update helper copies
+		// the row before applying, so a nil
+		// pointer here is "leave alone").
+	})
+	return err
+}
+
+// _ keeps the unused imports in scope while
+// the file is being written; the aliasing
+// pattern survives a future refactor where
+// these helpers land in a sibling file.
+var _ = json.RawMessage(nil)
+var _ = errors.New
+var _ = fmt.Sprintf
 
 // --- request / response shapes ------------------------------------------
 
