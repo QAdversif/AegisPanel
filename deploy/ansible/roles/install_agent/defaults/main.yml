@@ -1,0 +1,38 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Defaults for the install_agent role. Variables
+# that are usually site-specific live in
+# `group_vars/all.yml`; the ones here are per-host
+# defaults the operator can override per-node
+# (`-e aegis_panel_url=https://panel.example.com`).
+
+# aegis_panel_url is the URL the agent uses to
+# reach the panel (for Apply commands in v0.4.0
+# — v0.3.0 does not need it).
+aegis_panel_url: "http://127.0.0.1:8080"
+
+# aegis_node_name is the human-friendly node
+# identifier; the agent logs it on every Apply.
+aegis_node_name: "{{ inventory_hostname }}"
+
+# aegis_agent_listen_addr is the bind address
+# the agent listens on. 127.0.0.1 keeps the
+# surface local (Caddy/SSH are the only ingress
+# paths). Operators that want a different bind
+# (e.g. inside a Docker compose network) can
+# override here.
+aegis_agent_listen_addr: "127.0.0.1:8080"
+
+# aegis_agent_log_level is one of `trace` /
+# `debug` / `info` / `warn` / `error`. The agent
+# writes to stdout; systemd captures it to the
+# journal.
+aegis_agent_log_level: "info"
+
+# aegis_agent_user is the Linux user the agent
+# runs as. The systemd unit restricts file mode
+# to this user; root is the default because the
+# agent writes to `/etc/aegis/agent.env` (only
+# root can write there on a stock install).
+aegis_agent_user: "root"
