@@ -565,6 +565,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{id}/provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Provision a node (v0.3.0 BYO Node flow)
+         * @description Runs the bootstrap workflow: SSH probe with
+         *     the supplied key, install the placeholder agent
+         *     systemd unit, and transition the node to either
+         *     `online` (success) or `offline` (failure). Only
+         *     nodes in a provisionable state (`new` or
+         *     `offline`) accept the call; a node already
+         *     `online` returns 409.
+         *
+         *     v0.3.0 ships the synchronous `Provision` method.
+         *     v0.5.0 adds a kick-off+poll mode for large
+         *     fleets (returns 202 Accepted with a job id).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NodeProvisionRequest"];
+                };
+            };
+            responses: {
+                /** @description Provision completed (state is now online or offline) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NodeProvisionResponse"];
+                    };
+                };
+                /** @description Validation error (missing ssh_private_key, unknown tofu_policy, malformed body) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Node not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Node is not in a provisionable state (e.g. already online) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Provision failed (SSH unreachable, install error) */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/inbounds": {
         parameters: {
             query?: never;
@@ -2056,6 +2158,19 @@ export interface components {
         };
         /** @enum {string} */
         NodeState: "new" | "online" | "draining" | "offline" | "disabled";
+        /**
+         * @description Trust-on-first-use policy for the SSH host key.
+         *
+         *     - `reject` (default): the operator must paste the
+         *       expected SHA256 fingerprint in `expected_fingerprint`
+         *       before the panel will connect. Safe mode.
+         *     - `accept-and-append`: on first contact, accept the
+         *       server's key, append it to the panel's known_hosts,
+         *       and continue. The fingerprint is returned in
+         *       the response so the operator can verify it after.
+         * @enum {string}
+         */
+        TofuPolicy: "reject" | "accept-and-append";
         Node: {
             /** Format: uuid */
             id: string;
@@ -2084,6 +2199,42 @@ export interface components {
             state?: components["schemas"]["NodeState"];
             capacityHint?: string;
             tags?: string[];
+        };
+        NodeProvisionRequest: {
+            /** @description Per-call override. Zero/omitted means "use the service-wide default (22)". */
+            ssh_port?: number;
+            /** @description Per-call override. Empty/omitted means "use the service-wide default (root)". */
+            ssh_user?: string;
+            /**
+             * Format: password
+             * @description Operator-pasted private key (PEM, no passphrase).
+             *     The panel does NOT store this; the install is
+             *     the only consumer.
+             */
+            ssh_private_key: string;
+            tofu_policy?: components["schemas"]["TofuPolicy"];
+            /**
+             * @description Operator-confirmed SHA256 fingerprint. Required
+             *     when `tofu_policy` is `reject`; ignored when
+             *     `accept-and-append`. Format: `SHA256:base64`.
+             */
+            expected_fingerprint?: string;
+        };
+        NodeProvisionResponse: {
+            /** Format: uuid */
+            node_id: string;
+            new_state: components["schemas"]["NodeState"];
+            /**
+             * @description Best-effort stage tag from the provisioner
+             *     (`connect` / `upload` / `env` / `unit` /
+             *     `verify`). Surface in the UI tooltip for the
+             *     "retry" button.
+             */
+            install_stage?: string;
+            /** @description Set when `new_state` is `offline`. Empty string on success. */
+            install_error?: string;
+            /** @description ISO-8601 duration string (e.g. `PT2.5S`) for the systemd is-active poll. */
+            verify_latency?: string;
         };
         NodeListResponse: {
             nodes: components["schemas"]["Node"][];

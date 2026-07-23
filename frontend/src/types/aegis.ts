@@ -255,3 +255,52 @@ export interface ChangePasswordRequest {
   current_password: string
   new_password: string
 }
+
+// ---------------------------------------------------------------------------
+// Node provision (v0.3.0 BYO Node flow)
+// ---------------------------------------------------------------------------
+
+/**
+ * Trust-on-first-use policy for the SSH host key on
+ * first contact with a fresh node. `reject` is the
+ * safe default (operator must paste the fingerprint
+ * first); `accept-and-append` is the v0.3.0 "first
+ * contact" UX where the panel pins the key on
+ * connect and reports the fingerprint back.
+ */
+export type TofuPolicy = 'reject' | 'accept-and-append'
+
+/**
+ * Body of `POST /api/v1/nodes/{id}/provision`. Snake-
+ * case field names match the Go json tags so the
+ * request body round-trips through the bootstrap
+ * handler.
+ */
+export interface NodeProvisionRequest {
+  /** Per-call override. Zero/omitted = service-wide default (22). */
+  ssh_port?: number
+  /** Per-call override. Empty/omitted = service-wide default (root). */
+  ssh_user?: string
+  /** Operator-pasted private key (PEM, no passphrase). Required. */
+  ssh_private_key: string
+  tofu_policy?: TofuPolicy
+  /** Required when `tofu_policy === 'reject'`. `SHA256:base64`. */
+  expected_fingerprint?: string
+}
+
+/**
+ * Response of `POST /api/v1/nodes/{id}/provision`.
+ * The UI re-renders the node's state badge from
+ * `new_state`; `install_stage` + `install_error` are
+ * surfaced for the "retry" button's tooltip.
+ */
+export interface NodeProvisionResponse {
+  node_id: string
+  new_state: NodeState
+  /** Best-effort stage tag from the provisioner. */
+  install_stage?: string
+  /** Set when `new_state === 'offline'`. Empty string on success. */
+  install_error?: string
+  /** ISO-8601 duration for the systemd is-active poll (e.g. `PT2.5S`). */
+  verify_latency?: string
+}
