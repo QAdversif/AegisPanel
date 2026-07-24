@@ -10,10 +10,8 @@ FROM node:20-alpine AS build
 WORKDIR /src
 
 # Cache dependencies.
-COPY frontend/package.json frontend/package-lock.json* frontend/pnpm-lock.yaml* ./
-RUN if [ -f pnpm-lock.yaml ]; then \
-        corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile; \
-    elif [ -f package-lock.json ]; then npm ci; \
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; \
     else npm install; fi
 
 # Build the bundle.

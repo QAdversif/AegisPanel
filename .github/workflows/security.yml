@@ -179,22 +179,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install
-        # The Phase 0 frontend is a Vue 3 placeholder with only
-        # package.json committed (no pnpm-lock.yaml). `pnpm install`
-        # generates the lockfile on the fly so `osv-scanner` has
-        # something to scan. Once the frontend grows past Phase 0
-        # the lockfile should be committed and this step can move
-        # to `--frozen-lockfile=true`.
-        run: pnpm install --no-frozen-lockfile
+        # `npm ci` against the committed `package-lock.json`
+        # is the canonical "audit" install — it both prepares
+        # node_modules for any subsequent local tooling and
+        # catches the kind of lockfile desync the lint+build
+        # job can otherwise hide (cf. PR #83 fixup commit).
+        run: npm ci --no-audit --no-fund
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -202,20 +199,22 @@ jobs:
           go-version: '1.26'
 
       - name: Audit (osv-scanner)
-        # `pnpm audit` was retired by the npm registry in 2025 — the
-        # `/security/audits` endpoint returns 410 with the error
-        # `ERR_PNPM_AUDIT_BAD_RESPONSE`. We replace it with Google's
-        # `osv-scanner`, which consumes the same pnpm-lock.yaml and
-        # queries the OSV database (https://osv.dev/) — the
-        # GitHub-recommended replacement. The `osv-scanner` Go
-        # binary is installed via `go install` so the lockfile scan
-        # is reproducible across runner images (no Python /
-        # pip-cache flakiness). It exits non-zero on findings, so a
-        # non-zero exit is still the gate.
+        # `pnpm audit` was retired by the npm registry in 2025 —
+        # the `/security/audits` endpoint returns 410 with the
+        # error `ERR_PNPM_AUDIT_BAD_RESPONSE`. We replace it
+        # with Google's `osv-scanner`, which consumes the
+        # committed `package-lock.json` and queries the OSV
+        # database (https://osv.dev/) — the GitHub-recommended
+        # replacement. The `osv-scanner` Go binary is installed
+        # via `go install` so the lockfile scan is reproducible
+        # across runner images (no Python / pip-cache flakiness).
+        # It exits non-zero on findings, so a non-zero exit is
+        # still the gate.
         # The path is relative to the runner's working directory
-        # (`frontend/`, set by the job-level `defaults.run.working-directory`).
+        # (`frontend/`, set by the job-level
+        # `defaults.run.working-directory`).
         run: |
           go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
           "$(go env GOPATH)/bin/osv-scanner" \
-            --lockfile=pnpm-lock.yaml \
+            --lockfile=package-lock.json \
             --format=table
