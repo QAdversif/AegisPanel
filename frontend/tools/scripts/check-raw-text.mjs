@@ -159,7 +159,7 @@ function findViolations(file) {
 
     // Tailwind-class-looking strings (lots of
     // hyphens, brackets) are styling, not text.
-    if (/[-:\[\]]/.test(run) && /[a-z]+-[a-z0-9-]+/.test(run)) continue
+    if (/[-:[\]]/.test(run) && /[a-z]+-[a-z0-9-]+/.test(run)) continue
     // Runs that contain JS syntax characters
     // are code expressions, not user text. We
     // need this because the template-strip regex
@@ -167,8 +167,13 @@ function findViolations(file) {
     // complex event handler (`@click="doThing()"`)
     // — when the handler contains a `>` (e.g.
     // an arrow function `=>`), the greedy match
-    // stops mid-expression and leaks code.
-    if (/[()=<>{}\[\],;]/.test(run)) continue
+    // stops mid-expression and leaks code. The
+    // leading `]` is the standard escape-free
+    // way to put a closing bracket in a
+    // character class (eslint 10's
+    // `no-useless-escape` would flag `\]` here
+    // even though the escape was load-bearing).
+    if (/[\]()=<>{} ,;]/.test(run)) continue
     // Single-line identifiers / css class lists:
     // also pass.
 
