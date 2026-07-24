@@ -98,5 +98,4 @@ Total: 2 files. No app code modified.
   weekly `dependabot` schedule + the CI security
   jobs catch them.
 
-Refs: dependabot advisories #29, #30, #31, #32,
-#34, #35. ARCHITECTURE.md §21 followups.
+Refs: dependabot advisories #29, #30, #31, #32, #34, #35. ARCHITECTURE.md §21 followups.
