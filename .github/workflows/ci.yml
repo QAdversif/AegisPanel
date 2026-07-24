@@ -125,36 +125,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install
-        run: pnpm install --frozen-lockfile=false
+        # `npm ci` requires the lockfile to be in sync with
+        # package.json — a desync (the kind that bit us in
+        # PR #83 with the `containers` job) is caught here
+        # too, not just in the Docker build. That's the
+        # point of standardising on npm: the same lockfile
+        # and the same `npm ci` semantics are now used by
+        # the lint/type-check job, the build job, and the
+        # production-image build inside `containers`.
+        run: npm ci --no-audit --no-fund
 
       - name: Check codegen up to date
-        # Fails the build if `pnpm run codegen` would
+        # Fails the build if `npm run codegen` would
         # produce a diff against the committed
         # `src/types/api.d.ts`. The PR author must
-        # run `pnpm codegen` locally and commit the
+        # run `npm run codegen` locally and commit the
         # result whenever `docs/openapi.yaml` changes.
-        # The check is `pnpm run codegen:check`, a
+        # The check is `npm run codegen:check`, a
         # cross-platform Node script that compares the
         # committed file against a fresh regeneration
         # (no `git diff` so a CI checkout that has
         # uncommitted local changes does not produce
         # false positives).
-        run: pnpm run codegen:check
+        run: npm run codegen:check
 
       - name: Type-check
-        run: pnpm run type-check
+        run: npm run type-check
 
       - name: Lint
-        run: pnpm run lint
+        run: npm run lint
 
       - name: Check raw text in templates
         # Fails the build if a .vue template contains
@@ -167,14 +173,14 @@ jobs:
         run: node tools/scripts/check-raw-text.mjs
 
       # vitest is wired but the Phase 0 frontend has no test files
-      # yet, so `pnpm run test` would error with "no test files
+      # yet, so `npm run test` would error with "no test files
       # found". Skip until the first component test lands; we
       # re-enable the step then.
       # - name: Unit tests
-      #   run: pnpm run test
+      #   run: npm run test
 
       - name: Build
-        run: pnpm run build
+        run: npm run build
 
       - name: Upload bundle
         uses: actions/upload-artifact@v4
