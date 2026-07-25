@@ -2,7 +2,7 @@
 
 Closes the 3 osv-scanner HIGH findings that
 the `pnpm-audit` job (now `osv-scanner` per the
-#87 footgun-fix) has been flagging on every PR
+\#87 footgun-fix) has been flagging on every PR
 since the v0.3.0 cycle. The findings are:
 
 - GHSA-mh99-v99m-4gvg — `brace-expansion` ReDoS
