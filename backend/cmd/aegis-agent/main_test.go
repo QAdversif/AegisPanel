@@ -26,8 +26,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withBearerSecret sets the global bearerSecret
@@ -162,6 +164,14 @@ func TestApply_RejectsMissingConfigField(t *testing.T) {
 }
 
 func TestApply_AcceptsValidConfig(t *testing.T) {
+	// v0.4.0-b: the handler actually writes to disk
+	// and reloads. We point both at the test
+	// tempdir / a no-op reload so the existing
+	// 202-accepted assertion still holds.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.json")
+	withApplyConfig(t, target, stubReloadOK(), 5*time.Second)
+
 	srv := newTestServer(t)
 	defer srv.Close()
 	body := `{"config":{"inbounds":[],"outbounds":[]}}`
@@ -189,6 +199,9 @@ func TestApply_AcceptsValidConfig(t *testing.T) {
 		// (between the `config":` and the closing `}`).
 		// For a 32-char body, this is 32.
 		t.Logf("bytes = %d (informational; the schema is intentionally loose)", out.Bytes)
+	}
+	if !out.Reloaded {
+		t.Fatalf("reloaded = false, want true")
 	}
 	if lastApplyISO == "" {
 		t.Fatalf("lastApplyISO was not updated")

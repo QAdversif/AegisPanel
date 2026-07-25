@@ -36,3 +36,41 @@ aegis_agent_log_level: "info"
 # agent writes to `/etc/aegis/agent.env` (only
 # root can write there on a stock install).
 aegis_agent_user: "root"
+
+# aegis_singbox_config_path is the absolute path
+# the agent writes the rendered sing-box config
+# to on every Apply. v0.4.0-b makes this side
+# effect real (v0.3.0 just ACKed). The default
+# matches the sing-box systemd unit installed by
+# the install_singbox role (v0.4.0-c), which
+# reads `-c <this-path>`. Operators on a non-
+# Debian layout (e.g. Arch, custom sing-box
+# build) can override.
+aegis_singbox_config_path: "/etc/sing-box/config.json"
+
+# aegis_singbox_reload_cmd is the shell-free
+# command the agent runs after writing the
+# config. The default is the systemd reload for
+# the standard sing-box unit. Operators with a
+# different init system (s6, runit, supervisord,
+# docker exec) override here. The command is
+# space-separated; no shell metacharacters. If
+# you need a pipe, wrap it in a script and call
+# the script.
+aegis_singbox_reload_cmd: "systemctl reload sing-box"
+
+# aegis_singbox_reload_timeout is the budget for
+# the reload subprocess. systemd `Type=notify`
+# reloads complete in well under a second; 5s
+# is a 5x safety margin. The agent's HTTP
+# `WriteTimeout` (30s) is the hard upper bound.
+aegis_singbox_reload_timeout: "5s"
+
+# aegis_apply_max_bytes is the cap on the
+# /v1/apply request body. The default 1 MiB
+# is a 10x safety margin over a typical
+# 100 KiB rendered sing-box config. Operators
+# can lower it for tighter DoS protection or
+# raise it for unusual configs (large
+# `rule_set` lists).
+aegis_apply_max_bytes: "1048576"

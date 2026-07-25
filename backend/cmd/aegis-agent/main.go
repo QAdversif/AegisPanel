@@ -4,51 +4,57 @@
 // every node and accepts Render+Apply commands from
 // the panel.
 //
-// # v0.3.0 scope
+// # v0.4.0-b scope
 //
-// v0.3.0 ships the bootstrap install pathway: the
-// agent is a single static binary (musl, ~5 MB) that
-// the panel's `internal/bootstrap` package uploads
-// over SFTP and starts via systemd. The agent API
-// is the minimum the panel needs to keep the
-// systemd unit `active` after install:
+// v0.4.0-b makes the agent side of the Apply
+// pathway real: POST /v1/apply now writes the
+// rendered sing-box config to disk and reloads
+// sing-box. The previous v0.3.0 behaviour
+// (validate-JSON-then-ACK without side effects) is
+// gone. The end-to-end flow is:
+//
+//  1. Panel's BatchedApplier flushes accumulated
+//     Delta events and POSTs the rendered sing-box
+//     config to the agent's /v1/apply.
+//  2. Agent writes the config atomically to
+//     AEGIS_AGENT_SINGBOX_CONFIG_PATH (default
+//     /etc/sing-box/config.json).
+//  3. Agent runs AEGIS_AGENT_SINGBOX_RELOAD_CMD
+//     (default `systemctl reload sing-box`).
+//  4. Agent returns 202 Accepted with the
+//     reloaded=true flag; BatchedApplier marks the
+//     flush as done.
+//
+// The agent API is the minimum the panel needs to
+// keep the sing-box unit `active` after install:
 //
 //   - GET  /healthz   → 200 OK with JSON
-//   - POST /v1/apply   → 200 OK (stub: receives the
-//                       sing-box config, validates it
-//                       parses as JSON, and ACKs. v0.4.0
-//                       actually writes to disk and
-//                       reloads sing-box.)
+//   - POST /v1/apply   → 202 Accepted (config
+//                       written to disk + sing-box
+//                       reloaded). Body carries
+//                       `reloaded: true` and the
+//                       reload wall-clock duration.
 //   - GET  /v1/status  → 200 OK with running state
 //   - GET  /v1/stats   → 200 OK with empty stats
 //                       (sing-box clash-api integration
-//                       lands in v0.4.0.)
+//                       lands in v0.4.0-c.)
 //
 // Every endpoint requires the bearer secret from
 // `AEGIS_AGENT_BEARER` (the agent reads it from
 // `/etc/aegis/agent.env`, which the panel's
 // `internal/bootstrap` writes during install).
 //
-// # v0.4.0 work
+// # v0.4.0-c work
 //
-// - Write the applied sing-box config to
-//   `/etc/sing-box/config.json` and run
-//   `systemctl reload sing-box`.
 // - Wire `GET /v1/stats` to the sing-box clash-api
 //   listener (localhost:9090 by default).
+//
+// # v0.5.0+ work
+//
 // - Replace the bearer-secret gate with mTLS once
 //   the v1.1.0 panel side ships.
-//
-// # Why a stub for v0.3.0
-//
-// The BatchedApplier is the v0.4.0 milestone. v0.3.0
-// proves the bootstrap install end-to-end (the panel
-// can put a binary on a node, register a systemd
-// unit, see it `active`); Apply-as-actually-mutating-
-// filesystem is a v0.4.0 concern. Doing v0.4.0 work
-// in v0.3.0 would balloon the PR and risk the
-// bootstrap pathway landing without a tested
-// foundation.
+// - Add per-node metrics (CPU, memory, sing-box
+//   goroutine count) to /v1/stats.
 
 package main
 
@@ -58,11 +64,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -85,28 +91,18 @@ type healthzResponse struct {
 	StartedAt string `json:"started_at"`
 }
 
-// applyRequest is the body of POST /v1/apply. v0.3.0
-// validates the JSON shape but does NOT write
-// anything to disk; the field is named `config` to
-// match what v0.4.0 will expect.
-type applyRequest struct {
-	Config json.RawMessage `json:"config"`
-}
+// applyRequest / applyResponse / applyEnvelope are
+// declared in apply.go (the apply logic lives in a
+// separate file so the v0.4.0-b PR diff is easier
+// to read). See apply.go for the request and
+// response shapes.
 
-// applyResponse is the /v1/apply acknowledgement.
-// `accepted: true` means the agent received the body
-// and parsed it as JSON. v0.4.0 will add a `verify`
-// field that reports the sing-box validation result.
-type applyResponse struct {
-	Accepted   bool   `json:"accepted"`
-	ReceivedAt string `json:"received_at"`
-	Bytes      int    `json:"bytes"`
-}
-
-// statusResponse is the /v1/status payload. v0.3.0
-// always reports `running: true`; v0.4.0 will
-// include sing-box process info (PID, uptime, last
-// reload time).
+// statusResponse is the /v1/status payload. v0.4.0-b
+// reports `running: true` and the last-apply
+// timestamp (from memory; the agent does not persist
+// this in v0.4.0-b). Future versions will add
+// sing-box process info (PID, uptime, last reload
+// time).
 type statusResponse struct {
 	Running      bool   `json:"running"`
 	Core         string `json:"core"`
@@ -114,9 +110,12 @@ type statusResponse struct {
 	LastApplyISO string `json:"last_apply_iso,omitempty"`
 }
 
-// statsResponse is the /v1/stats payload. v0.3.0
-// returns the empty shape; v0.4.0 wires this to the
-// sing-box clash-api listener.
+// statsResponse is the /v1/stats payload. v0.4.0-b
+// returns the empty shape (all fields zero);
+// v0.4.0-c wires the fields to the sing-box
+// clash-api listener. The struct shape is forward-
+// compatible: a v0.4.0-b agent and a v0.4.0-c agent
+// return JSON with the same field names.
 type statsResponse struct {
 	BytesIn  int64 `json:"bytes_in"`
 	BytesOut int64 `json:"bytes_out"`
@@ -263,69 +262,31 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleApply serves POST /v1/apply. v0.3.0
-// validates the body parses as JSON and ACKs. v0.4.0
-// will write to disk and reload sing-box.
+// handleApply serves POST /v1/apply. v0.4.0-b writes
+// the rendered sing-box config to disk and reloads
+// sing-box; the v0.3.0 stub (validate-JSON-then-ACK)
+// is gone. The two side effects (write + reload) live
+// in `applyConfig` in apply.go so they can be unit-
+// tested without standing up an HTTP server.
 //
-// The handler reads the body fully (Limit 1 MiB to
-// refuse accidental upload storms) and returns
-// 202 Accepted with the byte count. We use 202
-// rather than 200 to match the v0.4.0 contract: the
-// future implementation may queue the apply if
-// Batched Apply is in flight.
+// 202 Accepted on success (matches the v0.3.0
+// contract; a future version may switch to 200 OK
+// once the BatchedApplier's retry semantics are
+// fully specified). 4xx for body validation
+// failures; 5xx for write or reload failures. The
+// panel's `singbox/apply.go` only checks the status
+// code, so the body shape is informational.
 func handleApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// 1 MiB cap. The real sing-box config for a
-	// busy panel is on the order of 100 KiB; 1 MiB
-	// is a 10x safety margin.
-	const maxBodyBytes = 1 << 20
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	defer func() { _ = r.Body.Close() }()
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
-		return
+	status, body := applyConfig(r)
+	if status == http.StatusAccepted {
+		w.Header().Set("Content-Type", "application/json")
 	}
-	// The body must contain a JSON object with a
-	// `config` field. We decode twice (once to
-	// validate the envelope, once for the inner
-	// `config` raw) so an empty `{}` body is
-	// rejected — the panel always sends a
-	// non-empty config.
-	if len(body) == 0 {
-		http.Error(w, "empty body", http.StatusBadRequest)
-		return
-	}
-	var req applyRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid JSON envelope: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if len(req.Config) == 0 {
-		http.Error(w, "missing config field", http.StatusBadRequest)
-		return
-	}
-	// Validate the inner `config` parses as
-	// JSON. v0.4.0 will additionally validate the
-	// config against sing-box's schema; v0.3.0
-	// stops at "parses".
-	var probe any
-	if err := json.Unmarshal(req.Config, &probe); err != nil {
-		http.Error(w, "config is not valid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	lastApplyISO = time.Now().UTC().Format(time.RFC3339Nano)
-	log.Printf("apply accepted: bytes=%d", len(req.Config))
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(applyResponse{
-		Accepted:   true,
-		ReceivedAt: lastApplyISO,
-		Bytes:      len(req.Config),
-	})
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 // handleStatus serves GET /v1/status. Returns the
@@ -346,8 +307,8 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleStats serves GET /v1/stats. v0.3.0 returns
-// the empty shape; v0.4.0 wires this to the
+// handleStats serves GET /v1/stats. v0.4.0-b returns
+// the empty shape; v0.4.0-c wires this to the
 // sing-box clash-api listener.
 func handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -374,7 +335,39 @@ func run(ctx context.Context, listenAddr string) error {
 	if bearerSecret == "" {
 		log.Printf("AEGIS_AGENT_BEARER is empty; only /healthz is reachable (insecure mode)")
 	}
-	log.Printf("aegis-agent %s starting on %s", version, listenAddr)
+	// Read the sing-box apply config from the
+	// environment. The defaults match the standard
+	// Debian/Ubuntu sing-box install; operators
+	// that use a non-standard layout override
+	// via the env vars in `agent.env`.
+	singboxConfigPath = envOr("AEGIS_AGENT_SINGBOX_CONFIG_PATH", defaultConfigPath)
+	singboxReloadCmd = envOr("AEGIS_AGENT_SINGBOX_RELOAD_CMD", defaultReloadCmd)
+	if v := os.Getenv("AEGIS_AGENT_SINGBOX_RELOAD_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			singboxReloadTimeout = d
+		} else {
+			// The value comes from the operator-
+			// controlled agent.env, not from a
+			// network request; log injection is
+			// not a concern here. gosec G706 is
+			// suppressed with an inline
+			// justification.
+			log.Printf("AEGIS_AGENT_SINGBOX_RELOAD_TIMEOUT=%q invalid, using default %s", v, defaultReloadTimeout) // #nosec G706 -- operator-controlled env var
+			singboxReloadTimeout = defaultReloadTimeout
+		}
+	} else {
+		singboxReloadTimeout = defaultReloadTimeout
+	}
+	if v := os.Getenv("AEGIS_AGENT_APPLY_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			applyMaxBytes = n
+		} else {
+			// Same operator-controlled rationale
+			// as above.
+			log.Printf("AEGIS_AGENT_APPLY_MAX_BYTES=%q invalid, using default %d", v, applyMaxBytes) // #nosec G706 -- operator-controlled env var
+		}
+	}
+	log.Printf("aegis-agent %s starting on %s (config=%s reload=%q timeout=%s)", version, listenAddr, singboxConfigPath, singboxReloadCmd, singboxReloadTimeout)
 	srv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           newMux(),
