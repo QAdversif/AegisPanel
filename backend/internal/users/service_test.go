@@ -12,6 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// dupUUID is a stable UUID used by the
+// "duplicate allowlist entry" validation subtest.
+var dupUUID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+
 // newSvc is a one-line constructor for a Service
 // backed by a fresh MemoryStore. The fixed clock
 // keeps timestamps deterministic. We explicitly
@@ -89,8 +93,8 @@ func TestService_Create_ValidationFailures(t *testing.T) {
 		{"neg-device-limit", CreateInput{Username: "alice", DeviceLimit: -1}},
 		{"bad-email", CreateInput{Username: "alice", Email: "not-an-email"}},
 		{"huge-telegram-id", CreateInput{Username: "alice", TelegramID: ptrInt64(99_999_999_999)}},
-		{"empty-allowlist-entry", CreateInput{Username: "alice", HostsAllowlist: []string{""}}},
-		{"dup-allowlist-entry", CreateInput{Username: "alice", HostsAllowlist: []string{"a", "a"}}},
+		{"empty-allowlist-entry", CreateInput{Username: "alice", HostsAllowlist: []uuid.UUID{uuid.Nil}}},
+		{"dup-allowlist-entry", CreateInput{Username: "alice", HostsAllowlist: []uuid.UUID{dupUUID, dupUUID}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
