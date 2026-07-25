@@ -31,6 +31,7 @@ import (
 	// cache → redis; validation → validator; openapi → swag).
 	_ "github.com/go-playground/validator/v10" // Phase 1 — input validation
 	_ "github.com/golang-jwt/jwt/v5"           // Phase 1 — JWT (access + refresh tokens)
+	"github.com/google/uuid"                   // v0.4.0: needed for singboxNodeResolver.Resolve signature
 	_ "github.com/google/uuid"                 // Phase 1 — UUIDv4 generation
 	_ "github.com/nats-io/nats.go"             // Phase 1 — event bus / JetStream
 	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
@@ -46,6 +47,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
+	"github.com/QAdversif/AegisPanel/internal/cores/singbox"   // v0.4.0: needed for *Provider type assertion + Configure
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
 	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
@@ -336,7 +338,7 @@ func main() {
 	//
 	// The NodeProvider adapter is a thin row
 	// projection: bootstrap needs only (id, name,
-	// state, address), the nodes.Service.Get
+	// state, address, agent_bearer), the nodes.Service.Get
 	// returns a full *Node, and we map. Keeping
 	// the adapter in the nodes package (not here)
 	// would force main.go to know the bootstrap
@@ -352,6 +354,35 @@ func main() {
 		SSHUser:     cfg.AgentSSHUser,
 		SSHPort:     cfg.AgentSSHPort,
 	})
+
+	// v0.4.0-mvp-batched: wire the sing-box
+	// provider's HTTP transport (panel -> agent)
+	// and the per-node BatchedApplier queue.
+	//
+	// Configure() injects a NodeResolver adapter
+	// (delegates to nodes.Service.GetByID) and
+	// the shared *http.Client. Once Configure
+	// returns, singbox.Apply is fully wired —
+	// the v0.3.0 stub returning
+	// ErrApplyNotImplemented is replaced by an
+	// actual POST /v1/apply to the node's agent.
+	if sbp, sbErr := cores.Get("sing-box"); sbErr != nil {
+		log.Warn().Err(sbErr).Msg("cores: sing-box provider not registered; Apply will return ErrApplyNotConfigured")
+	} else if sbProvider, ok := sbp.(*singbox.Provider); ok {
+		// Per-node BatchedApplier map. The map
+		// is built lazily in v0.4.0+ as nodes
+		// transition to `online`; for v0.4.0-a
+		// we register a flush no-op so the
+		// infrastructure is in place. The
+		// user-management layer that calls
+		// BatchedApplier.Enqueue is the next
+		// slice (v0.4.0-d or rolled into b).
+		if err := singboxWiring(ctx, sbProvider, nodesSvc); err != nil {
+			log.Fatal().Err(err).Msg("v0.4.0: singbox wiring failed")
+		}
+	} else {
+		log.Warn().Msg("cores: registered sing-box provider is not *singbox.Provider — Apply transport disabled")
+	}
 	if err := bootstrap.EnsureKnownHosts(cfg.AgentKnownHosts); err != nil {
 		// Not fatal: the installer falls back to
 		// a per-install TempFile if the panel's
@@ -761,4 +792,119 @@ func adminUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "The store is selected from AEGIS_AUTH_BACKEND (memory | pg).")
 	fmt.Fprintln(os.Stderr, "The pg path requires AEGIS_POSTGRES_DSN.")
+}
+
+// singboxWiring is the v0.4.0-mvp-batched glue that
+// connects the sing-box CoreProvider (registered in the
+// process-global registry by the singbox package's init)
+// to the panel's node store + an HTTP client. It also
+// creates one BatchedApplier per node and spawns a
+// Run() goroutine for each.
+//
+// The FlushFn is intentionally a no-op for v0.4.0-a:
+// the user-management layer that calls
+// BatchedApplier.Enqueue is the next slice (rolled
+// into v0.4.0-b). Once the user-management layer lands,
+// the only change here is the FlushFn body — the wiring
+// is otherwise complete.
+//
+// `ctx` is the boot context (the same one signal.NotifyContext
+// returns in main). We derive each BatchedApplier's per-node
+// context from it via context.WithCancel so that all the
+// applier goroutines die together with the panel — the
+// `contextcheck` linter would otherwise reject creating a
+// bare `context.Background()` here.
+func singboxWiring(
+	ctx context.Context,
+	p *singbox.Provider,
+	nodesSvc *nodes.Service,
+) error {
+	// NodeResolver adapter: maps a node UUID to
+	// (address, bearer). The address is the
+	// host:port the agent listens on (the same
+	// string the bootstrap installer wrote to
+	// /etc/aegis/agent.env); the bearer is the
+	// shared secret from the v0.4.0
+	// agent_bearer column.
+	resolver := &singboxNodeResolver{svc: nodesSvc}
+
+	// Shared HTTP client. The singbox package's
+	// newHTTPClient() sets a 30s per-request
+	// timeout; the BatchedApplier's window
+	// (default 20s) is the effective budget
+	// because the apply request carries the
+	// boot ctx (cancelled on shutdown).
+	p.Configure(resolver, singbox.NewHTTPClient())
+
+	// Per-node BatchedApplier map. Built once
+	// at boot from the current node list; the
+	// v0.4.0+ provisioning flow will add a
+	// callback (node transitioned to online →
+	// spawn Run for it) but for v0.4.0-a we
+	// cover the existing set.
+	allNodes, err := nodesSvc.List(ctx)
+	if err != nil {
+		return fmt.Errorf("v0.4.0: list nodes: %w", err)
+	}
+	for _, n := range allNodes {
+		if n.State != nodes.StateOnline {
+			continue
+		}
+		// FlushFn is a no-op for v0.4.0-a — the
+		// user-management layer that calls
+		// Enqueue is the next slice. When it
+		// lands, the FlushFn body becomes:
+		//   1. Re-render the affected node's
+		//      CoreConfig from current state.
+		//   2. Call p.Apply(ctx, n.ID.String(), rendered).
+		// Until then, the loop just demonstrates
+		// the wiring is functional.
+		applier := cores.NewBatchedApplier(
+			20*time.Second,
+			1000,
+			func(_ context.Context, deltas []cores.Delta) error {
+				log.Info().
+					Str("node", n.Name).
+					Int("deltas", len(deltas)).
+					Msg("v0.4.0: BatchedApplier flush (no-op stub; real render+apply lands with user-management)")
+				return nil
+			},
+		)
+		applierCtx, applierCancel := context.WithCancel(ctx)
+		go func() {
+			defer applierCancel()
+			if err := applier.Run(applierCtx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error().Err(err).Str("node", n.Name).Msg("v0.4.0: BatchedApplier.Run exited unexpectedly")
+			}
+		}()
+		log.Info().
+			Str("node", n.Name).
+			Dur("window", applier.Window()).
+			Msg("v0.4.0: BatchedApplier started")
+	}
+	return nil
+}
+
+// singboxNodeResolver is the adapter from the panel's
+// nodes.Service to the singbox.NodeResolver interface.
+// Lives in main.go (not in the singbox package) so the
+// singbox package can stay free of any nodes import
+// (which would create a cycle once the user-management
+// layer pulls in both).
+type singboxNodeResolver struct {
+	svc *nodes.Service
+}
+
+// Resolve implements singbox.NodeResolver. The return
+// values are named so the gocritic `unnamedResult` check
+// is satisfied — the alternative (single-line `return
+// n.Address, n.AgentBearer, nil`) is technically fine
+// but flags the linter because the next reader cannot
+// see at a glance which string is which.
+func (r *singboxNodeResolver) Resolve(ctx context.Context, id uuid.UUID) (address, bearer string, err error) {
+	n, err := r.svc.Get(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	return n.Address, n.AgentBearer, nil
 }

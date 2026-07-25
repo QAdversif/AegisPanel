@@ -60,6 +60,19 @@ type Node struct {
 	// node. Format is "host:port"; we do not parse it because
 	// the agent protocol embeds the same string.
 	Address string `json:"address"`
+	// AgentBearer is the panel<->agent auth shared secret
+	// (a 32-byte random hex string). It is set during
+	// Provision and used on every POST /v1/apply call.
+	// The field is JSON-skipped because the bearer is
+	// never read by the HTTP layer — it lives only on
+	// the panel and is consumed by the cores package's
+	// HTTP transport. Logging it would also be a leak.
+	//
+	// v0.4.0-mvp-batched: added. The column defaults to
+	// '' in the DB; v0.3.0 nodes that were provisioned
+	// before the migration will have an empty bearer
+	// until a Re-Provision re-mints it.
+	AgentBearer string `json:"-"`
 	// Tags is a small set of free-form labels (e.g. "vless-reality",
 	// "shadowsocks-2022", "eu-west-1"). The agent reads them
 	// during apply to decide which inbounds to render.
