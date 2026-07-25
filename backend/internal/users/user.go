@@ -123,28 +123,47 @@ func (s Status) IsValid() bool {
 // are derived from the User's ID + a server-side
 // secret. This keeps the User model thin and the
 // credential-generation logic in one place.
+//
+// # JSON wire format
+//
+// The JSON tags are snake_case (NOT camelCase) so
+// the wire format matches the pre-existing
+// `subscription.User` API contract. This is the
+// canonical user type across the panel; the
+// `internal/subscription` package consumes it for
+// the /sub/{token} render endpoint and the
+// `internal/users` package owns its CRUD surface.
+//
+// # Hosts allowlist / blocklist
+//
+// `HostsAllowlist` and `HostsBlocklist` are
+// `[]uuid.UUID` slices. The DB column is JSONB, so
+// the pgx driver marshals / unmarshals the slice
+// transparently. Empty list (not nil) means "no
+// restriction" — the field is always emitted as a
+// non-null JSON array, never null.
 type User struct {
-	ID                    uuid.UUID  `json:"id"`
-	ExternalID            string     `json:"externalId,omitempty"` // ID from external Cabinet (Phase 1.1)
-	Username              string     `json:"username"`
-	Status                Status     `json:"status"`
-	PlanID                *uuid.UUID `json:"planId,omitempty"` // nil = free tier
-	ExpireAt              *time.Time `json:"expireAt,omitempty"`
-	TrafficLimitBytes     int64      `json:"trafficLimitBytes"`
-	TrafficUsedBytes      int64      `json:"trafficUsedBytes"`
-	LastResetAt           *time.Time `json:"lastResetAt,omitempty"`
-	DeviceLimit           int        `json:"deviceLimit"`
-	HostsAllowlist        []string   `json:"hostsAllowlist"`
-	HostsBlocklist        []string   `json:"hostsBlocklist"`
-	SubToken              string     `json:"subToken"`
-	SubTokenRotatedAt     *time.Time `json:"subTokenRotatedAt,omitempty"`
-	SubTokenPrev          string     `json:"subTokenPrev,omitempty"`
-	SubTokenPrevExpiresAt *time.Time `json:"subTokenPrevExpiresAt,omitempty"`
-	TelegramID            *int64     `json:"telegramId,omitempty"`
-	Email                 string     `json:"email,omitempty"`
+	ID                    uuid.UUID   `json:"id"`
+	ExternalID            string      `json:"external_id,omitempty"` // ID from external Cabinet (Phase 1.1)
+	Username              string      `json:"username"`
+	Status                Status      `json:"status"`
+	PlanID                *uuid.UUID  `json:"plan_id,omitempty"` // nil = free tier
+	ExpireAt              *time.Time  `json:"expire_at,omitempty"`
+	TrafficLimitBytes     int64       `json:"traffic_limit_bytes"`
+	TrafficUsedBytes      int64       `json:"traffic_used_bytes"`
+	LastResetAt           *time.Time  `json:"last_reset_at,omitempty"`
+	DeviceLimit           int         `json:"device_limit"`
+	HostsAllowlist        []uuid.UUID `json:"hosts_allowlist"`
+	HostsBlocklist        []uuid.UUID `json:"hosts_blocklist"`
+	SubToken              string      `json:"sub_token"`
+	SubTokenRotatedAt     *time.Time  `json:"sub_token_rotated_at,omitempty"`
+	SubTokenPrev          string      `json:"sub_token_prev,omitempty"`
+	SubTokenPrevExpiresAt *time.Time  `json:"sub_token_prev_expires_at,omitempty"`
+	TelegramID            *int64      `json:"telegram_id,omitempty"`
+	Email                 string      `json:"email,omitempty"`
 
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // IsValid reports whether u carries the minimum data

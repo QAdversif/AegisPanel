@@ -391,7 +391,7 @@ func scanUser(row rowScanner) (*User, error) {
 		}
 	}
 	if u.HostsAllowlist == nil {
-		u.HostsAllowlist = []string{}
+		u.HostsAllowlist = []uuid.UUID{}
 	}
 	if len(blocklist) > 0 {
 		if err := json.Unmarshal(blocklist, &u.HostsBlocklist); err != nil {
@@ -399,7 +399,7 @@ func scanUser(row rowScanner) (*User, error) {
 		}
 	}
 	if u.HostsBlocklist == nil {
-		u.HostsBlocklist = []string{}
+		u.HostsBlocklist = []uuid.UUID{}
 	}
 	u.SubTokenRotatedAt = subTokenRotatedAt
 	u.SubTokenPrev = derefString(subTokenPrev)

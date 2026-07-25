@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -146,8 +145,8 @@ type CreateInput struct {
 	TrafficUsedBytes  int64 // defaults to 0
 	LastResetAt       *time.Time
 	DeviceLimit       int // defaults to 0 (unlimited)
-	HostsAllowlist    []string
-	HostsBlocklist    []string
+	HostsAllowlist    []uuid.UUID
+	HostsBlocklist    []uuid.UUID
 	TelegramID        *int64
 	Email             string
 }
@@ -184,10 +183,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 			return nil, &ValidationError{Field: "email", Message: "invalid format: " + err.Error()}
 		}
 	}
-	if err := validateStringList(in.HostsAllowlist, "hosts_allowlist"); err != nil {
+	if err := validateUUIDList(in.HostsAllowlist, "hosts_allowlist"); err != nil {
 		return nil, err
 	}
-	if err := validateStringList(in.HostsBlocklist, "hosts_blocklist"); err != nil {
+	if err := validateUUIDList(in.HostsBlocklist, "hosts_blocklist"); err != nil {
 		return nil, err
 	}
 	// 2. Mint the sub_token. Random bytes from
@@ -209,8 +208,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 		TrafficUsedBytes:  in.TrafficUsedBytes,
 		LastResetAt:       in.LastResetAt,
 		DeviceLimit:       in.DeviceLimit,
-		HostsAllowlist:    ensureStringList(in.HostsAllowlist),
-		HostsBlocklist:    ensureStringList(in.HostsBlocklist),
+		HostsAllowlist:    ensureUUIDList(in.HostsAllowlist),
+		HostsBlocklist:    ensureUUIDList(in.HostsBlocklist),
 		SubToken:          tok,
 		TelegramID:        in.TelegramID,
 		Email:             in.Email,
@@ -242,8 +241,8 @@ type UpdateInput struct {
 	TrafficUsedBytes  *int64
 	LastResetAt       *time.Time
 	DeviceLimit       *int
-	HostsAllowlist    *[]string
-	HostsBlocklist    *[]string
+	HostsAllowlist    *[]uuid.UUID
+	HostsBlocklist    *[]uuid.UUID
 	TelegramID        *int64 // nil = leave alone; non-nil with *TelegramID == 0 = unlink telegram
 	Email             *string
 }
@@ -301,16 +300,16 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 		cur.DeviceLimit = *in.DeviceLimit
 	}
 	if in.HostsAllowlist != nil {
-		if err := validateStringList(*in.HostsAllowlist, "hosts_allowlist"); err != nil {
+		if err := validateUUIDList(*in.HostsAllowlist, "hosts_allowlist"); err != nil {
 			return nil, err
 		}
-		cur.HostsAllowlist = ensureStringList(*in.HostsAllowlist)
+		cur.HostsAllowlist = ensureUUIDList(*in.HostsAllowlist)
 	}
 	if in.HostsBlocklist != nil {
-		if err := validateStringList(*in.HostsBlocklist, "hosts_blocklist"); err != nil {
+		if err := validateUUIDList(*in.HostsBlocklist, "hosts_blocklist"); err != nil {
 			return nil, err
 		}
-		cur.HostsBlocklist = ensureStringList(*in.HostsBlocklist)
+		cur.HostsBlocklist = ensureUUIDList(*in.HostsBlocklist)
 	}
 	if in.TelegramID != nil {
 		if *in.TelegramID != 0 {
@@ -449,35 +448,38 @@ func validateUsername(u string) error {
 	return nil
 }
 
-// validateStringList ensures the list (if non-nil)
-// has no empty strings and no duplicates. Empty
-// list / nil list are both acceptable (they mean
-// "no filter").
-func validateStringList(list []string, field string) error {
+// validateUUIDList ensures the list (if non-nil)
+// has no zero UUIDs and no duplicates. Empty list
+// / nil list are both acceptable (they mean
+// "no filter"). The check is intentionally lenient
+// on format — a non-zero UUID of any version is
+// accepted. The Hosts package is the authoritative
+// resolver (it can map a foreign ID to a UUID).
+func validateUUIDList(list []uuid.UUID, field string) error {
 	if list == nil {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(list))
-	for i, s := range list {
-		if strings.TrimSpace(s) == "" {
-			return &ValidationError{Field: field, Message: fmt.Sprintf("entry %d is empty", i)}
+	seen := make(map[uuid.UUID]struct{}, len(list))
+	for i, u := range list {
+		if u == uuid.Nil {
+			return &ValidationError{Field: field, Message: fmt.Sprintf("entry %d is zero UUID", i)}
 		}
-		if _, dup := seen[s]; dup {
-			return &ValidationError{Field: field, Message: fmt.Sprintf("duplicate entry %q at index %d", s, i)}
+		if _, dup := seen[u]; dup {
+			return &ValidationError{Field: field, Message: fmt.Sprintf("duplicate entry %s at index %d", u, i)}
 		}
-		seen[s] = struct{}{}
+		seen[u] = struct{}{}
 	}
 	return nil
 }
 
-// ensureStringList returns a non-nil slice. nil and
+// ensureUUIDList returns a non-nil slice. nil and
 // empty both round-trip to a non-nil empty slice so
 // the JSON output is always "[]" not "null" (the
 // pgx scan path also expects a non-nil empty
 // array, not a nil, on round-trip).
-func ensureStringList(in []string) []string {
+func ensureUUIDList(in []uuid.UUID) []uuid.UUID {
 	if in == nil {
-		return []string{}
+		return []uuid.UUID{}
 	}
 	return in
 }
