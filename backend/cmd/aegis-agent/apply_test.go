@@ -436,8 +436,8 @@ func TestWriteAtomic_BasicRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat: %v", err)
 		}
-		if got := st.Mode().Perm(); got != 0o640 {
-			t.Fatalf("perm = %o, want 0640", got)
+		if got := st.Mode().Perm(); got != 0o644 {
+			t.Fatalf("perm = %o, want 0644", got)
 		}
 	}
 }

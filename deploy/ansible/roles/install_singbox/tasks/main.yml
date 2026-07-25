@@ -1,0 +1,215 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Install sing-box on a node. The role is the
+# v0.4.0-mvp-batched final sub-PR: it pairs with
+# the install_agent role (which writes the
+# per-node config via the BatchedApplier) and the
+# aegis-agent's /v1/apply handler (v0.4.0-b, which
+# atomically writes the rendered config + signals
+# sing-box to reload).
+#
+# # Where the pieces live
+#
+#   /usr/local/bin/sing-box       — the binary (this role)
+#   /etc/sing-box/                — config dir (this role)
+#     config.json                 — written by aegis-agent at apply time
+#   /var/log/sing-box/            — log dir (this role)
+#   /etc/systemd/system/sing-box.service — the unit (this role)
+#
+# # The install pipeline
+#
+#   1. Refuse to run on unsupported architectures
+#      (only x86_64 and aarch64 are supported — the
+#      GitHub release publishes only these tarballs
+#      for glibc Linux).
+#   2. Create the _sing-box system group + user
+#      (if not present). Home dir is not created
+#      (the service has no interactive login).
+#   3. Create the /etc/sing-box and /var/log/sing-box
+#      directories, owned by root:sing-box, mode 0750.
+#      /etc/sing-box is mode 0750 so the agent (which
+#      runs as root) can write into it, but only root
+#      and the sing-box group can list its contents
+#      (defence-in-depth — the on-disk config has
+#      per-user VLESS/VMess passwords in the inbounds).
+#   4. Download the sing-box tarball to a tmp dir
+#      and verify the SHA-256 against the digest
+#      pinned in defaults. The digest check is
+#      mandatory (the role fails if aegis_singbox_sha256
+#      is empty or wrong); SHA-256 is the only
+#      integrity check available since sing-box does
+#      not publish sidecar .sha256 files at the
+#      release URL. v0.5.0 will replace this with a
+#      runtime fetch via the GitHub API.
+#   5. Unpack the tarball into /usr/local/bin (the
+#      binary is the only file we need; the tarball
+#      also contains sing-box-geoip.db and
+#      sing-box-geosite.db which we drop because
+#      v0.4.0-c does not use GeoIP-based routing).
+#   6. Install the systemd unit and reload daemon.
+#   7. Enable and start the service.
+#
+# # Why we drop the GeoIP databases
+#
+# The tarball ships `sing-box-geoip.db` and
+# `sing-box-geosite.db` alongside the binary. v0.4.0-c
+# does not configure GeoIP-based rule_sets in the
+# rendered config (the panel's singbox provider
+# targets inbound-only proxies for the MVP). Leaving
+# the .db files in /usr/local/bin pollutes the
+# directory; they would belong in /var/lib/sing-box/
+# if/when GeoIP rules ship. Skipping them is the
+# safe default — the operator can `mv` them later
+# if GeoIP rules are added.
+#
+# # Why a hardcoded SHA-256 instead of API lookup
+#
+# sing-box publishes release artifacts via GitHub
+# Releases. The asset `digest` field in the GitHub
+# API response IS the SHA-256, but the release itself
+# does not ship a sidecar `.sha256` file. Two ways to
+# verify the download:
+#
+#   A. Hardcode the digest in the role defaults
+#      (this PR). Operator bumps the version AND the
+#      digest in lockstep. Risk: a compromised
+#      GitHub release would not be detected, but the
+#      SagerNet commit signing (verified GPG on
+#      GitHub) makes this attack hard.
+#   B. Runtime fetch via the GitHub API. Requires
+#      an API token (rate-limited), increases role
+#      complexity, and is harder to test in CI.
+#
+# Option A is the v0.4.0-c choice. Option B is
+# v0.5.0 work; the role's defaults include a
+# comment pointing to the upgrade path.
+
+- name: Refuse to run on unsupported architectures
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+    fail_msg: >-
+      install_singbox: unsupported architecture
+      {{ ansible_facts['architecture'] }}. Only x86_64
+      and aarch64 are supported. Override
+      `aegis_singbox_release_base_url` and
+      `aegis_singbox_binary_path` for other archs, or
+      install sing-box from your distro's package
+      manager and skip this role.
+
+- name: Refuse to run without a SHA-256 pin
+  ansible.builtin.assert:
+    that:
+      - aegis_singbox_sha256 | length == 64
+    fail_msg: >-
+      install_singbox: aegis_singbox_sha256 must be
+      set to the SHA-256 of the target tarball.
+      Find it in the GitHub API response at
+      https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{{ aegis_singbox_version }}
+      (the `assets[].digest` field, format
+      `sha256:<hex>`; pass the hex). The default in
+      roles/install_singbox/defaults/main.yml is the
+      digest for v{{ aegis_singbox_version }} linux-amd64.
+
+- name: Ensure the _sing-box system group exists
+  ansible.builtin.group:
+    name: "{{ aegis_singbox_group }}"
+    state: present
+    system: true
+
+- name: Ensure the _sing-box system user exists
+  ansible.builtin.user:
+    name: "{{ aegis_singbox_user }}"
+    group: "{{ aegis_singbox_group }}"
+    shell: /usr/sbin/nologin
+    system: true
+    createhome: false
+    home: /nonexistent
+
+- name: Create the sing-box config directory
+  ansible.builtin.file:
+    path: "{{ aegis_singbox_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ aegis_singbox_group }}"
+    mode: "0750"
+
+- name: Create the sing-box log directory
+  ansible.builtin.file:
+    path: "{{ aegis_singbox_log_dir }}"
+    state: directory
+    owner: "{{ aegis_singbox_user }}"
+    group: "{{ aegis_singbox_group }}"
+    mode: "0750"
+
+# Derive the per-arch artifact suffix. The sing-box
+# release uses Linux GOOS=linux + the standard
+# arch name (amd64 / arm64) in the tarball name.
+# The `variant` adds `-glibc` / `-musl` if set,
+# or is empty for the unsuffixed default (glibc).
+- name: Compute the per-arch tarball name
+  ansible.builtin.set_fact:
+    aegis_singbox_arch: >-
+      {{ 'amd64' if ansible_facts['architecture'] == 'x86_64'
+         else 'arm64' if ansible_facts['architecture'] == 'aarch64'
+         else ansible_facts['architecture'] }}
+    aegis_singbox_tarball: >-
+      sing-box-{{ aegis_singbox_version }}-linux-{{ 'amd64' if ansible_facts['architecture'] == 'x86_64'
+         else 'arm64' if ansible_facts['architecture'] == 'aarch64'
+         else ansible_facts['architecture'] }}{{ ('-' + aegis_singbox_linux_variant) if aegis_singbox_linux_variant else '' }}.tar.gz
+
+- name: Download the sing-box tarball
+  ansible.builtin.get_url:
+    url: "{{ aegis_singbox_release_base_url }}/v{{ aegis_singbox_version }}/{{ aegis_singbox_tarball }}"
+    dest: "/tmp/{{ aegis_singbox_tarball }}"
+    owner: root
+    group: root
+    mode: "0644"
+    checksum: "sha256:{{ aegis_singbox_sha256 }}"
+    timeout: 120
+  become: true
+
+# Unpack only the binary, drop the GeoIP/GeoSite
+# .db files (see header comment for the rationale).
+# `ansible.builtin.unarchive` with `creates:` would
+# re-run idempotently; we use `creates:` so a
+# re-apply on an already-installed node is a no-op.
+- name: Unpack the sing-box binary
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ aegis_singbox_tarball }}"
+    dest: "{{ aegis_singbox_binary_path | dirname }}"
+    remote_src: true
+    creates: "{{ aegis_singbox_binary_path }}"
+    extra_opts:
+      - --strip-components=1
+      - --wildcards
+      - "sing-box-*/sing-box"
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Remove the downloaded tarball
+  ansible.builtin.file:
+    path: "/tmp/{{ aegis_singbox_tarball }}"
+    state: absent
+  become: true
+
+- name: Install the sing-box systemd unit
+  ansible.builtin.copy:
+    src: sing-box.service
+    dest: /etc/systemd/system/sing-box.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: reload systemd
+
+- name: Enable and start sing-box
+  ansible.builtin.systemd:
+    name: sing-box
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
