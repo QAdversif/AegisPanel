@@ -14,8 +14,8 @@
 # `ignorefile:` input on the `trivy-action`. Removing an entry here
 # means the next PR will fail the gate until the vuln is fixed.
 #
-# Reviewed: 2026-07-13
-# Next review: 2026-08-13 (one month) or on Caddy upstream action
+# Reviewed: 2026-07-25 (custom Caddy build — grpc-go CVE fixed)
+# Next review: 2026-08-25 (one month) or on Caddy upstream action
 
 # Caddy 2.11.4 (the current latest) ships a binary compiled with
 # Go 1.26.3. Three Go stdlib CVEs were disclosed after that build
@@ -39,3 +39,12 @@
 CVE-2026-27145
 CVE-2026-39822
 CVE-2026-42504
+
+# GHSA-hrxh-6v49-42gf (xDS RBAC and HTTP/2 Rapid Reset) is no longer
+# reported by trivy after PR "feat/build/custom-caddy-xcaddy" because
+# we rebuild the Caddy binary in `frontend/Dockerfile` with a `replace`
+# pinning `google.golang.org/grpc` to v1.82.1. If this CVE reappears
+# in a future scan, that means the custom build was bypassed (e.g. the
+# `CADDY_VERSION` arg was rolled back, or the build context lost the
+# `caddy-build` stage) — investigate the Dockerfile before re-adding
+# this entry.
