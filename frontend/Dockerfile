@@ -76,8 +76,16 @@ RUN git clone --depth 1 --branch v${CADDY_VERSION} \
 # When `GRPCGO_PIN` is empty (because upstream Caddy has incorporated
 # a patched grpc-go on its own), this whole block is skipped and
 # we build against the upstream-pinned version verbatim.
+#
+# Syntax note: the replace is written as
+# `old=old@v` (self-version-pin), not `old=@v` or `old=v` —
+# `go mod edit` rejects the latter two with
+# `unversioned new path must be local directory` because it
+# reads the bare `v1.82.1` as a filesystem path. Repeating
+# the module path on the right side with `@v` makes the
+# version explicit.
 RUN if [ -n "${GRPCGO_PIN}" ]; then \
-        go mod edit -replace=google.golang.org/grpc=v${GRPCGO_PIN} && \
+        go mod edit -replace=google.golang.org/grpc=google.golang.org/grpc@v${GRPCGO_PIN} && \
         go mod tidy; \
     fi
 
