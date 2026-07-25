@@ -43,14 +43,16 @@
 //
 // # File permissions
 //
-// The atomic write uses mode 0640, owner=root,
-// group=root. sing-box running as a different user
-// needs to be in the root group to read the config.
-// The default Debian/Ubuntu sing-box package runs
-// as user `_sing-box` with group `_sing-box`; the
-// agent's env file documents the override path
-// (operators can chgrp the file post-install, or
-// set the agent to run as the sing-box user).
+// The atomic write uses mode 0644, owner=root,
+// group=root. The install_singbox role (v0.4.0-c)
+// runs sing-box as the unprivileged _sing-box user
+// (Debian package convention) which is NOT in the
+// root group. The world-read bit on the file is
+// effectively a no-op because the parent directory
+// is mode 0750 owned by root:sing-box — only root
+// and the sing-box group can traverse the directory
+// in the first place. See `writeAtomicConfigPerm`
+// below for the full rationale.
 
 package main
 
@@ -278,15 +280,28 @@ var applyMaxBytes = int64(1 << 20)
 // config directory. The fsync of the parent
 // directory is best-effort: on Windows, opening a
 // writeAtomicConfigPerm is the file mode used for
-// the atomic-write target. 0640 = owner read+write,
-// group read, world none. The agent runs as root;
-// sing-box typically runs as its own user (e.g.
-// `_sing-box` on Debian) and needs to be in the
-// root group to read the config. Operators that
-// use a different sing-box user can chgrp the
-// file post-install; the env file documents the
-// override path.
-const writeAtomicConfigPerm = 0o640
+// the atomic-write target. 0644 = owner read+write,
+// group read, world read.
+//
+// # Why world-readable and not 0640
+//
+// v0.4.0-b originally used 0640 with the rationale
+// that "sing-box needs to be in the root group to
+// read the config". v0.4.0-c installs sing-box as
+// the unprivileged _sing-box user (not in the root
+// group), so 0640 would lock sing-box out of its
+// own config file. The directory holding the file
+// is owned root:sing-box mode 0750 — only root and
+// the sing-box group can list or traverse it, so
+// the world-read bit on the file is effectively
+// useless to anyone outside those two principals.
+// 0644 lets the standard "_sing-box" Debian user
+// read the config without `chgrp` ceremony. The
+// on-disk secrets in the config are per-user VLESS
+// / VMess passwords (inbound), which the end user
+// already knows and uses to connect — there are no
+// panel-side secrets in the file.
+const writeAtomicConfigPerm = 0o644
 
 // directory for sync is not supported and we silently
 // skip; on Linux, the dir-fsync is the durability

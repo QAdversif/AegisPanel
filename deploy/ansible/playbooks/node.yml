@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Provision a single Aegis node:
-#   * bootstrap_node  — base user, dirs, packages
-#   * install_caddy   — reverse proxy with decoy + secret paths
+#   * bootstrap_node   — base user, dirs, packages
+#   * install_caddy    — reverse proxy with decoy + secret paths
 #   * install_fail2ban — SSH + panel-login jails
-#   * install_agent   — downloads the agent from the panel
-#   * setup_decoy     — renders the per-node decoy site
+#   * install_singbox  — sing-box binary, config dir, systemd unit
+#   * install_agent    — downloads the agent from the panel
+#   * setup_decoy      — renders the per-node decoy site
 #
 # Run:
 #   cd deploy/ansible
@@ -22,5 +23,6 @@
     - role: bootstrap_node
     - role: install_caddy
     - role: install_fail2ban
+    - role: install_singbox
     - role: install_agent
     - role: setup_decoy
