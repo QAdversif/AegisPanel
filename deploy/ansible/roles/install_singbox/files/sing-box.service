@@ -1,0 +1,58 @@
+[Unit]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# sing-box systemd unit. Dropped in by the
+# install_singbox Ansible role. The unit runs
+# sing-box as the unprivileged _sing-box user
+# and confines it to /etc/sing-box + /var/log/sing-box
+# via ReadWritePaths. The config file itself is
+# written by the aegis-agent (v0.4.0-b) at
+# /etc/sing-box/config.json; sing-box re-reads it
+# on `systemctl reload sing-box`.
+#
+# Why Type=simple (not notify): sing-box 1.13.x
+# added sd_notify support for `Type=notify`, but
+# 1.14.0-beta.2 still defaults to the simple mode
+# (the Type=notify code path is opt-in via
+# `-enable-experimental` flag). We pin to simple
+# for v0.4.0-c; v0.4.0-d or v0.5.0 can switch to
+# notify once 1.14.0 GA ships.
+Description=sing-box universal proxy platform
+Documentation=https://sing-box.sagernet.org
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=_sing-box
+Group=_sing-box
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecReload=/bin/kill -USR1 $MAINPID
+Restart=on-failure
+RestartSec=5
+# sing-box opens many sockets under load; raise the
+# file-descriptor limit to the systemd default-max
+# (typically 524288 on modern distros) so a busy
+# node does not hit `too many open files`.
+LimitNOFILE=infinity
+# Bind to privileged ports (<1024) without root via
+# CAP_NET_BIND_SERVICE. The default config binds to
+# high ports only, but operators running on 80/443
+# get the capability for free.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# Hardening: lock down the runtime as much as the
+# proxy workflow allows. /etc/sing-box and
+# /var/log/sing-box are explicitly writable; the
+# rest of the FS is read-only or hidden.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/etc/sing-box /var/log/sing-box
+
+[Install]
+WantedBy=multi-user.target

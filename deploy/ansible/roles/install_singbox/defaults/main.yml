@@ -1,0 +1,91 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Defaults for the install_singbox role. v0.4.0-c
+# ships this role; v0.4.0-a/#92 bumped the panel's
+# ProviderVersion to 1.14.0-beta.2, so the node
+# default here matches. Operators on a different
+# release branch override `aegis_singbox_version`
+# (and `aegis_singbox_sha256` in lockstep) per-host.
+#
+# Version notes:
+#   - 1.14.x is the current beta line; the rendered
+#     sing-box config is backward-compatible across
+#     1.8.x → 1.13.x GA. If a regression forces a
+#     rollback, set aegis_singbox_version: "1.13.x"
+#     in group_vars/all.yml.
+#   - The default `linux-amd64.tar.gz` artifact is
+#     glibc-linked (matches Debian/Ubuntu/CentOS).
+#     For Alpine, override aegis_singbox_linux_variant
+#     to "musl".
+
+# aegis_singbox_version is the sing-box release tag
+# WITHOUT the leading "v" (matches the GitHub release
+# asset naming). The role prepends the "v" when
+# building the download URL.
+aegis_singbox_version: "1.14.0-beta.2"
+
+# aegis_singbox_linux_variant picks the tarball flavor.
+# sing-box publishes three variants per arch:
+#   - "glibc" (default) — works on Debian/Ubuntu/CentOS
+#   - "musl" — works on Alpine
+#   - "" (empty) — uses the unsuffixed artifact
+# The unsuffixed artifact is the glibc build; the role
+# just defaults to the empty string for clarity.
+aegis_singbox_linux_variant: ""
+
+# aegis_singbox_sha256 is the SHA-256 of the tarball
+# for the default arch (x86_64 / linux-amd64). sing-box
+# releases do NOT publish a sidecar .sha256 file; the
+# digest is only available via the GitHub API asset
+# metadata. Operators who bump aegis_singbox_version
+# MUST also bump this hash in lockstep. The role
+# enforces the check via ansible.builtin.assert
+# (see tasks/main.yml).
+#
+# v0.5.0 will replace this with a runtime fetch via
+# the GitHub API; the SHA-256 hardcode is a v0.4.0-c
+# shortcut to keep the role self-contained.
+aegis_singbox_sha256: "f68715815741e59f25e32904cabcd5924a0461a910d8e9c9612512b957709ef4"
+
+# aegis_singbox_user is the Linux user sing-box runs
+# as. Matches the Debian package convention (`_sing-box`).
+# The role creates the user if it does not exist.
+aegis_singbox_user: "_sing-box"
+
+# aegis_singbox_group is the Linux group sing-box
+# belongs to. Defaults to the user name (Debian
+# convention: each system user has a same-named
+# group).
+aegis_singbox_group: "_sing-box"
+
+# aegis_singbox_config_dir is the directory the
+# rendered config lives in. The agent (v0.4.0-b)
+# writes /etc/sing-box/config.json here; the systemd
+# unit (below) reads -c <this-dir>/config.json.
+aegis_singbox_config_dir: "/etc/sing-box"
+
+# aegis_singbox_config_path is the absolute path the
+# agent writes to and the unit reads from. Derived
+# from aegis_singbox_config_dir + a fixed name; the
+# install_agent role's defaults expose the same
+# value as AEGIS_AGENT_SINGBOX_CONFIG_PATH so the
+# agent and the unit agree.
+aegis_singbox_config_path: "/etc/sing-box/config.json"
+
+# aegis_singbox_log_dir is where the journald unit
+# writes (systemd forwards stdout to the journal by
+# default; this dir is for any future file-based
+# logging or core dumps).
+aegis_singbox_log_dir: "/var/log/sing-box"
+
+# aegis_singbox_binary_path is where the unpacked
+# sing-box binary lives. /usr/local/bin is the
+# FHS-recommended path for system-local installs
+# that are not managed by the distro package manager.
+aegis_singbox_binary_path: "/usr/local/bin/sing-box"
+
+# aegis_singbox_release_base_url is the base URL
+# for the sing-box GitHub releases. Tests with a
+# local mirror can override.
+aegis_singbox_release_base_url: "https://github.com/SagerNet/sing-box/releases/download"

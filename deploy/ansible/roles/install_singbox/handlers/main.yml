@@ -1,0 +1,16 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Handlers for the install_singbox role. Currently
+# only `reload systemd` (so the sing-box.service file
+# drop is picked up); the unit is then started
+# explicitly by the role's `Enable and start sing-box`
+# task. A `restart sing-box` handler is NOT needed
+# because the agent reloads sing-box via
+# `systemctl reload` (USR1 signal), not via the
+# Ansible role.
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
