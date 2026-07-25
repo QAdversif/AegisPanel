@@ -97,10 +97,11 @@ func (a *BootstrapNodeProvider) GetByID(ctx context.Context, id uuid.UUID) (boot
 		return bootstrap.NodeRow{}, err
 	}
 	return bootstrap.NodeRow{
-		ID:      n.ID,
-		Name:    n.Name,
-		State:   string(n.State),
-		Address: n.Address,
+		ID:          n.ID,
+		Name:        n.Name,
+		State:       string(n.State),
+		Address:     n.Address,
+		AgentBearer: n.AgentBearer,
 	}, nil
 }
 
@@ -124,6 +125,17 @@ func (a *BootstrapNodeProvider) Update(ctx context.Context, row bootstrap.NodeRo
 		// pointer here is "leave alone").
 	})
 	return err
+}
+
+// SetAgentBearer implements bootstrap.NodeProvider.
+// v0.4.0-mvp-batched: the provisioner mints a
+// fresh bearer on every install and persists it
+// here, so the panel can ship POST /v1/apply
+// later. The setter bypasses nodes.Service so
+// the rest of the row (state, tags, …) is left
+// alone.
+func (a *BootstrapNodeProvider) SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error {
+	return a.Svc.store.SetAgentBearer(ctx, id, bearer)
 }
 
 // _ keeps the unused imports in scope while

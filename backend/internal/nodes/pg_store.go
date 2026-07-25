@@ -245,6 +245,24 @@ func (s *PgStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// SetAgentBearer updates only the agent_bearer column. The
+// bootstrap provisioner calls this right after the installer
+// returns success, so the panel has the secret on hand for
+// every POST /v1/apply. Implemented as a single-column UPDATE
+// (rather than a full Update) to avoid re-sending the rest
+// of the row. Returns ErrNotFound if the id is unknown.
+func (s *PgStore) SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error {
+	const q = `UPDATE nodes SET agent_bearer = $2, updated_at = NOW() WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, id, bearer)
+	if err != nil {
+		return fmt.Errorf("set agent bearer: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // --- internal: insert helpers ------------------------------------------
 
 // insertNode writes the node row. ON CONFLICT (name) surfaces
@@ -252,8 +270,8 @@ func (s *PgStore) Delete(ctx context.Context, id uuid.UUID) error {
 func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 	const q = `
 		INSERT INTO nodes (
-			id, name, region, state, address, capacity_hint
-		) VALUES ($1, $2, $3, $4, $5, $6)`
+			id, name, region, state, address, capacity_hint, agent_bearer
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	_, err := tx.Exec(ctx, q,
 		n.ID,
 		n.Name,
@@ -261,6 +279,7 @@ func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 		string(n.State),
 		n.Address,
 		n.CapacityHint,
+		n.AgentBearer,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -299,6 +318,7 @@ func insertNodeTag(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID, tag string)
 const nodeWithTagsSelect = `
 	SELECT
 		n.id, n.name, n.region, n.state, n.address, n.capacity_hint,
+		n.agent_bearer,
 		n.created_at, n.updated_at,
 		t.tag
 	FROM nodes n
@@ -322,12 +342,14 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 			nState        string
 			nAddress      string
 			nCapacityHint string
+			nAgentBearer  string
 			nCreatedAt    time.Time
 			nUpdatedAt    time.Time
 			tTag          *string
 		)
 		if err := rows.Scan(
 			&nID, &nName, &nRegion, &nState, &nAddress, &nCapacityHint,
+			&nAgentBearer,
 			&nCreatedAt, &nUpdatedAt,
 			&tTag,
 		); err != nil {
@@ -344,6 +366,7 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 				State:        State(nState),
 				Address:      nAddress,
 				CapacityHint: nCapacityHint,
+				AgentBearer:  nAgentBearer,
 				CreatedAt:    nCreatedAt,
 				UpdatedAt:    nUpdatedAt,
 			}

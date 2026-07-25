@@ -49,6 +49,18 @@ func (m *mockNodeProvider) Update(_ context.Context, row NodeRow) error {
 	return nil
 }
 
+func (m *mockNodeProvider) SetAgentBearer(_ context.Context, id uuid.UUID, bearer string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rows[id]
+	if !ok {
+		return errors.New("mock: not found")
+	}
+	r.AgentBearer = bearer
+	m.rows[id] = r
+	return nil
+}
+
 // TestProvisioner_Success verifies the
 // happy path: a node in `new` state
 // transitions to `online` after the install

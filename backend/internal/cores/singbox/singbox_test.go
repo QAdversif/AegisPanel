@@ -134,20 +134,14 @@ func TestProvider_Diff_NonEmptyWhenDifferent(t *testing.T) {
 	}
 }
 
-func TestProvider_Apply_ReturnsNotImplemented(t *testing.T) {
+func TestProvider_Apply_NotConfigured(t *testing.T) {
 	p := New()
-	err := p.Apply(context.Background(), "node-1", []byte("{}"))
+	err := p.Apply(context.Background(), "00000000-0000-0000-0000-000000000001", []byte("{}"))
 	if err == nil {
-		t.Fatal("Apply should return an error in Phase 1")
+		t.Fatal("Apply without Configure should return an error")
 	}
-	if !errors.Is(err, ErrApplyNotImplemented) {
-		t.Fatalf("Apply error = %v, want wraps ErrApplyNotImplemented", err)
-	}
-	// The error message should also surface the node ID
-	// so an operator reading a panel log can see which
-	// node was being targeted.
-	if !strings.Contains(err.Error(), "node-1") {
-		t.Fatalf("Apply error should mention node ID, got %q", err.Error())
+	if !errors.Is(err, ErrApplyNotConfigured) {
+		t.Fatalf("Apply error = %v, want wraps ErrApplyNotConfigured", err)
 	}
 }
 
