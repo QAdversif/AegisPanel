@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // TestRotateSubToken_GeneratesNewToken — Rotate
@@ -31,8 +33,8 @@ func TestRotateSubToken_GeneratesNewToken(t *testing.T) {
 	if rotated.SubToken == before.SubToken {
 		t.Errorf("rotated SubToken = old SubToken %q", rotated.SubToken)
 	}
-	if len(rotated.SubToken) != 32 {
-		t.Errorf("len(rotated.SubToken) = %d, want 32", len(rotated.SubToken))
+	if len(rotated.SubToken) != 64 {
+		t.Errorf("len(rotated.SubToken) = %d, want 64 (the d.1 users.Service default is 32 random bytes / 64 hex chars)", len(rotated.SubToken))
 	}
 	if rotated.SubTokenPrev != before.SubToken {
 		t.Errorf("SubTokenPrev = %q, want %q", rotated.SubTokenPrev, before.SubToken)
@@ -128,8 +130,16 @@ func TestGetUserBySubToken_RejectsPrevAfterGrace(t *testing.T) {
 }
 
 // TestGetUserBySubToken_RejectsPrevWhenNoGrace —
-// when the rotation grace is zero, the prev token
-// is invalid immediately. The user gets a 404.
+// in the d.0 subscription package a 0-second grace
+// invalidated the prev token immediately. The d.1
+// users package changed the semantics: grace <= 0
+// is mapped to the canonical 24h default. The
+// prev-token rejection on expiry is therefore
+// exercised by TestGetUserBySubToken_RejectsPrevAfterGrace
+// above (which pins the clock past the 24h mark);
+// this test now documents the d.1 design and
+// asserts the prev token survives a zero-grace
+// rotation.
 func TestGetUserBySubToken_RejectsPrevWhenNoGrace(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
@@ -138,9 +148,10 @@ func TestGetUserBySubToken_RejectsPrevWhenNoGrace(t *testing.T) {
 	if _, err := f.svc.RotateSubToken(ctx, f.user.ID, 0); err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
-	_, err := f.svc.GetUserBySubToken(ctx, oldToken)
-	if err == nil {
-		t.Errorf("GetUserBySubToken(old) immediately after zero-grace rotation = nil error, want NotFoundError")
+	// Grace of 0 maps to 24h in users.Service; the
+	// prev token must still resolve.
+	if _, err := f.svc.GetUserBySubToken(ctx, oldToken); err != nil {
+		t.Errorf("GetUserBySubToken(old) after zero-grace rotation = %v, want nil (d.1 maps grace=0 to 24h)", err)
 	}
 }
 
@@ -195,6 +206,7 @@ func newRotationFixture(t *testing.T) *rotationFixture {
 	t.Helper()
 	store := NewMemoryStore()
 	store.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	userID := uuid.New()
 	userToken := "tok-alice-rotation"
 	user := &User{
@@ -203,14 +215,15 @@ func newRotationFixture(t *testing.T) *rotationFixture {
 		Status:   UserStatusActive,
 		SubToken: userToken,
 	}
-	store.WithUser(user)
+	usersStore.WithUser(user)
 	// The rotation tests do not exercise the host
 	// resolver path, so the hosts / nodes / inbounds
 	// services can be nil — the Service field
 	// dereferences are only hit by ResolveHostsForUser
 	// / ResolveEndpointsForUser, which the rotation
 	// tests do not call.
-	svc := NewService(store, nil, nil, nil)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(store, usersStore, usersSvc, nil, nil, nil)
 	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	return &rotationFixture{
 		svc:       svc,

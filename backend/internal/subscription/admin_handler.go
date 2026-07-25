@@ -21,6 +21,19 @@
 // the URL prefix. The two are independent — an
 // operator can rotate the user's token without
 // rotating the panel path, and vice versa.
+//
+// # d-refactor.2 split
+//
+// As of d-refactor.2 the user-CRUD surface has moved
+// to `internal/users`. The handler here talks to the
+// users package directly for the two read/mutate
+// paths (Get / Update), and to subscription.Service's
+// thin wrappers for the four admin actions that
+// already had a thin-wrapper path (Create / List /
+// Rotate / future Read-by-token). d-refactor.3 will
+// move this entire file to `internal/users/admin_handler.go`
+// and replace it with a one-line re-export alias
+// here (kept for the legacy mount point).
 
 package subscription
 
@@ -35,6 +48,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // AdminRouter returns a chi subrouter for the user
@@ -49,6 +63,16 @@ import (
 // edit it". A read-only scope variant is not in
 // v0.2.0 (the panel's access model is admin-or-not);
 // the v1.0 panel will introduce a ScopeUsersRead.
+//
+// The d-refactor.2 signature takes a
+// *subscription.Service; the user-CRUD thin
+// wrappers on Service (Create / List / Rotate) and
+// the direct s.users access for Get / Update keep
+// the handler internal to the subscription package
+// for now. d-refactor.3 will move this file to
+// `internal/users` and the signature will become
+// `users.AdminRouter(usersSvc, ...)`; the call
+// site in `router.Build` updates in the same PR.
 func AdminRouter(svc *Service, authMiddleware func(http.Handler) http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(authMiddleware)
@@ -106,15 +130,15 @@ type rotateTokenRequest struct {
 
 func (s *Service) handleListUsers() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		users, err := s.ListUsers(r.Context())
+		rows, err := s.ListUsers(r.Context())
 		if err != nil {
 			writeUserError(w, err)
 			return
 		}
-		if users == nil {
-			users = []*User{}
+		if rows == nil {
+			rows = []*User{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"users": users})
+		writeJSON(w, http.StatusOK, map[string]any{"users": rows})
 	}
 }
 
@@ -124,7 +148,17 @@ func (s *Service) handleGetUser() http.HandlerFunc {
 		if !ok {
 			return
 		}
-		u, err := s.store.GetUserByID(r.Context(), id)
+		// As of d-refactor.2 the user-CRUD reads go
+		// through the users package directly; the
+		// subscription.Service does not have a
+		// GetByID thin wrapper yet. d-refactor.3
+		// will introduce one (or move this handler
+		// out of this file).
+		if s.users == nil {
+			writeUserError(w, &ValidationError{Field: "users", Message: "users store is not wired"})
+			return
+		}
+		u, err := s.users.GetByID(r.Context(), id)
 		if err != nil {
 			writeUserError(w, err)
 			return
@@ -179,34 +213,45 @@ func (s *Service) handleUpdateUser() http.HandlerFunc {
 			writeUserError(w, &ValidationError{Field: "expire_at", Message: err.Error()})
 			return
 		}
-		// PlanID: nil in JSON means "leave alone".
-		// clear_plan_id=true means "set to NULL".
-		var planIDPatch = req.PlanID
-		if req.ClearPlanID {
-			planIDPatch = &clearUUID
+		// Translate the legacy updateUserRequest
+		// into users.UpdateInput. The clear_plan_id
+		// / clear_expire_at flags become a uuid.Nil
+		// / nil pointer respectively. As of
+		// d-refactor.2 the translation lives here
+		// (not in Service) because d-refactor.3 will
+		// move this whole file to users and the
+		// translation becomes a direct
+		// users.UpdateInput construction.
+		// `req.Status` is `*UserStatus`, and
+		// `UserStatus` is a type alias for
+		// `users.Status` (see subscription.go), so
+		// the pointer types are interchangeable
+		// without a cast. The assignment is the
+		// shape the users.Service.Update expects.
+		in := users.UpdateInput{
+			Username:          req.Username,
+			Status:            req.Status,
+			PlanID:            req.PlanID,
+			ExpireAt:          expireAt,
+			TrafficLimitBytes: req.TrafficLimitBytes,
+			DeviceLimit:       req.DeviceLimit,
+			HostsAllowlist:    req.HostsAllowlist,
+			HostsBlocklist:    req.HostsBlocklist,
 		}
-		// ExpireAt: nil = leave alone, clear=true =
-		// set to NULL. The two are independent
-		// because expireAt was parsed from a string
-		// (ISO 8601) and we can't distinguish "absent
-		// key" from "explicit null" without a custom
-		// unmarshaller.
-		var expirePatch *time.Time
-		if !req.ClearExpireAt {
-			expirePatch = expireAt
+		if req.ClearPlanID && req.PlanID == nil {
+			nilUUID := uuid.Nil
+			in.PlanID = &nilUUID
 		}
-		// Build the patch.
-		patch := UpdateUserPatch{
-			Username:       req.Username,
-			Status:         req.Status,
-			PlanID:         planIDPatch,
-			ExpireAt:       expirePatch,
-			TrafficLimit:   req.TrafficLimitBytes,
-			DeviceLimit:    req.DeviceLimit,
-			HostsAllowlist: req.HostsAllowlist,
-			HostsBlocklist: req.HostsBlocklist,
+		if req.ClearExpireAt {
+			in.ExpireAt = nil
 		}
-		u, err := s.store.UpdateUser(r.Context(), id, patch)
+		// As of d-refactor.2 the user-CRUD updates
+		// go through the users package directly.
+		if s.usersSvc == nil {
+			writeUserError(w, &ValidationError{Field: "users", Message: "users service is not wired"})
+			return
+		}
+		u, err := s.usersSvc.Update(r.Context(), id, in)
 		if err != nil {
 			writeUserError(w, err)
 			return
@@ -289,27 +334,34 @@ func graceFromSeconds(s *int) time.Duration {
 	return time.Duration(*s) * time.Second
 }
 
-// clearUUID is the address used to mean "set the
-// column to NULL". Stored as a constant so the
-// UpdateUserPatch sees a stable sentinel and the
-// store layer can detect the explicit clear.
-var clearUUID = uuid.Nil
-
 // writeUserError maps the well-known Store /
-// Service errors to HTTP status codes. Anything
+// Service errors to HTTP status codes. As of
+// d-refactor.2 the error space is the union of the
+// subscription package's sentinels (the thin
+// wrappers return them) and the users package's
+// sentinels (the direct s.users.* and s.usersSvc.*
+// calls in handleGetUser / handleUpdateUser return
+// them). The mapper knows both shapes. Anything
 // else is a 500.
 func writeUserError(w http.ResponseWriter, err error) {
 	var vErr *ValidationError
+	var usersVErr *users.ValidationError
 	var nferr *NotFoundError
 	switch {
 	case errors.As(err, &nferr):
 		writeJSONError(w, http.StatusNotFound, nferr.Error())
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, users.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrDuplicate):
+	case errors.Is(err, ErrDuplicate), errors.Is(err, users.ErrDuplicate):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &vErr):
 		writeJSONError(w, http.StatusBadRequest, vErr.Error())
+	case errors.As(err, &usersVErr):
+		// users.ValidationError satisfies errors.As
+		// even when wrapped, so this branch covers
+		// the users package's per-field validation
+		// errors.
+		writeJSONError(w, http.StatusBadRequest, usersVErr.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 	}
