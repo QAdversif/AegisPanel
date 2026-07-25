@@ -18,13 +18,15 @@ Restart=always
 RestartSec=5
 User=root
 # Hardening: keep the agent from writing outside
-# the panel-known set of paths. /etc/aegis is the
-# only writable directory the agent ever needs
-# (it reads the env file; v0.4.0 writes the
-# applied sing-box config to a path the panel
-# whitelists via ProtectSystem=strict).
+# the panel-known set of paths. The agent reads
+# /etc/aegis/agent.env and (v0.4.0-b+) writes
+# the applied sing-box config to
+# AEGIS_AGENT_SINGBOX_CONFIG_PATH (default
+# /etc/sing-box/config.json). Both paths are
+# listed in ReadWritePaths so the ProtectSystem=strict
+# allow-list stays narrow.
 ProtectSystem=strict
-ReadWritePaths=/etc/aegis /var/log/aegis
+ReadWritePaths=/etc/aegis /var/log/aegis /etc/sing-box
 
 [Install]
 WantedBy=multi-user.target
