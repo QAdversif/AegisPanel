@@ -43,19 +43,45 @@ import (
 // built against. The version string is what shows up in
 // `GET /api/v1/cores` and in agent heartbeats, so it must be
 // the *protocol* version (what the rendered config is valid
-// for), not the Go module version. sing-box 1.8.0 is the
-// first release with the new "experimental" flag pattern
-// fully in place; 1.8.x configs are forward-compatible.
-const ProviderVersion = "1.8.0"
+// for), not the Go module version.
+//
+// v0.4.0-mvp-batched pinned this to 1.14.0-beta.2 to match
+// the binary version the install_singbox Ansible role
+// deploys. 1.14.0 is a beta at the time of writing (the
+// release has been in beta since 2026-07 with 50 alphas
+// before that — sing-box ships 1.14.0-GA only after the
+// feature set freezes). If a regression in 1.14.0-beta.x
+// breaks the rendered config, bump this to the latest
+// 1.13.x GA release; the Go provider's render output is
+// backward-compatible across the 1.8.x → 1.13.x range.
+//
+// The v0.3.0 placeholder was "1.8.0" — kept as the minimum
+// supported protocol version in the comment above the
+// Capabilities() implementation.
+const ProviderVersion = "1.14.0-beta.2"
 
 // ProviderName is the canonical name the provider registers
 // under. Kept as a constant so tests can assert against it.
 const ProviderName = "sing-box"
 
-// Provider is the sing-box CoreProvider. Its zero value is
-// ready for use; the package's init() registers one in the
-// process-global registry.
-type Provider struct{}
+// Provider is the sing-box CoreProvider. v0.4.0-mvp-batched
+// adds two fields — nodes and client — that the panel
+// wires in via Configure() at boot. The zero value is
+// still safe for the Capabilities / Name / Version /
+// RenderConfig / ValidateConfig / Diff / ParseStatus /
+// ParseStats methods, but Apply() returns an error until
+// Configure has been called.
+type Provider struct {
+	// nodes resolves a node UUID to the panel-side
+	// (address, bearer) pair the agent /v1/apply endpoint
+	// expects. Set by Configure at boot.
+	nodes NodeResolver
+	// client is the HTTP client used for the agent POST.
+	// Defaults to a *http.Client with a 30-second timeout
+	// when Configure is not called; tests inject a fake
+	// (httptest.Server wrapped in *http.Client).
+	client httpClient
+}
 
 // New returns a new sing-box provider. The package's init()
 // already registers one in the global registry, so main code

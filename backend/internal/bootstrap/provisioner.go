@@ -95,6 +95,13 @@ import (
 type NodeProvider interface {
 	GetByID(ctx context.Context, id uuid.UUID) (NodeRow, error)
 	Update(ctx context.Context, n NodeRow) error
+	// SetAgentBearer persists the freshly-minted
+	// bearer for the node so the panel can ship
+	// POST /v1/apply later. v0.4.0-mvp-batched
+	// added this; the v0.3.0 provisioner did not
+	// need it (one-shot bootstrap, no ongoing
+	// panel->agent traffic).
+	SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error
 }
 
 // NodeRow is the minimal projection of
@@ -104,10 +111,18 @@ type NodeProvider interface {
 // router builds the NodeRow on read +
 // applies the State update on write.
 type NodeRow struct {
-	ID      uuid.UUID
-	Name    string
-	State   string
-	Address string
+	ID          uuid.UUID
+	Name        string
+	State       string
+	Address     string
+	// AgentBearer is the bearer the panel uses to
+	// authenticate to the agent's POST /v1/apply
+	// endpoint. v0.3.0 did not need it (one-shot
+	// bootstrap); v0.4.0 added it to the row
+	// projection so the provisioner can persist
+	// the freshly-minted secret without a full
+	// Update cycle on the rest of the row.
+	AgentBearer string
 }
 
 // Service is the bootstrap entry point. main.go
@@ -254,13 +269,51 @@ func (s *Service) Provision(
 		in.SSHUser = s.sshUser
 	}
 	result := s.installer.Install(ctx, in)
+	// 2.5. Persist the bearer to the panel side.
+	// v0.4.0-mvp-batched: the panel needs the
+	// bearer at every Apply (POST /v1/apply), not
+	// just at install time. We mint it in step 1
+	// (above) and only write it to the node here
+	// once the install has succeeded — if the
+	// install failed, there is no live agent to
+	// pair the bearer with, and a stale DB value
+	// would be a footgun. The Update on row.State
+	// below preserves the bearer (it is not in
+	// NodeRow; only SetAgentBearer touches it).
 	// 3. Transition the state. The target
 	// state is `online` on success, `offline`
 	// on failure. The state machine accepts
-	// both from the start state.
+	// both from the start state. Declared
+	// before the SetAgentBearer block below
+	// so the bail-out on persistence failure
+	// can flip target back to offline.
 	target := StateOffline
 	if result.OK {
 		target = StateOnline
+	}
+	// 2.5. Persist the bearer to the panel side.
+	// v0.4.0-mvp-batched: the panel needs the
+	// bearer at every Apply (POST /v1/apply), not
+	// just at install time. We mint it in step 1
+	// (above) and only write it to the node here
+	// once the install has succeeded — if the
+	// install failed, there is no live agent to
+	// pair the bearer with, and a stale DB value
+	// would be a footgun. The Update on row.State
+	// below preserves the bearer (it is not in
+	// NodeRow; only SetAgentBearer touches it).
+	if result.OK {
+		if err := s.nodes.SetAgentBearer(ctx, row.ID, plain); err != nil {
+			log.Error().Err(err).Str("node", row.Name).
+				Msg("bootstrap: persist agent bearer failed; panel cannot Apply until re-provisioned")
+			// Treat the row as offline so the
+			// operator knows the panel cannot talk
+			// to the agent. The audit log records
+			// the install success; the DB row
+			// shows the inconsistent state.
+			result.OK = false
+			target = StateOffline
+		}
 	}
 	// The transition is best-effort: a DB
 	// error here is logged and the original

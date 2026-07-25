@@ -1,0 +1,41 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- v0.4.0-mvp-batched: add `agent_bearer` to the nodes table.
+--
+-- The bearer secret is the panel<->agent auth shared
+-- secret. v0.3.0 minted a fresh one on every Provision
+-- call and only ever wrote it to the node's
+-- /etc/aegis/agent.env — the panel itself kept no copy
+-- because the agent<->panel handshake was one-shot
+-- (the agent sent a signed challenge, never the other
+-- way). v0.4.0 introduces a panel->agent transport
+-- (POST /v1/apply) so the panel needs the bearer at
+-- every Apply call; storing it on the node row is the
+-- simplest place. The `state` column already records
+-- the agent's reported status, so co-locating the
+-- bearer is consistent.
+--
+-- # Security note (for the operator audit)
+--
+-- The column is plaintext. At-rest encryption is a
+-- v1.x concern (Postgres TDE or filesystem-level
+-- encryption; see ARCHITECTURE.md §25). Production
+-- deployments should NOT skip the disk-encryption step
+-- just because the panel keeps the secret server-side
+-- in this revision.
+--
+-- # Idempotency
+--
+-- The column defaults to '' (empty string). v0.3.0 nodes
+-- that were provisioned before this migration will have
+-- an empty agent_bearer; the panel's per-node BatchedApplier
+-- only enqueues work for nodes that are `state = online`,
+-- and a node without a bearer cannot transition to online
+-- under the v0.4.0 bootstrap. So the only "broken" case is
+-- a v0.3.0-online node that was re-installed by hand
+-- (the agent has a bearer, the panel does not) — a Re-
+-- Provision via the UI regenerates and re-stores the
+-- bearer, so the migration is safe to ship without a
+-- backfill step.
+
+ALTER TABLE nodes ADD COLUMN agent_bearer TEXT NOT NULL DEFAULT '';

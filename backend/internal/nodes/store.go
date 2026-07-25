@@ -37,6 +37,15 @@ type Store interface {
 	// Delete removes the node with the given id. Returns
 	// ErrNotFound if no such node exists.
 	Delete(ctx context.Context, id uuid.UUID) error
+	// SetAgentBearer updates only the agent_bearer column.
+	// v0.4.0-mvp-batched added this as a dedicated method
+	// so the bootstrap provisioner can store the freshly-
+	// minted bearer after a successful install without
+	// re-sending the rest of the node row (Update would
+	// require reading the row first to know the current
+	// State, then sending the whole struct back). Returns
+	// ErrNotFound if the id is unknown.
+	SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error
 }
 
 // ErrNotFound is returned by Store implementations when the
@@ -209,4 +218,31 @@ func cloneNode(n *Node) *Node {
 		copy(out.Tags, n.Tags)
 	}
 	return &out
+}
+
+// SetAgentBearer updates the bearer field of an existing
+// node. v0.4.0-mvp-batched: the v0.3.0 bootstrap minted
+// the bearer fresh on every Provision and only wrote it
+// to the node's /etc/aegis/agent.env (the panel kept no
+// copy). v0.4.0 stores it on the row so the panel's
+// BatchedApplier can ship rendered configs to the agent
+// via POST /v1/apply without re-deriving the secret from
+// the SSH path.
+//
+// Called by the bootstrap provisioner right after the
+// installer returns success. The Update method is
+// sufficient (it preserves the bearer) but the dedicated
+// method lets us avoid re-sending the rest of the row.
+func (s *MemoryStore) SetAgentBearer(_ context.Context, id uuid.UUID, bearer string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.byID[id]
+	if !ok {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	clone := cloneNode(existing)
+	clone.AgentBearer = bearer
+	clone.UpdatedAt = s.now().UTC()
+	s.byID[id] = clone
+	return nil
 }
