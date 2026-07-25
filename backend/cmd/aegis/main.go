@@ -31,8 +31,8 @@ import (
 	// cache → redis; validation → validator; openapi → swag).
 	_ "github.com/go-playground/validator/v10" // Phase 1 — input validation
 	_ "github.com/golang-jwt/jwt/v5"           // Phase 1 — JWT (access + refresh tokens)
+	"github.com/google/uuid"                   // v0.4.0: needed for singboxNodeResolver.Resolve signature
 	_ "github.com/google/uuid"                 // Phase 1 — UUIDv4 generation
-	"github.com/google/uuid"                 // v0.4.0: needed for singboxNodeResolver.Resolve signature
 	_ "github.com/nats-io/nats.go"             // Phase 1 — event bus / JetStream
 	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
@@ -47,8 +47,8 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
+	"github.com/QAdversif/AegisPanel/internal/cores/singbox"   // v0.4.0: needed for *Provider type assertion + Configure
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
-	"github.com/QAdversif/AegisPanel/internal/cores/singbox" // v0.4.0: needed for *Provider type assertion + Configure
 	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -807,6 +807,13 @@ func adminUsage() {
 // into v0.4.0-b). Once the user-management layer lands,
 // the only change here is the FlushFn body — the wiring
 // is otherwise complete.
+//
+// `ctx` is the boot context (the same one signal.NotifyContext
+// returns in main). We derive each BatchedApplier's per-node
+// context from it via context.WithCancel so that all the
+// applier goroutines die together with the panel — the
+// `contextcheck` linter would otherwise reject creating a
+// bare `context.Background()` here.
 func singboxWiring(
 	ctx context.Context,
 	p *singbox.Provider,
@@ -863,7 +870,7 @@ func singboxWiring(
 				return nil
 			},
 		)
-		applierCtx, applierCancel := context.WithCancel(context.Background())
+		applierCtx, applierCancel := context.WithCancel(ctx)
 		go func() {
 			defer applierCancel()
 			if err := applier.Run(applierCtx); err != nil && !errors.Is(err, context.Canceled) {
@@ -888,8 +895,13 @@ type singboxNodeResolver struct {
 	svc *nodes.Service
 }
 
-// Resolve implements singbox.NodeResolver.
-func (r *singboxNodeResolver) Resolve(ctx context.Context, id uuid.UUID) (string, string, error) {
+// Resolve implements singbox.NodeResolver. The return
+// values are named so the gocritic `unnamedResult` check
+// is satisfied — the alternative (single-line `return
+// n.Address, n.AgentBearer, nil`) is technically fine
+// but flags the linter because the next reader cannot
+// see at a glance which string is which.
+func (r *singboxNodeResolver) Resolve(ctx context.Context, id uuid.UUID) (address, bearer string, err error) {
 	n, err := r.svc.Get(ctx, id)
 	if err != nil {
 		return "", "", err

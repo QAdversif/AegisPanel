@@ -111,10 +111,10 @@ type NodeProvider interface {
 // router builds the NodeRow on read +
 // applies the State update on write.
 type NodeRow struct {
-	ID          uuid.UUID
-	Name        string
-	State       string
-	Address     string
+	ID      uuid.UUID
+	Name    string
+	State   string
+	Address string
 	// AgentBearer is the bearer the panel uses to
 	// authenticate to the agent's POST /v1/apply
 	// endpoint. v0.3.0 did not need it (one-shot

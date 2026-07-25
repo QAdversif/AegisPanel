@@ -19,9 +19,9 @@ import (
 // returned. The optional failFirst / alwaysFail knobs let
 // tests simulate FlushFn errors.
 type flushRecorder struct {
-	mu        sync.Mutex
-	calls     [][]Delta
-	failFirst int32 // fail the first N calls with errFlushFailed
+	mu         sync.Mutex
+	calls      [][]Delta
+	failFirst  int32 // fail the first N calls with errFlushFailed
 	alwaysFail bool  // fail every call
 }
 

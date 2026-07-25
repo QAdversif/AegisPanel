@@ -164,12 +164,16 @@ type applyEnvelope struct {
 
 // truncateBody limits a non-2xx response body in the error
 // message so a misbehaving agent that returns megabytes of
-// HTML does not blow up the panel log.
-func truncateBody(b []byte, max int) string {
-	if len(b) <= max {
+// HTML does not blow up the panel log. The parameter is
+// named `maxBytes` to avoid shadowing the built-in `max`
+// (the gocritic `builtinShadow` check would otherwise
+// reject the name; we keep the parameter explicit so the
+// shadowing is impossible to introduce accidentally).
+func truncateBody(b []byte, maxBytes int) string {
+	if len(b) <= maxBytes {
 		return string(b)
 	}
-	return string(b[:max]) + "...(truncated)"
+	return string(b[:maxBytes]) + "...(truncated)"
 }
 
 // NewHTTPClient returns the default *http.Client used
