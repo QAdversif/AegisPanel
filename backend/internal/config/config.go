@@ -89,14 +89,33 @@ type Config struct {
 
 	// SubscriptionBackend selects the persistence layer for
 	// the subscription service. "memory" (default) keeps
-	// users / plans / host_pools in RAM — dev only.
-	// "pg" uses the PostgreSQL backend (PgStore) backed
-	// by the `users`, `plans`, `plan_pool`, `host_pools`,
-	// and `host_pool_members` tables (migration 0001)
-	// plus the `users.sub_token_prev` columns (migration
-	// 0011). The broader Phase 1 pg migration runs on
-	// boot when this is "pg".
+	// plans / host_pools in RAM — dev only. "pg" uses the
+	// PostgreSQL backend (PgStore) backed by the `plans`,
+	// `plan_pool`, `host_pools`, and `host_pool_members`
+	// tables (migration 0001). The user-CRUD surface is
+	// independent — see UsersBackend below.
+	//
+	// As of d-refactor.2 the `users` table is no longer
+	// read by the subscription service; the user-CRUD
+	// store is constructed separately under UsersBackend
+	// and the subscription Service receives it as a
+	// dependency.
 	SubscriptionBackend string `env:"AEGIS_SUBSCRIPTION_BACKEND" envDefault:"memory"`
+
+	// UsersBackend selects the persistence layer for the
+	// users service (the d.1 / d-refactor.1 user-CRUD
+	// surface). "memory" (default) keeps rows in RAM —
+	// dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the `users` table (migration
+	// 0001) plus the `users.sub_token_prev` columns
+	// (migration 0011). The boot path runs the
+	// migrations on "pg" mode.
+	//
+	// The users package is a d-refactor.2 split-out from
+	// the subscription package; before d-refactor.2 there
+	// was no separate config flag (the subscription
+	// backend covered both).
+	UsersBackend string `env:"AEGIS_USERS_BACKEND" envDefault:"memory"`
 
 	// PanelcfgBackend selects the persistence layer for the
 	// panel-wide config service. "memory" (default) keeps

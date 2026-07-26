@@ -18,6 +18,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // knownToken is the sub_token of the test user seeded
@@ -121,11 +122,15 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	inboundsStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	subscriptionStore := subscription.NewMemoryStore()
 	subscriptionStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersSvc := users.NewService(usersStore)
 	// Seed a live user. The plan / pool / host
 	// graph is the empty default — the renderer
 	// emits an empty body, but the handler still
-	// returns 200.
-	subscriptionStore.WithUser(&subscription.User{
+	// returns 200. The user is on the users
+	// store (not the subscription store) per the
+	// d-refactor.2 split.
+	usersStore.WithUser(&subscription.User{
 		ID:       uuid.New(),
 		Username: "alice",
 		Status:   subscription.UserStatusActive,
@@ -148,7 +153,7 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
+	subscriptionSvc := subscription.NewService(subscriptionStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
 	auditsSvc := audits.NewService(audits.NewMemoryStore())
 
 	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, nil /* bootstrapSvc */, nil)

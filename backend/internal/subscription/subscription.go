@@ -4,21 +4,44 @@
 // plans, host-pools, and the user-facing subscription
 // URLs (sing-box / Clash / base64, …).
 //
-// The package is Phase 0 / Phase 1:
-//   - MemoryStore for the in-memory dev backend;
-//   - Service that resolves "which hosts should this user
-//     see" given a User;
-//   - Render that turns the resolved hosts into one of
-//     the supported wire formats (base64 only, for now).
+// As of d-refactor.2 the user-CRUD surface has moved
+// out of this package into `internal/users` (it was
+// duplicated in d.1; d-refactor.1 aligned the wire
+// format, this PR drops the subscription-side
+// implementation). What stays in this package:
 //
-// Future PRs layer in:
-//   - PgStore (mirrors nodes / hosts / inbounds);
-//   - sing-box and Clash renderers;
-//   - format variables, wildcard `*` with random salt,
-//     multi-port random selection, XHTTP
-//     download_settings;
-//   - sub-token rotation and the `/s3cr3t-sub-<hex>`
-//     URL prefix rotation (see internal/config).
+//   - The render orchestrator (Service.ResolveHostsForUser
+//     / ResolveEndpointsForUser / RenderBase64 / Singbox /
+//     Clash) — these are the public subscription URL
+//     endpoints, and they live here because they walk
+//     the plan → pool → host graph, which is a
+//     subscription-domain concern (not a user-domain
+//     concern).
+//   - The plan / pool / member data layer (Store +
+//     MemoryStore + PgStore) — the join tables are read
+//     by the resolver and never owned by the user
+//     package, so they stay in subscription.
+//   - A thin user-CRUD facade on Service for the
+//     public render path (GetUserBySubToken +
+//     RotateSubToken + CreateUser + ListUsers) and the
+//     admin path (the same four + Get / Update in
+//     admin_handler.go). The facade is removed in
+//     d-refactor.3 when admin_handler.go moves to
+//     `users/admin_handler.go`.
+//
+// The type aliases `User` and `UserStatus` here are
+// aliases for `users.User` / `users.Status` (Go type
+// alias, not a new type). A `*User` in this package
+// is exactly a `*users.User` — the d-refactor.1 wire
+// format alignment is what makes this possible: the
+// two Go types have identical JSON shape, so callers
+// see the same wire bytes regardless of which package
+// the value was constructed in. The superset
+// (users.User) has additional fields the subscription
+// package does not consume (ExternalID, LastResetAt,
+// TelegramID, Email) — they are `omitempty` so the
+// JSON output is identical for the fields the
+// subscription endpoints do use.
 //
 // See ARCHITECTURE.md §2.4 and §10 for the long-term
 // design.
@@ -28,30 +51,42 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // UserStatus is the lifecycle state of a User. The
 // closed set is pinned by the `users.status` CHECK
-// constraint in migration 0001.
-type UserStatus string
+// constraint in migration 0001. It is a Go type alias
+// for `users.Status` so a `*User` in this package is
+// exactly a `*users.User`; values are interchangeable
+// without conversion.
+type UserStatus = users.Status
 
-// User status values. Any value outside this set is
-// rejected at the Service boundary.
+// User status values. Re-exported from the users
+// package so the rest of the subscription code (and
+// the public render response, which embeds Status in
+// the Subscription-Userinfo header) can keep the old
+// `UserStatusActive` / `UserStatusGrace` spelling.
 const (
-	UserStatusActive   UserStatus = "active"
-	UserStatusGrace    UserStatus = "grace"
-	UserStatusDisabled UserStatus = "disabled"
-	UserStatusExpired  UserStatus = "expired"
-	UserStatusDeleted  UserStatus = "deleted"
+	UserStatusActive   = users.StatusActive
+	UserStatusGrace    = users.StatusGrace
+	UserStatusDisabled = users.StatusDisabled
+	UserStatusExpired  = users.StatusExpired
+	UserStatusDeleted  = users.StatusDeleted
 )
 
-// IsLive reports whether the user is allowed to fetch a
-// subscription in this state. `grace` and `active` are
-// live (the operator may have set grace to give a user a
-// few days after expiry to renew); the rest are not.
-func (s UserStatus) IsLive() bool {
-	return s == UserStatusActive || s == UserStatusGrace
-}
+// User is the panel-side view of a single end-user
+// account. It is a Go type alias for `users.User` —
+// see the package doc comment for the rationale.
+type User = users.User
+
+// CreateUserInput is the payload the admin handler
+// passes to Service.CreateUser. It is an alias for
+// `users.CreateInput` (the canonical d.1 type) so the
+// admin handler does not have to translate between
+// two parallel input shapes.
+type CreateUserInput = users.CreateInput
 
 // ResetPeriod is the cadence at which `users.traffic_used_bytes`
 // is reset to zero. The closed set is pinned by
@@ -81,47 +116,6 @@ const (
 	PoolStrategyLeastLoaded PoolStrategy = "least_loaded"
 	PoolStrategyGeoAware    PoolStrategy = "geo_aware"
 )
-
-// User is the panel-side view of a single end-user
-// account. The fields mirror the `users` table
-// one-to-one; we keep them as a Go struct rather than
-// `map[string]any` so handlers can rely on the type at
-// compile time.
-//
-// The host allowlist / blocklist are stored as a slice
-// of host UUIDs; an empty list means "no restriction".
-// Phase 0 ignores both — the Service returns every host
-// the user is entitled to without filtering. The slice
-// fields are still populated by the Store so a future
-// filter pass can read them without a migration.
-//
-// The sub-token rotation fields (`SubTokenPrev` /
-// `SubTokenPrevExpiresAt`) implement the 3X-UI
-// convention: a rotation generates a new token,
-// keeps the old one valid for 24h so the user has
-// time to re-import the new URL on every device,
-// then the old token stops working. The
-// `GetUserBySubToken` lookup chain tries the current
-// token first, then the prev token (when present and
-// not yet expired).
-type User struct {
-	ID                    uuid.UUID   `json:"id"`
-	Username              string      `json:"username"`
-	Status                UserStatus  `json:"status"`
-	PlanID                *uuid.UUID  `json:"plan_id,omitempty"`
-	ExpireAt              *time.Time  `json:"expire_at,omitempty"`
-	TrafficLimitBytes     int64       `json:"traffic_limit_bytes"`
-	TrafficUsedBytes      int64       `json:"traffic_used_bytes"`
-	DeviceLimit           int         `json:"device_limit"`
-	HostsAllowlist        []uuid.UUID `json:"hosts_allowlist,omitempty"`
-	HostsBlocklist        []uuid.UUID `json:"hosts_blocklist,omitempty"`
-	SubToken              string      `json:"sub_token"`
-	SubTokenRotatedAt     *time.Time  `json:"sub_token_rotated_at,omitempty"`
-	SubTokenPrev          string      `json:"sub_token_prev"`
-	SubTokenPrevExpiresAt *time.Time  `json:"sub_token_prev_expires_at,omitempty"`
-	CreatedAt             time.Time   `json:"created_at"`
-	UpdatedAt             time.Time   `json:"updated_at"`
-}
 
 // Plan is the panel-side view of a tariff. The fields
 // mirror the `plans` table one-to-one.

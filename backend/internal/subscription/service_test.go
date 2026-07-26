@@ -15,14 +15,19 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
-// fixture spins up the four MemoryStores + the three
+// fixture spins up the four MemoryStores + the four
 // dependent Services that subscription.Service
-// needs. It seeds one node, one inbound (VLESS), one
-// host with one endpoint, plus the matching user
-// and pool graph. The IDs are stable across tests
-// so the assertions read like a recipe.
+// needs. As of d-refactor.2 the user-CRUD store
+// (`usersStore`) is independent of the
+// subscription-store (`subStore`); the two are wired
+// together at the Service level. The fixture seeds
+// one node, one inbound (VLESS), one host with one
+// endpoint, plus the matching user and pool graph.
+// The IDs are stable across tests so the assertions
+// read like a recipe.
 type fixture struct {
 	sub  *Service
 	sub2 *MemoryStore
@@ -33,9 +38,13 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
-	// 1. Subscription store + users / plans / pools.
+	// 1. Subscription store (plans / pools only after
+	//    d-refactor.2) + the user-CRUD store.
 	subStore := NewMemoryStore()
 	subStore.SetClock(func() time.Time {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	})
+	usersStore := users.NewMemoryStore(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 
@@ -51,7 +60,7 @@ func newFixture(t *testing.T) *fixture {
 	subStore.WithPool(&Pool{ID: poolID, Name: "eu", Strategy: PoolStrategyAll})
 	subStore.WithPoolMember(PoolMember{PoolID: poolID, HostID: hostIDOnHosts, Weight: 1})
 	planRef := planID
-	subStore.WithUser(&User{
+	usersStore.WithUser(&User{
 		ID: userID, Username: "alice", Status: UserStatusActive,
 		PlanID: &planRef, SubToken: "tok-alice",
 	})
@@ -120,15 +129,27 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("inbounds.Create: %v", err)
 	}
 
-	// 5. The three dependent Services.
+	// 5. The four dependent Services.
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
+	usersSvc := users.NewService(usersStore)
 
-	// 6. Subscription Service.
-	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
+	// 6. Subscription Service. The user-CRUD thin
+	//    wrappers on Service go through usersStore +
+	//    usersSvc.
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	// Propagate the fixed clock to the users service
+	// (the subscription service propagates to its
+	// own store + users.MemoryStore.SetClock but the
+	// users.Service is constructed above with the
+	// real clock; SetClock below is the canonical
+	// call to align both packages).
+	svc.SetClock(func() time.Time {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	})
 
-	user, _ := subStore.GetUserBySubToken(context.Background(), "tok-alice")
+	user, _ := svc.GetUserBySubToken(context.Background(), "tok-alice")
 	return &fixture{
 		sub:  svc,
 		sub2: subStore,
