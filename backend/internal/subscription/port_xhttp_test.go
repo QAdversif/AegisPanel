@@ -124,8 +124,7 @@ func newPortsFixture(t *testing.T) *portsFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
 	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &portsFixture{
@@ -392,8 +391,7 @@ func newXHTTPFixture(t *testing.T) *xhttpFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
 	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &xhttpFixture{
@@ -675,8 +673,7 @@ func newXHTTPFixtureWithoutTransport(t *testing.T) *xhttpFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
 	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &xhttpFixture{
@@ -754,8 +751,7 @@ func TestResolveDownload_MissingHostSkipped(t *testing.T) {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
 	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	eps, err := svc.ResolveEndpointsForUser(context.Background(), &User{

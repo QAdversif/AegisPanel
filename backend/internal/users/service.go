@@ -84,6 +84,18 @@ func (s *Service) SetClock(now func() time.Time) {
 	}
 }
 
+// Store returns the underlying Store. Intended for
+// tests that need direct in-memory mutation (e.g. to
+// pre-seed rows the public Service would reject, or
+// to bypass the IsValid() check on the Create path).
+// Production code does not need this; it would
+// suggest the caller is reaching past the Service
+// boundary for something the Service should expose as
+// a method.
+func (s *Service) Store() Store {
+	return s.store
+}
+
 // Get returns a single user by id. ErrNotFound
 // bubbles up from the store unchanged so the handler
 // can map it to 404.

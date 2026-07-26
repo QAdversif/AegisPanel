@@ -29,10 +29,11 @@ import (
 // The IDs are stable across tests so the assertions
 // read like a recipe.
 type fixture struct {
-	sub  *Service
-	sub2 *MemoryStore
-	host *hosts.Host
-	user *User
+	sub      *Service
+	sub2     *MemoryStore
+	host     *hosts.Host
+	user     *User
+	usersSvc *users.Service
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -135,49 +136,56 @@ func newFixture(t *testing.T) *fixture {
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
 	usersSvc := users.NewService(usersStore)
 
-	// 6. Subscription Service. The user-CRUD thin
-	//    wrappers on Service go through usersStore +
-	//    usersSvc.
-	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	// 6. Subscription Service. The Service is a pure
+	//    render orchestrator; user-CRUD goes through
+	//    usersSvc directly.
+	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
 	// Propagate the fixed clock to the users service
 	// (the subscription service propagates to its
-	// own store + users.MemoryStore.SetClock but the
-	// users.Service is constructed above with the
-	// real clock; SetClock below is the canonical
-	// call to align both packages).
+	// own store, but the users.Service is constructed
+	// above with the real clock; SetClock below is
+	// the canonical call to align both packages).
 	svc.SetClock(func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
+	usersSvc.SetClock(func() time.Time {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	})
 
-	user, _ := svc.GetUserBySubToken(context.Background(), "tok-alice")
+	user, _ := usersSvc.GetBySubToken(context.Background(), "tok-alice", true)
 	return &fixture{
-		sub:  svc,
-		sub2: subStore,
-		host: host,
-		user: user,
+		sub:      svc,
+		sub2:     subStore,
+		host:     host,
+		user:     user,
+		usersSvc: usersSvc,
 	}
 }
 
-func TestService_GetUserBySubToken(t *testing.T) {
+func TestService_LookupUserBySubToken(t *testing.T) {
+	// d-refactor.3: the subscription package no
+	// longer owns a GetUserBySubToken method. The
+	// render handler does the lookup directly via
+	// users.Service.GetBySubToken; the Service here
+	// is a pure resolver / renderer. The test
+	// exercises the lookup chain end-to-end through
+	// the handler fixture (see handler_test.go) and
+	// the users package's own service_test.go.
 	f := newFixture(t)
-	got, err := f.sub.GetUserBySubToken(context.Background(), "tok-alice")
+	got, err := f.usersSvc.GetBySubToken(context.Background(), "tok-alice", true)
 	if err != nil {
-		t.Fatalf("GetUserBySubToken: %v", err)
+		t.Fatalf("GetBySubToken: %v", err)
 	}
 	if got.Username != "alice" {
 		t.Errorf("username = %q, want alice", got.Username)
 	}
 
-	_, err = f.sub.GetUserBySubToken(context.Background(), "")
-	var verr *ValidationError
-	if !errors.As(err, &verr) {
-		t.Errorf("empty token: err = %v, want ValidationError", err)
+	if _, err := f.usersSvc.GetBySubToken(context.Background(), "", true); err == nil {
+		t.Error("empty token: err = nil, want users.ValidationError")
 	}
 
-	_, err = f.sub.GetUserBySubToken(context.Background(), "tok-nope")
-	var nferr *NotFoundError
-	if !errors.As(err, &nferr) {
-		t.Errorf("unknown token: err = %v, want NotFoundError", err)
+	if _, err := f.usersSvc.GetBySubToken(context.Background(), "tok-nope", true); err == nil {
+		t.Error("unknown token: err = nil, want users.ErrNotFound")
 	}
 }
 
