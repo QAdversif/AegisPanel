@@ -16,6 +16,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // varsFixture is the minimum data needed to test the
@@ -85,7 +86,10 @@ func newVarsFixture(t *testing.T) *varsFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(NewMemoryStore(), hostsSvc, nodesSvc, inboundsSvc)
+	subStore := NewMemoryStore()
+	usersStore := users.NewMemoryStore(nil)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
 	expire := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
 	u := &User{
 		ID:                userID,

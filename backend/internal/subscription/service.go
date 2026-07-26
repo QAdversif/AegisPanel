@@ -3,9 +3,10 @@
 // Service is the business-logic layer for the
 // subscription package. It owns:
 //
-//   - the user-lookup entry point (sub_token is the
-//     public-facing identifier; the operator hands it to
-//     the end user and they paste it into a VPN client);
+//   - the public /sub/{token} handler's user-lookup
+//     entry point: sub_token is the public-facing
+//     identifier; the operator hands it to the end
+//     user and they paste it into a VPN client;
 //   - the "which hosts should this user see" resolver
 //     that walks users.plan_id -> plan_pool -> host_pools
 //     -> host_pool_members and resolves each member back
@@ -30,13 +31,29 @@
 // Each "future" item is a method-local filter pass that
 // we add behind a test once the feature lands, so
 // existing call sites do not need to change.
+//
+// # d-refactor.2 split
+//
+// As of d-refactor.2 the user-CRUD surface has moved
+// to `internal/users` (the d.1 + d-refactor.1 work
+// aligned the wire format so the two Go types are
+// interchangeable via the `type User = users.User`
+// alias). The Service here keeps a small set of
+// thin-wrapper methods (GetUserBySubToken /
+// RotateSubToken / CreateUser / ListUsers) that
+// delegate to the users package and translate
+// `users.ErrNotFound` / `users.ErrDuplicate` /
+// `users.ValidationError` into the subscription
+// package's own sentinels, so the existing render
+// handler and admin handler do not have to learn a
+// parallel error space yet. d-refactor.3 will move
+// admin_handler.go to `users/admin_handler.go` and
+// drop the four wrappers from this Service.
 
 package subscription
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -47,6 +64,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // ResolvedEndpoint is the renderer's view of a single
@@ -81,28 +99,58 @@ type ResolvedDownload struct {
 	Port    int
 }
 
-// Service is the subscription business-logic layer.
+// Service is the subscription render-orchestration layer.
+// It owns the public /sub/{token} handler's logic:
+// given a sub_token, look up the user (via the users
+// package), resolve the user's hosts and endpoints, and
+// render the wire format (base64 / sing-box / Clash /
+// HTML).
+//
+// The Service also exposes four thin user-CRUD wrappers
+// (GetUserBySubToken / RotateSubToken / CreateUser /
+// ListUsers) so the existing render handler and admin
+// handler do not have to learn the users package's
+// types. d-refactor.3 will move admin_handler.go into
+// `internal/users` and drop these four wrappers; the
+// render handler's GetUserBySubToken usage will then
+// be replaced with a direct call to users.Service.
 type Service struct {
 	store    Store
+	users    users.Store
+	usersSvc *users.Service
 	hosts    *hosts.Service
 	nodes    *nodes.Service
 	inbounds *inbounds.Service
 	now      func() time.Time
 }
 
-// NewService wires a Service. The hosts, nodes, and
-// inbounds services are required: every ResolvedEndpoint
-// returned to a caller resolves its host, node, and
-// inbound through them, so a missing Service here would
-// surface as a nil-deref at the first render.
+// NewService wires a Service. Every dependency is
+// required:
+//
+//   - store: the subscription plan / pool Store (the
+//     render-side join table; the user CRUD store is
+//     NOT here anymore).
+//   - usersStore: the user-CRUD store the
+//     GetUserBySubToken thin wrapper consults.
+//   - usersSvc: the user-CRUD service the
+//     RotateSubToken / CreateUser / ListUsers thin
+//     wrappers consult.
+//   - hosts / nodes / inbounds: every ResolvedEndpoint
+//     returned to a caller resolves its host, node, and
+//     inbound through them, so a missing Service here
+//     would surface as a nil-deref at the first render.
 func NewService(
 	store Store,
+	usersStore users.Store,
+	usersSvc *users.Service,
 	hostsSvc *hosts.Service,
 	nodesSvc *nodes.Service,
 	inboundsSvc *inbounds.Service,
 ) *Service {
 	return &Service{
 		store:    store,
+		users:    usersStore,
+		usersSvc: usersSvc,
 		hosts:    hostsSvc,
 		nodes:    nodesSvc,
 		inbounds: inboundsSvc,
@@ -111,58 +159,66 @@ func NewService(
 }
 
 // SetClock swaps the time source. Intended for tests.
+// Propagates to the subscription Store (so plan / pool
+// fixtures use a fixed clock), the users MemoryStore
+// (so the user-CRUD fixtures use the same fixed clock),
+// and the users Service (so future Service-level tests
+// of the user-CRUD-during-render path have a consistent
+// clock).
 func (s *Service) SetClock(now func() time.Time) {
 	s.now = now
 	if ms, ok := s.store.(*MemoryStore); ok {
 		ms.SetClock(now)
 	}
+	if s.users != nil {
+		if ms, ok := s.users.(*users.MemoryStore); ok {
+			ms.SetClock(now)
+		}
+	}
+	if s.usersSvc != nil {
+		s.usersSvc.SetClock(now)
+	}
 }
 
-// GetUserBySubToken is a passthrough to the Store with a
-// friendly error. The token is what the operator hands
-// to the end user.
+// --- user-CRUD thin wrappers ------------------------------------------
 //
-// The lookup chain is:
+// The four methods below delegate to the users package.
+// The mapping in each method:
 //
-//  1. Try the primary sub_token (the current token).
-//  2. On miss, try the sub_token_prev (the token from
-//     the previous rotation, valid during the 24h
-//     grace window). The Store returns the user; the
-//     Service then checks `SubTokenPrevExpiresAt` and
-//     returns ErrNotFound if the grace has elapsed.
-//  3. On either miss, return NotFoundError.
+//   - `users.ErrNotFound` -> `*NotFoundError` (the
+//     subscription-side error type the handlers expect)
+//   - `users.ErrDuplicate` -> `ErrDuplicate`
+//   - `users.ValidationError` (and the wrapped form) ->
+//     `*ValidationError` (with the same Field / Message
+//     shape, since the users validator produces the same
+//     structure)
 //
-// Both steps use the same error mapping so the handler
-// returns 404 in both cases — the caller cannot tell
-// whether the user exists but the token is wrong, or
-// the user simply does not exist.
+// The wrappers keep the existing render and admin
+// handler code working with no error-space changes;
+// d-refactor.3 will remove them.
+
+// GetUserBySubToken looks up a user by sub_token. The
+// lookup chain is "primary sub_token, then
+// sub_token_prev within its grace window" — the
+// underlying users.MemoryStore handles both in one
+// call (usePrev=true). The Service is a thin wrapper
+// that maps the users package's ErrNotFound into the
+// subscription-side *NotFoundError so the existing
+// render handler does not have to learn a new error
+// space yet.
 func (s *Service) GetUserBySubToken(ctx context.Context, token string) (out *User, err error) {
 	if token == "" {
 		return nil, &ValidationError{Field: "sub_token", Message: "must not be empty"}
 	}
-	u, err := s.store.GetUserBySubToken(ctx, token)
-	if err == nil {
-		return u, nil
+	if s.users == nil {
+		return nil, &ValidationError{Field: "users", Message: "users store is not wired"}
 	}
-	if !errors.Is(err, ErrNotFound) {
-		return nil, fmt.Errorf("get user by sub_token: %w", err)
-	}
-	// Step 2: try the prev-token.
-	u, err = s.store.GetUserByPrevSubToken(ctx, token)
+	u, err := s.users.GetBySubToken(ctx, token, true)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, users.ErrNotFound) {
 			return nil, &NotFoundError{What: "user", Key: "sub_token"}
 		}
-		return nil, fmt.Errorf("get user by sub_token_prev: %w", err)
-	}
-	// The prev-token lookup found a user; check the
-	// grace window. A nil ExpiresAt means "no grace
-	// was set" (the rotation is immediate) — in that
-	// case the prev token is invalid even if the row
-	// is present. A set ExpiresAt must be in the
-	// future.
-	if u.SubTokenPrevExpiresAt == nil || !u.SubTokenPrevExpiresAt.After(s.now()) {
-		return nil, &NotFoundError{What: "user", Key: "sub_token"}
+		return nil, fmt.Errorf("get user by sub_token: %w", err)
 	}
 	return u, nil
 }
@@ -172,143 +228,74 @@ func (s *Service) GetUserBySubToken(ctx context.Context, token string) (out *Use
 // without an explicit grace. 24h matches the 3X-UI
 // convention: the end user has 24h to re-import the
 // new URL on every device before the old one stops
-// working.
+// working. The users Service applies this constant
+// when grace is non-positive (see
+// `users.Service.RotateSubToken`).
 const DefaultSubTokenRotationGrace = 24 * time.Hour
 
-// RotateSubToken generates a new random token for
-// `userID`, marks the current token as the previous
-// one with the supplied grace window, and bumps
-// `SubTokenRotatedAt`. The grace is honoured by the
-// `GetUserBySubToken` lookup chain (above): the
-// previous token keeps resolving to the user for
-// that window, then 404s.
-//
-// The new token is a 32-char hex string (16 bytes of
-// entropy) — long enough to be unguessable, short
-// enough to be readable in the admin UI.
+// RotateSubToken generates a fresh sub_token for the
+// user, parks the current one as `sub_token_prev`
+// with a grace window, and bumps `SubTokenRotatedAt`.
+// The grace is honoured by the GetUserBySubToken
+// lookup chain. The Service is a thin wrapper over
+// `users.Service.RotateSubToken`; the only translation
+// is `users.ValidationError` → `*ValidationError` so
+// the admin handler can keep using the existing
+// `writeUserError` shape.
 func (s *Service) RotateSubToken(ctx context.Context, userID uuid.UUID, grace time.Duration) (out *User, err error) {
-	// Pull the current user. The store is the source
-	// of truth for the current sub_token; we read it
-	// to surface a 404 if the user does not exist
-	// (the Store.UpdateSubToken would do the same
-	// lookup, but reading here gives us a friendlier
-	// error path).
-	_, err = s.store.GetUserByID(ctx, userID)
+	if s.usersSvc == nil {
+		return nil, &ValidationError{Field: "users", Message: "users service is not wired"}
+	}
+	u, err := s.usersSvc.RotateSubToken(ctx, userID, grace)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, users.ErrNotFound) {
 			return nil, &NotFoundError{What: "user", Key: "id"}
 		}
-		return nil, fmt.Errorf("rotate sub_token: get user: %w", err)
+		var verr *users.ValidationError
+		if errors.As(err, &verr) {
+			return nil, &ValidationError{Field: verr.Field, Message: verr.Message}
+		}
+		return nil, fmt.Errorf("rotate sub_token: %w", err)
 	}
-	// Generate a fresh 32-char hex token.
-	newToken, err := newRandomSubToken()
-	if err != nil {
-		return nil, fmt.Errorf("rotate sub_token: generate token: %w", err)
-	}
-	// Apply grace if the caller asked for it. A
-	// zero grace means "rotate immediately" — the
-	// prev token is invalidated by setting
-	// `SubTokenPrevExpiresAt` to a zero time in the
-	// past; the Service.GetUserBySubToken check
-	// (`!ExpiresAt.After(now)`) catches that.
-	var prevExpiresAt *time.Time
-	if grace > 0 {
-		t := s.now().Add(grace).UTC()
-		prevExpiresAt = &t
-	}
-	if err := s.store.UpdateSubToken(ctx, userID, newToken, prevExpiresAt); err != nil {
-		return nil, fmt.Errorf("rotate sub_token: store update: %w", err)
-	}
-	// Read back the canonical user (the in-memory
-	// index is now stale; the Store.UpdateSubToken
-	// mutates in place but the in-memory copy the
-	// caller might be holding is the pre-rotation
-	// snapshot). For MemoryStore the same pointer is
-	// the source of truth, so the read-back returns
-	// the post-rotation view.
-	return s.store.GetUserByID(ctx, userID)
+	return u, nil
 }
 
-// newRandomSubToken returns a fresh 32-char hex
-// string. 16 bytes of entropy is enough to make a
-// rotated token unguessable even if the old one
-// leaked. The Service keeps the generator local
-// (rather than exporting it) because the format is
-// an implementation detail: future PRs may switch
-// to base32 or add a checksum suffix.
-func newRandomSubToken() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
-}
-
-// CreateUserInput is the admin-facing shape for
-// creating a user. The Service generates the
-// `sub_token` (32 hex chars) — the caller never
-// supplies one.
-type CreateUserInput struct {
-	Username          string
-	Status            UserStatus
-	PlanID            *uuid.UUID
-	ExpireAt          *time.Time
-	TrafficLimitBytes int64
-	DeviceLimit       int
-	HostsAllowlist    []uuid.UUID
-	HostsBlocklist    []uuid.UUID
-}
-
-// CreateUser validates the input, generates a fresh
-// sub_token, and inserts the row. The Service does
-// NOT set Username uniqueness here — the Store's
-// unique-index check is the source of truth.
+// CreateUser is the thin wrapper over users.Service.Create.
+// The CreateUserInput is the alias for users.CreateInput
+// (see subscription/subscription.go) so the admin
+// handler can keep using the `subscription.CreateUserInput`
+// spelling until d-refactor.3 moves it to users.
 func (s *Service) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
-	if in.Username == "" {
-		return nil, &ValidationError{Field: "username", Message: "must not be empty"}
+	if s.usersSvc == nil {
+		return nil, &ValidationError{Field: "users", Message: "users service is not wired"}
 	}
-	if len(in.Username) > 64 {
-		return nil, &ValidationError{Field: "username", Message: "must be 64 chars or fewer"}
-	}
-	status := in.Status
-	if status == "" {
-		status = UserStatusActive
-	}
-	deviceLimit := in.DeviceLimit
-	if deviceLimit < 0 {
-		deviceLimit = 0
-	}
-	if deviceLimit > 64 {
-		deviceLimit = 64
-	}
-	tok, err := newRandomSubToken()
+	u, err := s.usersSvc.Create(ctx, in)
 	if err != nil {
-		return nil, fmt.Errorf("create user: generate token: %w", err)
-	}
-	u := &User{
-		Username:              in.Username,
-		Status:                status,
-		PlanID:                in.PlanID,
-		ExpireAt:              in.ExpireAt,
-		TrafficLimitBytes:     in.TrafficLimitBytes,
-		DeviceLimit:           deviceLimit,
-		HostsAllowlist:        in.HostsAllowlist,
-		HostsBlocklist:        in.HostsBlocklist,
-		SubToken:              tok,
-		SubTokenPrev:          "",
-		SubTokenPrevExpiresAt: nil,
-	}
-	if err := s.store.CreateUser(ctx, u); err != nil {
-		return nil, err
+		if errors.Is(err, users.ErrDuplicate) {
+			return nil, fmt.Errorf("%w: %w", ErrDuplicate, err)
+		}
+		var verr *users.ValidationError
+		if errors.As(err, &verr) {
+			return nil, &ValidationError{Field: verr.Field, Message: verr.Message}
+		}
+		return nil, fmt.Errorf("create user: %w", err)
 	}
 	return u, nil
 }
 
 // ListUsers returns every user in the system,
-// sorted by created_at ascending.
+// sorted by created_at ascending. Thin wrapper over
+// `users.Store.List` — the Service does not own the
+// user-CRUD side. The admin handler calls this
+// directly; the render handler does not.
 func (s *Service) ListUsers(ctx context.Context) ([]*User, error) {
-	return s.store.ListUsers(ctx)
+	if s.users == nil {
+		return nil, &ValidationError{Field: "users", Message: "users store is not wired"}
+	}
+	return s.users.List(ctx)
 }
+
+// --- render-side resolvers (unchanged) -------------------------------
 
 // ResolveHostsForUser returns every host the user is
 // entitled to see, deduplicated and sorted by host

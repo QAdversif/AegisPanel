@@ -18,6 +18,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // handlerFixture is the same as newFixture from
@@ -113,9 +114,12 @@ func TestHandler_Render_NotLive(t *testing.T) {
 		t.Fatalf("get user: %v", err)
 	}
 	user.Status = UserStatusExpired
-	// The store has the live copy; mutate it so the
-	// next GetUserBySubToken returns the expired one.
-	if ms, ok := hf.svc.store.(*MemoryStore); ok {
+	// The user-CRUD store has the live copy; mutate
+	// it so the next GetUserBySubToken returns the
+	// expired one. After d-refactor.2 the user-CRUD
+	// store is `users.MemoryStore` (not
+	// `subscription.MemoryStore`).
+	if ms, ok := hf.svc.users.(*users.MemoryStore); ok {
 		ms.WithUser(user)
 	}
 	w := hf.do(t, http.MethodGet, "/sub/tok-alice")
@@ -281,7 +285,7 @@ func TestHandler_Render_HTML_HostCount(t *testing.T) {
 // "no hosts" branch.
 func TestHandler_Render_HTML_NoHosts(t *testing.T) {
 	hf := newHandlerFixture(t)
-	if ms, ok := hf.svc.store.(*MemoryStore); ok {
+	if ms, ok := hf.svc.users.(*users.MemoryStore); ok {
 		ms.WithUser(&User{
 			ID:       uuid.New(),
 			Username: "ghost",
@@ -289,7 +293,7 @@ func TestHandler_Render_HTML_NoHosts(t *testing.T) {
 			SubToken: "tok-ghost",
 		})
 	} else {
-		t.Skipf("subscription store is not a MemoryStore; cannot add a no-plan user from the test")
+		t.Skipf("users store is not a MemoryStore; cannot add a no-plan user from the test")
 	}
 	w := hf.do(t, http.MethodGet, "/sub/tok-ghost?target=html")
 	if w.Code != http.StatusOK {

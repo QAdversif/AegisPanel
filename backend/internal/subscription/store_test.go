@@ -17,10 +17,18 @@ func fakeClock() time.Time {
 }
 
 // newSeededStore returns a MemoryStore with a single
-// plan, a single pool, two pool members, and two
-// users — one attached to the plan, one not. The IDs
+// plan, a single pool, and two pool members. The IDs
 // are stable across calls so tests can reference them
 // without re-reading the store.
+//
+// As of d-refactor.2 the MemoryStore does not own
+// user-CRUD rows (those live in `users.MemoryStore`).
+// The pool-list tests construct a `*User` literal at
+// the call site rather than seeding it through the
+// store, which is how the production code path
+// (Service.ResolveHostsForUser) is shaped too: a
+// Service pulls the user from the users package and
+// passes it to ListPoolsForUser.
 func newSeededStore(t *testing.T) *MemoryStore {
 	t.Helper()
 	s := NewMemoryStore()
@@ -54,73 +62,39 @@ func newSeededStore(t *testing.T) *MemoryStore {
 		Weight: 2,
 	})
 
-	// User "alice" is on the plan, alive.
-	planRef := planID
-	s.WithUser(&User{
+	return s
+}
+
+// userWithPlan constructs a `*User` literal with a
+// non-nil plan_id. As of d-refactor.2 the user-CRUD
+// is owned by the users package; the test fixtures
+// here do not need a full Store round-trip — a
+// literal is enough to drive the
+// ListPoolsForUser / ListPoolsAll code paths.
+func userWithPlan(planID uuid.UUID) *User {
+	return &User{
 		ID:       uuid.MustParse("00000000-0000-0000-0000-0000000000d1"),
 		Username: "alice",
 		Status:   UserStatusActive,
-		PlanID:   &planRef,
+		PlanID:   &planID,
 		SubToken: "tok-alice",
-	})
+	}
+}
 
-	// User "bob" is on no plan at all.
-	s.WithUser(&User{
+func userWithoutPlan() *User {
+	return &User{
 		ID:       uuid.MustParse("00000000-0000-0000-0000-0000000000d2"),
 		Username: "bob",
 		Status:   UserStatusActive,
 		SubToken: "tok-bob",
-	})
-
-	// User "carol" is on the plan but expired.
-	s.WithUser(&User{
-		ID:       uuid.MustParse("00000000-0000-0000-0000-0000000000d3"),
-		Username: "carol",
-		Status:   UserStatusExpired,
-		PlanID:   &planRef,
-		SubToken: "tok-carol",
-	})
-
-	return s
-}
-
-func TestMemoryStore_GetUserBySubToken(t *testing.T) {
-	s := newSeededStore(t)
-
-	got, err := s.GetUserBySubToken(context.Background(), "tok-alice")
-	if err != nil {
-		t.Fatalf("GetUserBySubToken: %v", err)
-	}
-	if got.Username != "alice" {
-		t.Errorf("username = %q, want %q", got.Username, "alice")
-	}
-
-	if _, err := s.GetUserBySubToken(context.Background(), "tok-nope"); err == nil {
-		t.Fatal("expected ErrNotFound for unknown token")
-	}
-}
-
-func TestMemoryStore_GetUserByID(t *testing.T) {
-	s := newSeededStore(t)
-	id := uuid.MustParse("00000000-0000-0000-0000-0000000000d1")
-
-	got, err := s.GetUserByID(context.Background(), id)
-	if err != nil {
-		t.Fatalf("GetUserByID: %v", err)
-	}
-	if got.ID != id {
-		t.Errorf("id = %s, want %s", got.ID, id)
-	}
-
-	if _, err := s.GetUserByID(context.Background(), uuid.New()); err == nil {
-		t.Fatal("expected ErrNotFound for unknown id")
 	}
 }
 
 func TestMemoryStore_ListPoolsForUser(t *testing.T) {
 	s := newSeededStore(t)
-	alice, _ := s.GetUserBySubToken(context.Background(), "tok-alice")
-	bob, _ := s.GetUserBySubToken(context.Background(), "tok-bob")
+	planID := uuid.MustParse("00000000-0000-0000-0000-0000000000a1")
+	alice := userWithPlan(planID)
+	bob := userWithoutPlan()
 
 	got, err := s.ListPoolsForUser(context.Background(), alice)
 	if err != nil {

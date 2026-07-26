@@ -59,6 +59,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/router"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 func main() {
@@ -261,21 +262,45 @@ func main() {
 	}
 	hostsSvc := hosts.NewService(hostsStore, nodesSvc, inboundsSvc)
 
-	// 8. Subscription service. The Phase 0 package
-	//    ships a MemoryStore and a base64 renderer; the
-	//    HTTP handler lands with the next PR. The
-	//    service is constructed here so the boot path
-	//    validates the wiring (e.g. the cross-service
-	//    pointer dance does not nil-deref) and the
-	//    subsequent PRs can call into it without a
-	//    main.go change.
+	// 8. Users service + store. As of d-refactor.2
+	//    the user-CRUD surface (the d.1 work) is
+	//    constructed independently of the
+	//    subscription package; the subscription
+	//    Service takes a *users.Service +
+	//    users.Store reference for the four
+	//    user-CRUD thin wrappers it still exposes
+	//    (d-refactor.3 drops them).
+	//
+	//    Backend is selected at startup:
+	//      AEGIS_USERS_BACKEND=memory (default) uses
+	//      the Phase 0 MemoryStore; =pg uses PgStore
+	//      backed by the shared pool and the `users`
+	//      table (migrations 0001 + 0011).
+	var usersStore users.Store
+	switch cfg.UsersBackend {
+	case "pg":
+		usersStore = users.NewPgStore(pool)
+		log.Info().Msg("users: using pgx-backed store (PgStore)")
+	default:
+		usersStore = users.NewMemoryStore(nil)
+		log.Info().Msg("users: using in-memory store (MemoryStore, dev only)")
+	}
+	usersSvc := users.NewService(usersStore)
+
+	// 9. Subscription service. After d-refactor.2 the
+	//    subscription package only owns the plan /
+	//    pool / member join tables and the render
+	//    orchestrator (Service.ResolveHostsForUser /
+	//    ResolveEndpointsForUser / Render*). The
+	//    user-CRUD surface is delegated to the users
+	//    package via the thin wrappers on Service.
 	//
 	//    Backend is selected at startup:
 	//      AEGIS_SUBSCRIPTION_BACKEND=memory (default) uses
 	//      the Phase 0 MemoryStore; =pg uses PgStore backed
-	//      by the shared pool and the `users`, `plans`,
+	//      by the shared pool and the `plans`,
 	//      `plan_pool`, `host_pools`, `host_pool_members`
-	//      tables (migrations 0001 + 0011).
+	//      tables (migrations 0001).
 	var subscriptionStore subscription.Store
 	switch cfg.SubscriptionBackend {
 	case "pg":
@@ -285,7 +310,7 @@ func main() {
 		subscriptionStore = subscription.NewMemoryStore()
 		log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 	}
-	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
+	subscriptionSvc := subscription.NewService(subscriptionStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
 
 	// Panel-wide config (the rotating URL prefix).
 	// Backend is selected at startup:
@@ -717,15 +742,15 @@ func runAdminPasswd(ctx context.Context, svc *auth.Service, args []string) {
 // this is a maintenance command, not a daily-driver
 // UI.
 func runAdminList(ctx context.Context, svc *auth.Service) {
-	users, err := svc.ListUsers(ctx)
+	rows, err := svc.ListUsers(ctx)
 	if err != nil {
 		log.Fatal().Err(err).Msg("admin list: failed")
 	}
-	if len(users) == 0 {
+	if len(rows) == 0 {
 		log.Info().Msg("admin list: no users")
 		return
 	}
-	for _, u := range users {
+	for _, u := range rows {
 		log.Info().
 			Str("id", u.ID).
 			Str("username", u.Username).

@@ -15,6 +15,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // withFixedRand swaps the package-level per-fetch
@@ -58,6 +59,7 @@ func newPortsFixture(t *testing.T) *portsFixture {
 	t.Helper()
 	subStore := NewMemoryStore()
 	subStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	hostsStore := hosts.NewMemoryStore()
 	hostsStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	nodesStore := nodes.NewMemoryStore()
@@ -77,7 +79,7 @@ func newPortsFixture(t *testing.T) *portsFixture {
 	subStore.WithPool(&Pool{ID: poolID, Name: "eu", Strategy: PoolStrategyAll})
 	subStore.WithPoolMember(PoolMember{PoolID: poolID, HostID: hostID, Weight: 1})
 	planRef := planID
-	subStore.WithUser(&User{
+	usersStore.WithUser(&User{
 		ID: userID, Username: "alice", Status: UserStatusActive,
 		PlanID: &planRef, SubToken: "tok-alice",
 	})
@@ -122,7 +124,9 @@ func newPortsFixture(t *testing.T) *portsFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &portsFixture{
 		svc:        svc,
@@ -283,6 +287,7 @@ func newXHTTPFixture(t *testing.T) *xhttpFixture {
 	t.Helper()
 	subStore := NewMemoryStore()
 	subStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	hostsStore := hosts.NewMemoryStore()
 	hostsStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	nodesStore := nodes.NewMemoryStore()
@@ -306,7 +311,7 @@ func newXHTTPFixture(t *testing.T) *xhttpFixture {
 	subStore.WithPool(&Pool{ID: poolID, Name: "eu", Strategy: PoolStrategyAll})
 	subStore.WithPoolMember(PoolMember{PoolID: poolID, HostID: mainHostID, Weight: 1})
 	planRef := planID
-	subStore.WithUser(&User{
+	usersStore.WithUser(&User{
 		ID: userID, Username: "alice", Status: UserStatusActive,
 		PlanID: &planRef, SubToken: "tok-alice",
 	})
@@ -387,7 +392,9 @@ func newXHTTPFixture(t *testing.T) *xhttpFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &xhttpFixture{
 		svc:        svc,
@@ -563,6 +570,7 @@ func newXHTTPFixtureWithoutTransport(t *testing.T) *xhttpFixture {
 	t.Helper()
 	subStore := NewMemoryStore()
 	subStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	hostsStore := hosts.NewMemoryStore()
 	hostsStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	nodesStore := nodes.NewMemoryStore()
@@ -586,7 +594,7 @@ func newXHTTPFixtureWithoutTransport(t *testing.T) *xhttpFixture {
 	subStore.WithPool(&Pool{ID: poolID, Name: "eu", Strategy: PoolStrategyAll})
 	subStore.WithPoolMember(PoolMember{PoolID: poolID, HostID: mainHostID, Weight: 1})
 	planRef := planID
-	subStore.WithUser(&User{
+	usersStore.WithUser(&User{
 		ID: userID, Username: "alice", Status: UserStatusActive,
 		PlanID: &planRef, SubToken: "tok-alice",
 	})
@@ -667,7 +675,9 @@ func newXHTTPFixtureWithoutTransport(t *testing.T) *xhttpFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	_ = poolID
 	return &xhttpFixture{
 		svc:        svc,
@@ -692,6 +702,7 @@ func newXHTTPFixtureWithoutTransport(t *testing.T) *xhttpFixture {
 func TestResolveDownload_MissingHostSkipped(t *testing.T) {
 	subStore := NewMemoryStore()
 	subStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	hostsStore := hosts.NewMemoryStore()
 	hostsStore.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	nodesStore := nodes.NewMemoryStore()
@@ -712,7 +723,7 @@ func TestResolveDownload_MissingHostSkipped(t *testing.T) {
 	subStore.WithPool(&Pool{ID: poolID, Name: "eu", Strategy: PoolStrategyAll})
 	subStore.WithPoolMember(PoolMember{PoolID: poolID, HostID: hostID, Weight: 1})
 	planRef := planID
-	subStore.WithUser(&User{
+	usersStore.WithUser(&User{
 		ID: userID, Username: "alice", Status: UserStatusActive,
 		PlanID: &planRef, SubToken: "tok-alice",
 	})
@@ -743,7 +754,9 @@ func TestResolveDownload_MissingHostSkipped(t *testing.T) {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(subStore, hostsSvc, nodesSvc, inboundsSvc)
+	usersSvc := users.NewService(usersStore)
+	svc := NewService(subStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 
 	eps, err := svc.ResolveEndpointsForUser(context.Background(), &User{
 		ID: userID, Username: "alice", Status: UserStatusActive,

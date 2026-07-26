@@ -72,6 +72,46 @@ func (s *MemoryStore) SetClock(now func() time.Time) {
 	s.now = now
 }
 
+// WithUser copies `u` into the store and indexes it
+// by id, by username, and by sub_token (plus the
+// prev-token when set). The Create-time validation
+// (IsValid) is bypassed for tests that need to seed
+// half-built rows (e.g. a user with an invalid
+// status, used by the "not live" test paths).
+//
+// Auto-fills CreatedAt / UpdatedAt from the
+// store's clock when they are zero. Returns the
+// same store so calls can chain:
+//
+//	store.WithUser(u1).WithUser(u2).WithUser(u3)
+//
+// This mirrors the d.0 subscription.MemoryStore.WithUser
+// pattern that the v0.4.0-d consolidation dropped —
+// the users.MemoryStore now owns the equivalent.
+func (s *MemoryStore) WithUser(u *User) *MemoryStore {
+	if u == nil {
+		return s
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *u
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = s.now().UTC()
+	}
+	if cp.UpdatedAt.IsZero() {
+		cp.UpdatedAt = cp.CreatedAt
+	}
+	s.byID[cp.ID] = &cp
+	s.byUser[cp.Username] = &cp
+	if cp.SubToken != "" {
+		s.byToken[cp.SubToken] = &cp
+	}
+	if cp.SubTokenPrev != "" {
+		s.byPrevToken[cp.SubTokenPrev] = &cp
+	}
+	return s
+}
+
 // Create inserts a new user. Returns ErrDuplicate
 // if Username or SubToken is already in use.
 func (s *MemoryStore) Create(ctx context.Context, u *User) error {

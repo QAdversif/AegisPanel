@@ -111,6 +111,25 @@ func (s Status) IsValid() bool {
 	return false
 }
 
+// IsLive reports whether the user is allowed to
+// fetch a subscription in this state. `active` and
+// `grace` are live; the rest are not. The
+// subscription package's ResolveHostsForUser uses
+// this as the first filter pass: a user that is not
+// live is rejected before any plan / pool lookup.
+//
+// The method lives on the users package's Status
+// because the user state machine is a user-domain
+// concern; the subscription package consumes it
+// through the type alias `UserStatus = users.Status`
+// and never redefines the rule. The 3X-UI / X-UI
+// convention is "active | grace are live; expired |
+// disabled | deleted are not", which is what this
+// returns.
+func (s Status) IsLive() bool {
+	return s == StatusActive || s == StatusGrace
+}
+
 // User is the panel-side view of a single end-user
 // account. The fields mirror the `users` table
 // one-to-one; the JSON tags match the wire format
