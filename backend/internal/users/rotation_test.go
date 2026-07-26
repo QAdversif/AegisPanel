@@ -19,13 +19,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// DefaultSubTokenRotationGrace is the grace window
-// the API boundary applies when RotateSubToken is
-// called without an explicit grace. 24h matches the
-// 3X-UI convention. The users.Service.RotateSubToken
-// maps grace <= 0 to this constant.
-const DefaultSubTokenRotationGrace = 24 * time.Hour
-
 // TestRotateSubToken_GeneratesNewToken — Rotate
 // produces a fresh token, marks the old one as
 // prev with a 24h grace, and bumps
