@@ -25,6 +25,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // Build returns the v1 http.Handler for Aegis. The auth subrouter is
@@ -39,6 +40,7 @@ func Build(
 	hostsSvc *hosts.Service,
 	inboundsSvc *inbounds.Service,
 	subscriptionSvc *subscription.Service,
+	usersSvc *users.Service,
 	panelCfgSvc *panelcfg.Service,
 	auditsSvc *audits.Service,
 	bootstrapSvc *bootstrap.Service,
@@ -108,12 +110,10 @@ func Build(
 		r.Mount("/hosts", hosts.Router(hostsSvc, authSvc.Middleware()))
 
 		// Users CRUD — admin surface. List / get / create /
-		// patch / rotate-token. The /api/v1/users/{id}/sub
-		// sub-token endpoint (the public, per-user
-		// subscription URL) is mounted separately above
-		// under the subscription Router; that path is
-		// unauthenticated by design.
-		r.Mount("/users", subscription.AdminRouter(subscriptionSvc, authSvc.Middleware()))
+		// patch / rotate-token. The user-CRUD surface
+		// lives in the users package (d-refactor.3);
+		// the mount takes the *users.Service directly.
+		r.Mount("/users", users.AdminRouter(usersSvc, authSvc.Middleware()))
 
 		// Subscription URL — the public endpoint that
 		// turns a sub_token into a base64 / sing-box /
@@ -124,8 +124,10 @@ func Build(
 		// with the rotated mount at the top level
 		// (added below) so the panel always serves
 		// subscriptions, even when the operator has
-		// not yet rotated the sub_path.
-		r.Mount("/sub", subscription.RouterWithLimiter(subscriptionSvc, subLimiter))
+		// not yet rotated the sub_path. The render
+		// handler consults usersSvc for the
+		// sub_token-→-user lookup (d-refactor.3).
+		r.Mount("/sub", subscription.RouterWithLimiter(subscriptionSvc, usersSvc, subLimiter))
 
 		// Panel-wide config (the rotating sub_path).
 		// Admin-only. GET the active row, POST
@@ -171,7 +173,7 @@ func Build(
 	// which is wrong; the router skips the mount
 	// when the path is empty).
 	if active, err := panelCfgSvc.GetActive(context.Background()); err == nil && active.SubPath != "" {
-		r.Mount("/"+active.SubPath+"/sub", subscription.RouterWithLimiter(subscriptionSvc, subLimiter))
+		r.Mount("/"+active.SubPath+"/sub", subscription.RouterWithLimiter(subscriptionSvc, usersSvc, subLimiter))
 	} else if err != nil {
 		log.Warn().Err(err).Msg("router: panelcfg read failed; rotated sub_path mount skipped")
 	}

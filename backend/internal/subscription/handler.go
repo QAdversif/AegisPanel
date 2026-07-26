@@ -60,21 +60,31 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
+	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // Handler is the HTTP entry point. It wraps a Service
-// and exposes a chi subrouter via Router().
+// and a *users.Service (for the sub_token lookup the
+// render handler does) and exposes a chi subrouter via
+// Router().
 type Handler struct {
 	svc     *Service
+	users   *users.Service
 	limiter *ratelimit.Limiter
 }
 
-// NewHandler wires a Handler around the given service.
-// A nil limiter is safe - Allow() on a nil receiver
-// always returns (true, 0), so the subscription
-// endpoint behaves as if rate limiting were disabled.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc, limiter: nil}
+// NewHandler wires a Handler around the given service
+// + users service. A nil limiter is safe - Allow() on
+// a nil receiver always returns (true, 0), so the
+// subscription endpoint behaves as if rate limiting
+// were disabled.
+//
+// As of d-refactor.3 the users service is a required
+// dependency (the d-refactor.2 thin wrappers on
+// Service.GetUserBySubToken are gone; the handler
+// consults users.Service.GetBySubToken directly).
+func NewHandler(svc *Service, usersSvc *users.Service) *Handler {
+	return &Handler{svc: svc, users: usersSvc, limiter: nil}
 }
 
 // WithLimiter attaches a rate limiter. The same
@@ -100,16 +110,16 @@ func (h *Handler) WithLimiter(l *ratelimit.Limiter) *Handler {
 // passing a real *ratelimit.Limiter enables per-
 // sub_token throttling with a 429 + Retry-After
 // response on the over-budget path.
-func Router(svc *Service) http.Handler {
-	return RouterWithLimiter(svc, nil)
+func Router(svc *Service, usersSvc *users.Service) http.Handler {
+	return RouterWithLimiter(svc, usersSvc, nil)
 }
 
 // RouterWithLimiter is the explicit "rate limiting
 // enabled" form. Same signature shape as Router; the
 // caller passes a real *ratelimit.Limiter to enable
 // throttling.
-func RouterWithLimiter(svc *Service, l *ratelimit.Limiter) http.Handler {
-	h := NewHandler(svc).WithLimiter(l)
+func RouterWithLimiter(svc *Service, usersSvc *users.Service, l *ratelimit.Limiter) http.Handler {
+	h := NewHandler(svc, usersSvc).WithLimiter(l)
 	r := chi.NewRouter()
 	r.Get("/{token}", h.handleRender)
 	return r
@@ -155,7 +165,7 @@ func (h *Handler) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	user, err := h.svc.GetUserBySubToken(ctx, token)
+	user, err := h.lookupUserBySubToken(ctx, token)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -445,8 +455,45 @@ func buildUserInfoHeader(user *User) string {
 
 // --- error mapping --------------------------------------------------
 
+// lookupUserBySubToken is the render handler's
+// sub_token-→-user resolver. It is a thin wrapper
+// around `users.Service.GetBySubToken(ctx, token,
+// usePrev=true)` that translates the users package's
+// `ErrNotFound` into the subscription-side
+// `*NotFoundError` so the existing writeServiceError
+// 404 mapping keeps working without learning a new
+// error space. The handler is the only call site;
+// the d.0 thin wrapper on Service.GetUserBySubToken
+// is gone (d-refactor.3).
+func (h *Handler) lookupUserBySubToken(ctx context.Context, token string) (*User, error) {
+	if token == "" {
+		return nil, &ValidationError{Field: "sub_token", Message: "must not be empty"}
+	}
+	if h.users == nil {
+		return nil, &ValidationError{Field: "users", Message: "users service is not wired"}
+	}
+	u, err := h.users.GetBySubToken(ctx, token, true)
+	if err != nil {
+		if errors.Is(err, users.ErrNotFound) {
+			return nil, &NotFoundError{What: "user", Key: "sub_token"}
+		}
+		var verr *users.ValidationError
+		if errors.As(err, &verr) {
+			return nil, &ValidationError{Field: verr.Field, Message: verr.Message}
+		}
+		return nil, fmt.Errorf("get user by sub_token: %w", err)
+	}
+	return u, nil
+}
+
 // writeServiceError maps a Service / Store error to an
-// HTTP status.
+// HTTP status. The subscription-side sentinels are
+// the primary surface; the users package's ErrNotFound
+// is also handled because the render handler's
+// lookupUserBySubToken maps it to a subscription
+// NotFoundError — the mapping is upstream of this
+// function, but the sentinel is also here as a
+// defensive check in case a future caller forgets.
 func writeServiceError(w http.ResponseWriter, err error) {
 	var verr *ValidationError
 	var nferr *NotFoundError
@@ -454,6 +501,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &nferr):
 		http.Error(w, nferr.Error(), http.StatusNotFound)
+	case errors.Is(err, users.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.As(err, &nlerr):
 		http.Error(w, nlerr.Error(), http.StatusForbidden)
 	case errors.As(err, &verr):

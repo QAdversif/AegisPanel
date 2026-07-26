@@ -32,23 +32,20 @@
 // we add behind a test once the feature lands, so
 // existing call sites do not need to change.
 //
-// # d-refactor.2 split
+// # d-refactor.3 split
 //
-// As of d-refactor.2 the user-CRUD surface has moved
-// to `internal/users` (the d.1 + d-refactor.1 work
-// aligned the wire format so the two Go types are
-// interchangeable via the `type User = users.User`
-// alias). The Service here keeps a small set of
-// thin-wrapper methods (GetUserBySubToken /
-// RotateSubToken / CreateUser / ListUsers) that
-// delegate to the users package and translate
-// `users.ErrNotFound` / `users.ErrDuplicate` /
-// `users.ValidationError` into the subscription
-// package's own sentinels, so the existing render
-// handler and admin handler do not have to learn a
-// parallel error space yet. d-refactor.3 will move
-// admin_handler.go to `users/admin_handler.go` and
-// drop the four wrappers from this Service.
+// As of d-refactor.3 the user-CRUD surface has fully
+// moved to `internal/users` (the d.1 / d-refactor.1
+// work aligned the wire format so the two Go types
+// are interchangeable via the `type User = users.User`
+// alias; d-refactor.2 dropped the subscription-side
+// Store / MemoryStore user-CRUD; this PR drops the
+// Service-level thin wrappers and moves
+// admin_handler.go out of the package). The Service
+// here is a pure render orchestrator. The /sub/{token}
+// render handler takes a *users.Service reference (for
+// the GetBySubToken lookup); the user-CRUD admin
+// surface is in `internal/users.AdminRouter`.
 
 package subscription
 
@@ -64,7 +61,6 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
-	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // ResolvedEndpoint is the renderer's view of a single
@@ -101,56 +97,41 @@ type ResolvedDownload struct {
 
 // Service is the subscription render-orchestration layer.
 // It owns the public /sub/{token} handler's logic:
-// given a sub_token, look up the user (via the users
-// package), resolve the user's hosts and endpoints, and
-// render the wire format (base64 / sing-box / Clash /
-// HTML).
+// resolve the user's hosts and endpoints, and render
+// the wire format (base64 / sing-box / Clash / HTML).
 //
-// The Service also exposes four thin user-CRUD wrappers
-// (GetUserBySubToken / RotateSubToken / CreateUser /
-// ListUsers) so the existing render handler and admin
-// handler do not have to learn the users package's
-// types. d-refactor.3 will move admin_handler.go into
-// `internal/users` and drop these four wrappers; the
-// render handler's GetUserBySubToken usage will then
-// be replaced with a direct call to users.Service.
+// The Service does NOT own user CRUD — that lives in
+// `internal/users`. The render handler (Handler in
+// handler.go) holds a *users.Service reference for the
+// sub_token lookup; the Service here is a pure resolver
+// + renderer.
 type Service struct {
 	store    Store
-	users    users.Store
-	usersSvc *users.Service
 	hosts    *hosts.Service
 	nodes    *nodes.Service
 	inbounds *inbounds.Service
 	now      func() time.Time
 }
 
-// NewService wires a Service. Every dependency is
-// required:
+// NewService wires a Service. The store + the three
+// dependent Services are required: every
+// ResolvedEndpoint returned to a caller resolves its
+// host, node, and inbound through them, so a missing
+// Service here would surface as a nil-deref at the
+// first render.
 //
-//   - store: the subscription plan / pool Store (the
-//     render-side join table; the user CRUD store is
-//     NOT here anymore).
-//   - usersStore: the user-CRUD store the
-//     GetUserBySubToken thin wrapper consults.
-//   - usersSvc: the user-CRUD service the
-//     RotateSubToken / CreateUser / ListUsers thin
-//     wrappers consult.
-//   - hosts / nodes / inbounds: every ResolvedEndpoint
-//     returned to a caller resolves its host, node, and
-//     inbound through them, so a missing Service here
-//     would surface as a nil-deref at the first render.
+// As of d-refactor.3 the user-CRUD store / service are
+// NOT here — they live in `internal/users` and are
+// wired by the caller (cmd/aegis/main.go) directly
+// into the HTTP handler / admin router.
 func NewService(
 	store Store,
-	usersStore users.Store,
-	usersSvc *users.Service,
 	hostsSvc *hosts.Service,
 	nodesSvc *nodes.Service,
 	inboundsSvc *inbounds.Service,
 ) *Service {
 	return &Service{
 		store:    store,
-		users:    usersStore,
-		usersSvc: usersSvc,
 		hosts:    hostsSvc,
 		nodes:    nodesSvc,
 		inbounds: inboundsSvc,
@@ -160,139 +141,12 @@ func NewService(
 
 // SetClock swaps the time source. Intended for tests.
 // Propagates to the subscription Store (so plan / pool
-// fixtures use a fixed clock), the users MemoryStore
-// (so the user-CRUD fixtures use the same fixed clock),
-// and the users Service (so future Service-level tests
-// of the user-CRUD-during-render path have a consistent
-// clock).
+// fixtures use a fixed clock).
 func (s *Service) SetClock(now func() time.Time) {
 	s.now = now
 	if ms, ok := s.store.(*MemoryStore); ok {
 		ms.SetClock(now)
 	}
-	if s.users != nil {
-		if ms, ok := s.users.(*users.MemoryStore); ok {
-			ms.SetClock(now)
-		}
-	}
-	if s.usersSvc != nil {
-		s.usersSvc.SetClock(now)
-	}
-}
-
-// --- user-CRUD thin wrappers ------------------------------------------
-//
-// The four methods below delegate to the users package.
-// The mapping in each method:
-//
-//   - `users.ErrNotFound` -> `*NotFoundError` (the
-//     subscription-side error type the handlers expect)
-//   - `users.ErrDuplicate` -> `ErrDuplicate`
-//   - `users.ValidationError` (and the wrapped form) ->
-//     `*ValidationError` (with the same Field / Message
-//     shape, since the users validator produces the same
-//     structure)
-//
-// The wrappers keep the existing render and admin
-// handler code working with no error-space changes;
-// d-refactor.3 will remove them.
-
-// GetUserBySubToken looks up a user by sub_token. The
-// lookup chain is "primary sub_token, then
-// sub_token_prev within its grace window" — the
-// underlying users.MemoryStore handles both in one
-// call (usePrev=true). The Service is a thin wrapper
-// that maps the users package's ErrNotFound into the
-// subscription-side *NotFoundError so the existing
-// render handler does not have to learn a new error
-// space yet.
-func (s *Service) GetUserBySubToken(ctx context.Context, token string) (out *User, err error) {
-	if token == "" {
-		return nil, &ValidationError{Field: "sub_token", Message: "must not be empty"}
-	}
-	if s.users == nil {
-		return nil, &ValidationError{Field: "users", Message: "users store is not wired"}
-	}
-	u, err := s.users.GetBySubToken(ctx, token, true)
-	if err != nil {
-		if errors.Is(err, users.ErrNotFound) {
-			return nil, &NotFoundError{What: "user", Key: "sub_token"}
-		}
-		return nil, fmt.Errorf("get user by sub_token: %w", err)
-	}
-	return u, nil
-}
-
-// DefaultSubTokenRotationGrace is the grace window the
-// Service applies when RotateSubToken is called
-// without an explicit grace. 24h matches the 3X-UI
-// convention: the end user has 24h to re-import the
-// new URL on every device before the old one stops
-// working. The users Service applies this constant
-// when grace is non-positive (see
-// `users.Service.RotateSubToken`).
-const DefaultSubTokenRotationGrace = 24 * time.Hour
-
-// RotateSubToken generates a fresh sub_token for the
-// user, parks the current one as `sub_token_prev`
-// with a grace window, and bumps `SubTokenRotatedAt`.
-// The grace is honoured by the GetUserBySubToken
-// lookup chain. The Service is a thin wrapper over
-// `users.Service.RotateSubToken`; the only translation
-// is `users.ValidationError` → `*ValidationError` so
-// the admin handler can keep using the existing
-// `writeUserError` shape.
-func (s *Service) RotateSubToken(ctx context.Context, userID uuid.UUID, grace time.Duration) (out *User, err error) {
-	if s.usersSvc == nil {
-		return nil, &ValidationError{Field: "users", Message: "users service is not wired"}
-	}
-	u, err := s.usersSvc.RotateSubToken(ctx, userID, grace)
-	if err != nil {
-		if errors.Is(err, users.ErrNotFound) {
-			return nil, &NotFoundError{What: "user", Key: "id"}
-		}
-		var verr *users.ValidationError
-		if errors.As(err, &verr) {
-			return nil, &ValidationError{Field: verr.Field, Message: verr.Message}
-		}
-		return nil, fmt.Errorf("rotate sub_token: %w", err)
-	}
-	return u, nil
-}
-
-// CreateUser is the thin wrapper over users.Service.Create.
-// The CreateUserInput is the alias for users.CreateInput
-// (see subscription/subscription.go) so the admin
-// handler can keep using the `subscription.CreateUserInput`
-// spelling until d-refactor.3 moves it to users.
-func (s *Service) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
-	if s.usersSvc == nil {
-		return nil, &ValidationError{Field: "users", Message: "users service is not wired"}
-	}
-	u, err := s.usersSvc.Create(ctx, in)
-	if err != nil {
-		if errors.Is(err, users.ErrDuplicate) {
-			return nil, fmt.Errorf("%w: %w", ErrDuplicate, err)
-		}
-		var verr *users.ValidationError
-		if errors.As(err, &verr) {
-			return nil, &ValidationError{Field: verr.Field, Message: verr.Message}
-		}
-		return nil, fmt.Errorf("create user: %w", err)
-	}
-	return u, nil
-}
-
-// ListUsers returns every user in the system,
-// sorted by created_at ascending. Thin wrapper over
-// `users.Store.List` — the Service does not own the
-// user-CRUD side. The admin handler calls this
-// directly; the render handler does not.
-func (s *Service) ListUsers(ctx context.Context) ([]*User, error) {
-	if s.users == nil {
-		return nil, &ValidationError{Field: "users", Message: "users store is not wired"}
-	}
-	return s.users.List(ctx)
 }
 
 // --- render-side resolvers (unchanged) -------------------------------
@@ -497,3 +351,12 @@ func (s *Service) resolveDownload(ctx context.Context, hostID uuid.UUID) *Resolv
 	}
 	return &ResolvedDownload{Address: addr, Port: port}
 }
+
+// --- render surface (the Service is the input to the renderer) ------
+
+// RenderBase64 / RenderSingbox / RenderClash are the
+// wire-format renderers. They are defined in
+// render.go, render_singbox.go, render_clash.go and
+// stay there for readability. The renderers are
+// methods on Service so they share the clock + the
+// future audit-log write path.
