@@ -29,18 +29,20 @@ import (
 // /api/v1/sub; the test mirror uses /sub to keep
 // the test target short).
 type handlerFixture struct {
-	svc    *Service
-	router http.Handler
+	svc      *Service
+	usersSvc *users.Service
+	router   http.Handler
 }
 
 func newHandlerFixture(t *testing.T) *handlerFixture {
 	t.Helper()
 	f := newFixture(t)
 	mux := chi.NewRouter()
-	mux.Mount("/sub", Router(f.sub))
+	mux.Mount("/sub", Router(f.sub, f.usersSvc))
 	return &handlerFixture{
-		svc:    f.sub,
-		router: mux,
+		svc:      f.sub,
+		usersSvc: f.usersSvc,
+		router:   mux,
 	}
 }
 
@@ -105,22 +107,25 @@ func TestHandler_Render_NotLive(t *testing.T) {
 	// Take the live fixture user and force-expire it,
 	// then re-fetch through the store so the cached
 	// user pointer is not stale. The path is: live ->
-	// Service.GetUserBySubToken returns the user ->
-	// Service.ResolveEndpointsForUser returns
-	// UserNotLiveError -> handler maps to 403.
+	// users.Service.GetBySubToken returns the user ->
+	// subscription.Service.ResolveEndpointsForUser
+	// returns UserNotLiveError -> handler maps to 403.
 	hf := newHandlerFixture(t)
-	user, err := hf.svc.GetUserBySubToken(context.TODO(), "tok-alice")
+	user, err := hf.usersSvc.GetBySubToken(context.TODO(), "tok-alice", true)
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
 	user.Status = UserStatusExpired
 	// The user-CRUD store has the live copy; mutate
-	// it so the next GetUserBySubToken returns the
-	// expired one. After d-refactor.2 the user-CRUD
-	// store is `users.MemoryStore` (not
-	// `subscription.MemoryStore`).
-	if ms, ok := hf.svc.users.(*users.MemoryStore); ok {
-		ms.WithUser(user)
+	// it so the next GetBySubToken returns the
+	// expired one. The store is reached via the
+	// users.MemoryStore the usersService was
+	// constructed with — we go through the Service's
+	// store by reaching the underlying *users.MemoryStore.
+	if store, ok := hf.usersSvc.Store().(*users.MemoryStore); ok {
+		store.WithUser(user)
+	} else {
+		t.Skipf("users store is not a *users.MemoryStore; cannot force-expire from the test")
 	}
 	w := hf.do(t, http.MethodGet, "/sub/tok-alice")
 	if w.Code != http.StatusForbidden {
@@ -279,14 +284,14 @@ func TestHandler_Render_HTML_HostCount(t *testing.T) {
 // grammar is wrong and confuses users).
 //
 // The fixture has one entitled user. We add a second
-// user with no plan via the MemoryStore's
+// user with no plan via the users.MemoryStore
 // chainable helper; the resolver returns zero hosts
 // for the new user, and the page renders the
 // "no hosts" branch.
 func TestHandler_Render_HTML_NoHosts(t *testing.T) {
 	hf := newHandlerFixture(t)
-	if ms, ok := hf.svc.users.(*users.MemoryStore); ok {
-		ms.WithUser(&User{
+	if store, ok := hf.usersSvc.Store().(*users.MemoryStore); ok {
+		store.WithUser(&User{
 			ID:       uuid.New(),
 			Username: "ghost",
 			Status:   UserStatusActive,
@@ -413,7 +418,7 @@ func newRateLimitedFixture(t *testing.T) *handlerFixture {
 	f := newFixture(t)
 	limiter := ratelimit.New(1, 2, 0) // 1 rps, burst 2, no idle refill
 	mux := chi.NewRouter()
-	mux.Mount("/sub", RouterWithLimiter(f.sub, limiter))
+	mux.Mount("/sub", RouterWithLimiter(f.sub, f.usersSvc, limiter))
 	return &handlerFixture{
 		svc:    f.sub,
 		router: mux,

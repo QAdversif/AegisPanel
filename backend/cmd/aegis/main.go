@@ -310,7 +310,7 @@ func main() {
 		subscriptionStore = subscription.NewMemoryStore()
 		log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
 	}
-	subscriptionSvc := subscription.NewService(subscriptionStore, usersStore, usersSvc, hostsSvc, nodesSvc, inboundsSvc)
+	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
 
 	// Panel-wide config (the rotating URL prefix).
 	// Backend is selected at startup:
@@ -434,7 +434,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, panelCfgSvc, auditsSvc, bootstrapSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, bootstrapSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.

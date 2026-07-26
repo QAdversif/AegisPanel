@@ -13,7 +13,6 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
-	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // newClashFixture seeds a single VLESS endpoint with
@@ -189,7 +188,7 @@ func TestRenderClash_VariousProtocols(t *testing.T) {
 		})
 	}
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
+	svc := NewService(NewMemoryStore(), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 
 	out, err := svc.RenderClash(context.Background(), nil, eps)
 	if err != nil {
@@ -294,7 +293,7 @@ func TestRenderClash_NoTLSKeyForShadowsocks(t *testing.T) {
 		Endpoints: []hosts.Endpoint{{ID: epID, NodeID: nodeID, InboundID: ss.ID, Weight: 1}},
 	})
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
+	svc := NewService(NewMemoryStore(), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	ep := ResolvedEndpoint{
 		Host:     &hosts.Host{ID: hostID, Remark: "ss", Type: hosts.HostTypeDirect, Enabled: true},
 		Endpoint: hosts.Endpoint{ID: epID, NodeID: nodeID, InboundID: ss.ID, Weight: 1},

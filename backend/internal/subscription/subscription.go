@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Package subscription is the panel-side view of users,
-// plans, host-pools, and the user-facing subscription
-// URLs (sing-box / Clash / base64, …).
+// Package subscription is the panel-side render
+// orchestrator: given a sub_token from the URL, it
+// resolves the user's plan → pool → host → endpoint
+// graph and renders the wire format (base64 / sing-box
+// / Clash / HTML). The plan / pool / member Store lives
+// here because the join tables are a
+// subscription-domain concern; the user-CRUD surface
+// does not.
 //
-// As of d-refactor.2 the user-CRUD surface has moved
-// out of this package into `internal/users` (it was
-// duplicated in d.1; d-refactor.1 aligned the wire
-// format, this PR drops the subscription-side
-// implementation). What stays in this package:
+// As of d-refactor.3 the user-CRUD surface has fully
+// moved out of this package into `internal/users`
+// (d.1 created the `internal/users` package; d-refactor.1
+// aligned the wire format; d-refactor.2 dropped the
+// subscription-side Store / MemoryStore / PgStore
+// user-CRUD; this PR drops the Service-level thin
+// wrappers and moves `admin_handler.go` into
+// `users/admin_handler.go`). What stays:
 //
 //   - The render orchestrator (Service.ResolveHostsForUser
 //     / ResolveEndpointsForUser / RenderBase64 / Singbox /
@@ -21,13 +29,10 @@
 //     MemoryStore + PgStore) — the join tables are read
 //     by the resolver and never owned by the user
 //     package, so they stay in subscription.
-//   - A thin user-CRUD facade on Service for the
-//     public render path (GetUserBySubToken +
-//     RotateSubToken + CreateUser + ListUsers) and the
-//     admin path (the same four + Get / Update in
-//     admin_handler.go). The facade is removed in
-//     d-refactor.3 when admin_handler.go moves to
-//     `users/admin_handler.go`.
+//   - The sub_token-→-user lookup, exposed as a private
+//     method on Handler (`lookupUserBySubToken`). The
+//     Handler takes a *users.Service reference for this
+//     one call.
 //
 // The type aliases `User` and `UserStatus` here are
 // aliases for `users.User` / `users.Status` (Go type
@@ -80,13 +85,6 @@ const (
 // account. It is a Go type alias for `users.User` —
 // see the package doc comment for the rationale.
 type User = users.User
-
-// CreateUserInput is the payload the admin handler
-// passes to Service.CreateUser. It is an alias for
-// `users.CreateInput` (the canonical d.1 type) so the
-// admin handler does not have to translate between
-// two parallel input shapes.
-type CreateUserInput = users.CreateInput
 
 // ResetPeriod is the cadence at which `users.traffic_used_bytes`
 // is reset to zero. The closed set is pinned by

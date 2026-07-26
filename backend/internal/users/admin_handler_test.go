@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package subscription
+package users
 
 import (
 	"bytes"
@@ -9,25 +9,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
-	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
+// newAdminTestRouter wires the users.AdminRouter with
+// a stub auth middleware that injects a ScopeUsers
+// claim. The test scope behaviour, not JWT
+// verification.
 func newAdminTestRouter(t *testing.T) (http.Handler, *Service) {
 	t.Helper()
-	// d-refactor.2: the user-CRUD store is independent
-	// of the subscription store. The admin handler
-	// exercises both: the user-CRUD read/write paths
-	// hit the users package, and the thin wrappers
-	// on Service delegate the rest.
-	subStore := NewMemoryStore()
-	usersStore := users.NewMemoryStore(nil)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(subStore, usersStore, usersSvc, nil, nil, nil)
+	store := NewMemoryStore(nil)
+	svc := NewService(store)
 	// auth middleware bypass — the tests assert
 	// scope behaviour, not JWT verification.
 	mw := func(next http.Handler) http.Handler {
@@ -70,9 +65,9 @@ func TestAdminHandler_ListEmpty(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	got := decodeJSON(t, w.Result())
-	users, _ := got["users"].([]any)
-	if len(users) != 0 {
-		t.Errorf("users = %d, want 0", len(users))
+	rows, _ := got["users"].([]any)
+	if len(rows) != 0 {
+		t.Errorf("users = %d, want 0", len(rows))
 	}
 }
 
@@ -81,7 +76,7 @@ func TestAdminHandler_CreateAndGet(t *testing.T) {
 
 	body, _ := json.Marshal(createUserRequest{
 		Username:          "alice",
-		Status:            UserStatusActive,
+		Status:            StatusActive,
 		TrafficLimitBytes: 1024 * 1024 * 1024,
 		DeviceLimit:       3,
 	})
@@ -98,9 +93,7 @@ func TestAdminHandler_CreateAndGet(t *testing.T) {
 	}
 	// sub_token must be 64 hex chars (32 bytes of
 	// random from the canonical d.1 users.Service
-	// token mint; the original d.0 subscription
-	// package used 16 bytes / 32 hex chars, but
-	// d.1 bumped it to 128-bit entropy).
+	// token mint).
 	if tok, _ := created["sub_token"].(string); len(tok) != 64 {
 		t.Errorf("sub_token = %q (len %d), want 64", tok, len(tok))
 	}
@@ -120,10 +113,7 @@ func TestAdminHandler_CreateAndGet(t *testing.T) {
 	}
 
 	// Verify the Service-side read-back matches.
-	// As of d-refactor.2 the user-CRUD store is the
-	// users.MemoryStore (not the subscription.MemoryStore);
-	// the Service's users field is the same pointer.
-	u, err := svc.users.GetByID(context.TODO(), uuid.MustParse(id))
+	u, err := svc.Get(context.TODO(), uuid.MustParse(id))
 	if err != nil {
 		t.Fatalf("users: %v", err)
 	}
@@ -168,7 +158,7 @@ func TestAdminHandler_CreateMissingUsername(t *testing.T) {
 }
 
 func TestAdminHandler_PatchAndRotate(t *testing.T) {
-	r, svc := newAdminTestRouter(t)
+	r, _ := newAdminTestRouter(t)
 
 	// Seed.
 	body, _ := json.Marshal(createUserRequest{Username: "bob", DeviceLimit: 3})
@@ -186,7 +176,7 @@ func TestAdminHandler_PatchAndRotate(t *testing.T) {
 	{
 		patch, _ := json.Marshal(updateUserRequest{
 			DeviceLimit: intPtr(5),
-			Status:      userStatusPtr(UserStatusGrace),
+			Status:      statusPtr(StatusGrace),
 		})
 		req := httptest.NewRequest(http.MethodPatch, "/"+id, bytes.NewReader(patch))
 		w := httptest.NewRecorder()
@@ -198,7 +188,7 @@ func TestAdminHandler_PatchAndRotate(t *testing.T) {
 		if int(got["device_limit"].(float64)) != 5 {
 			t.Errorf("device_limit = %v, want 5", got["device_limit"])
 		}
-		if got["status"] != string(UserStatusGrace) {
+		if got["status"] != string(StatusGrace) {
 			t.Errorf("status = %v, want grace", got["status"])
 		}
 	}
@@ -224,12 +214,7 @@ func TestAdminHandler_PatchAndRotate(t *testing.T) {
 		// 0-second grace from the API boundary is
 		// mapped to the users.Service default
 		// (24h, per the d.1 design — see
-		// `users.Service.RotateSubToken`). The prev
-		// token therefore stays valid for 24h; we
-		// verify the prev-token + grace invariants
-		// separately in the rotation_test.go suite
-		// where the clock is pinned.
-		_ = svc
+		// `users.Service.RotateSubToken`).
 	}
 }
 
@@ -257,9 +242,8 @@ func TestAdminHandler_RotateTokenNotFound(t *testing.T) {
 }
 
 func TestAdminHandler_RejectsNonUsersScope(t *testing.T) {
-	usersStore := users.NewMemoryStore(nil)
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(NewMemoryStore(), usersStore, usersSvc, nil, nil, nil)
+	store := NewMemoryStore(nil)
+	svc := NewService(store)
 	mw := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims := &auth.Claims{
@@ -282,11 +266,6 @@ func TestAdminHandler_RejectsNonUsersScope(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
-func userStatusPtr(v UserStatus) *UserStatus {
+func statusPtr(v Status) *Status {
 	return &v
 }
-
-// Ensure the time import is used in at least one
-// test helper (otherwise `goimports` and similar
-// tools would strip it).
-var _ = time.RFC3339

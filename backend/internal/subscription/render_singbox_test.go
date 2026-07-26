@@ -13,7 +13,6 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
-	"github.com/QAdversif/AegisPanel/internal/users"
 )
 
 // singboxFixture is the minimum data needed to render
@@ -74,7 +73,7 @@ func newSingboxFixture(t *testing.T) *singboxFixture {
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	nodesSvc := nodes.NewService(nodesStore)
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodesSvc, inboundsSvc)
+	svc := NewService(NewMemoryStore(), hostsSvc, nodesSvc, inboundsSvc)
 	ep := ResolvedEndpoint{
 		Host:     host,
 		Endpoint: host.Endpoints[0],
@@ -240,7 +239,7 @@ func TestRenderSingbox_VariousProtocols(t *testing.T) {
 		})
 	}
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
+	svc := NewService(NewMemoryStore(), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 
 	out, err := svc.RenderSingbox(context.Background(), nil, eps)
 	if err != nil {
@@ -319,7 +318,7 @@ func TestRenderSingbox_SkipsUnrenderable(t *testing.T) {
 		Endpoints: []hosts.Endpoint{{ID: epID, NodeID: nodeID, InboundID: hy2.ID, Weight: 1}},
 	})
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
+	svc := NewService(NewMemoryStore(), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 
 	// A HY2 endpoint with no password — the builder
 	// still produces a (technically invalid) outbound
@@ -380,7 +379,7 @@ func TestRenderSingbox_TLSBlockOmittedWhenNoFields(t *testing.T) {
 		Endpoints: []hosts.Endpoint{{ID: epID, NodeID: nodeID, InboundID: ss.ID, Weight: 1}},
 	})
 	hostsSvc := hosts.NewService(hostsStore, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
-	svc := NewService(NewMemoryStore(), users.NewMemoryStore(nil), users.NewService(users.NewMemoryStore(nil)), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
+	svc := NewService(NewMemoryStore(), hostsSvc, nodes.NewService(nodesStore), inbounds.NewService(inboundsStore, nodes.NewService(nodesStore)))
 	ep := ResolvedEndpoint{
 		Host:     &hosts.Host{ID: hostID, Remark: "ss", Type: hosts.HostTypeDirect, Enabled: true},
 		Endpoint: hosts.Endpoint{ID: epID, NodeID: nodeID, InboundID: ss.ID, Weight: 1},

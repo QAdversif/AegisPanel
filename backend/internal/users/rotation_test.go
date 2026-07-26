@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package subscription
+// Sub-token rotation tests. As of d-refactor.3 the
+// sub_token rotation surface lives in `users.Service`
+// (the lookup chain + grace-window check are part of
+// the canonical user-CRUD layer; the subscription
+// package no longer owns any of it). The tests in this
+// file are the migration of the original
+// `internal/subscription/rotation_test.go` that
+// d-refactor.2 carried in place.
+
+package users
 
 import (
 	"context"
@@ -8,9 +17,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/QAdversif/AegisPanel/internal/users"
 )
+
+// DefaultSubTokenRotationGrace is the grace window
+// the API boundary applies when RotateSubToken is
+// called without an explicit grace. 24h matches the
+// 3X-UI convention. The users.Service.RotateSubToken
+// maps grace <= 0 to this constant.
+const DefaultSubTokenRotationGrace = 24 * time.Hour
 
 // TestRotateSubToken_GeneratesNewToken — Rotate
 // produces a fresh token, marks the old one as
@@ -21,12 +35,12 @@ func TestRotateSubToken_GeneratesNewToken(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
 
-	before, err := f.svc.GetUserBySubToken(ctx, f.userToken)
+	before, err := f.usersSvc.GetBySubToken(ctx, f.userToken, true)
 	if err != nil {
-		t.Fatalf("GetUserBySubToken: %v", err)
+		t.Fatalf("GetBySubToken: %v", err)
 	}
 
-	rotated, err := f.svc.RotateSubToken(ctx, before.ID, DefaultSubTokenRotationGrace)
+	rotated, err := f.usersSvc.RotateSubToken(ctx, before.ID, DefaultSubTokenRotationGrace)
 	if err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
@@ -61,97 +75,97 @@ func TestRotateSubToken_GeneratesNewToken(t *testing.T) {
 	}
 }
 
-// TestGetUserBySubToken_LooksUpCurrent — the
-// primary lookup path: the freshly-rotated token
-// resolves the user. This is the "happy path" —
-// the user re-imports the new URL in their client.
-func TestGetUserBySubToken_LooksUpCurrent(t *testing.T) {
+// TestGetBySubToken_LooksUpCurrent — the primary
+// lookup path: the freshly-rotated token resolves
+// the user. This is the "happy path" — the user
+// re-imports the new URL in their client.
+func TestGetBySubToken_LooksUpCurrent(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
 
-	rotated, err := f.svc.RotateSubToken(ctx, f.user.ID, DefaultSubTokenRotationGrace)
+	rotated, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, DefaultSubTokenRotationGrace)
 	if err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
-	got, err := f.svc.GetUserBySubToken(ctx, rotated.SubToken)
+	got, err := f.usersSvc.GetBySubToken(ctx, rotated.SubToken, true)
 	if err != nil {
-		t.Fatalf("GetUserBySubToken: %v", err)
+		t.Fatalf("GetBySubToken: %v", err)
 	}
 	if got.ID != f.user.ID {
 		t.Errorf("got ID = %v, want %v", got.ID, f.user.ID)
 	}
 }
 
-// TestGetUserBySubToken_LooksUpPrevDuringGrace — the
+// TestGetBySubToken_LooksUpPrevDuringGrace — the
 // lookup chain falls through to the prev-token
 // when the current token does not match. The user
 // keeps getting a 200 response for the 24h grace
 // window, even though their client is still using
 // the old URL.
-func TestGetUserBySubToken_LooksUpPrevDuringGrace(t *testing.T) {
+func TestGetBySubToken_LooksUpPrevDuringGrace(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
 
 	oldToken := f.user.SubToken
-	if _, err := f.svc.RotateSubToken(ctx, f.user.ID, DefaultSubTokenRotationGrace); err != nil {
+	if _, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, DefaultSubTokenRotationGrace); err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
 	// The old token should still resolve during the
 	// grace window.
-	got, err := f.svc.GetUserBySubToken(ctx, oldToken)
+	got, err := f.usersSvc.GetBySubToken(ctx, oldToken, true)
 	if err != nil {
-		t.Fatalf("GetUserBySubToken (old token): %v", err)
+		t.Fatalf("GetBySubToken (old token): %v", err)
 	}
 	if got.ID != f.user.ID {
 		t.Errorf("got ID = %v, want %v", got.ID, f.user.ID)
 	}
 }
 
-// TestGetUserBySubToken_RejectsPrevAfterGrace — the
+// TestGetBySubToken_RejectsPrevAfterGrace — the
 // prev-token is rejected once its ExpiresAt has
 // passed. The user gets a 404 — the rotation is
 // complete, the old URL is no longer valid.
-func TestGetUserBySubToken_RejectsPrevAfterGrace(t *testing.T) {
+func TestGetBySubToken_RejectsPrevAfterGrace(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
 
 	oldToken := f.user.SubToken
 	// Rotate with a 1-hour grace.
-	if _, err := f.svc.RotateSubToken(ctx, f.user.ID, time.Hour); err != nil {
+	if _, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, time.Hour); err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
 	// Pin the clock 2h into the future. The grace
 	// has elapsed; the prev token is now stale.
-	f.svc.SetClock(func() time.Time { return time.Now().Add(2 * time.Hour) })
-	_, err := f.svc.GetUserBySubToken(ctx, oldToken)
+	f.usersSvc.SetClock(func() time.Time { return time.Now().Add(2 * time.Hour) })
+	_, err := f.usersSvc.GetBySubToken(ctx, oldToken, true)
 	if err == nil {
-		t.Errorf("GetUserBySubToken(old) after grace = nil error, want NotFoundError")
+		t.Errorf("GetBySubToken(old) after grace = nil error, want ErrNotFound")
 	}
 }
 
-// TestGetUserBySubToken_RejectsPrevWhenNoGrace —
+// TestGetBySubToken_RejectsPrevWhenNoGrace —
 // in the d.0 subscription package a 0-second grace
 // invalidated the prev token immediately. The d.1
 // users package changed the semantics: grace <= 0
 // is mapped to the canonical 24h default. The
 // prev-token rejection on expiry is therefore
-// exercised by TestGetUserBySubToken_RejectsPrevAfterGrace
+// exercised by TestGetBySubToken_RejectsPrevAfterGrace
 // above (which pins the clock past the 24h mark);
 // this test now documents the d.1 design and
 // asserts the prev token survives a zero-grace
 // rotation.
-func TestGetUserBySubToken_RejectsPrevWhenNoGrace(t *testing.T) {
+func TestGetBySubToken_RejectsPrevWhenNoGrace(t *testing.T) {
 	f := newRotationFixture(t)
 	ctx := context.Background()
 
 	oldToken := f.user.SubToken
-	if _, err := f.svc.RotateSubToken(ctx, f.user.ID, 0); err != nil {
+	if _, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, 0); err != nil {
 		t.Fatalf("RotateSubToken: %v", err)
 	}
 	// Grace of 0 maps to 24h in users.Service; the
 	// prev token must still resolve.
-	if _, err := f.svc.GetUserBySubToken(ctx, oldToken); err != nil {
-		t.Errorf("GetUserBySubToken(old) after zero-grace rotation = %v, want nil (d.1 maps grace=0 to 24h)", err)
+	if _, err := f.usersSvc.GetBySubToken(ctx, oldToken, true); err != nil {
+		t.Errorf("GetBySubToken(old) after zero-grace rotation = %v, want nil (d.1 maps grace=0 to 24h)", err)
 	}
 }
 
@@ -168,12 +182,12 @@ func TestRotateSubToken_TwiceKeepsLatestPrev(t *testing.T) {
 	ctx := context.Background()
 
 	first := f.user.SubToken
-	rot1, err := f.svc.RotateSubToken(ctx, f.user.ID, time.Hour)
+	rot1, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, time.Hour)
 	if err != nil {
 		t.Fatalf("Rotate 1: %v", err)
 	}
 	second := rot1.SubToken
-	rot2, err := f.svc.RotateSubToken(ctx, f.user.ID, time.Hour)
+	rot2, err := f.usersSvc.RotateSubToken(ctx, f.user.ID, time.Hour)
 	if err != nil {
 		t.Fatalf("Rotate 2: %v", err)
 	}
@@ -183,50 +197,45 @@ func TestRotateSubToken_TwiceKeepsLatestPrev(t *testing.T) {
 	// `first` (the original token) was the prev after
 	// rotation 1; rotation 2 should have removed it
 	// from the prev index.
-	_, err = f.svc.GetUserBySubToken(ctx, first)
+	_, err = f.usersSvc.GetBySubToken(ctx, first, true)
 	if err == nil {
-		t.Errorf("GetUserBySubToken(original) after two rotations = nil error, want NotFoundError (the original prev was dropped on the second rotation)")
+		t.Errorf("GetBySubToken(original) after two rotations = nil error, want ErrNotFound (the original prev was dropped on the second rotation)")
 	}
 }
 
 // rotationFixture is the minimum data needed to
-// test the sub-token rotation. The subscription
-// store is populated with a single user; the user
-// is entitled to a single host via a single pool
-// (the resolver path is the same as the production
-// path, but the rotation tests do not exercise it
-// beyond the user lookup).
+// test the sub-token rotation. The user-CRUD
+// store is populated with a single user; the
+// rotation tests do not exercise the host resolver
+// path so the subscription Service is a no-op
+// pass-through (the d.0 fixture had a non-nil
+// store + a nil users service; d-refactor.3
+// drops both).
 type rotationFixture struct {
-	svc       *Service
+	usersSvc  *Service
+	store     *MemoryStore
 	user      *User
 	userToken string
 }
 
 func newRotationFixture(t *testing.T) *rotationFixture {
 	t.Helper()
-	store := NewMemoryStore()
-	store.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
-	usersStore := users.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	clock := func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+	store := NewMemoryStore(clock)
+	usersSvc := NewService(store)
+	usersSvc.SetClock(clock)
 	userID := uuid.New()
 	userToken := "tok-alice-rotation"
 	user := &User{
 		ID:       userID,
 		Username: "alice",
-		Status:   UserStatusActive,
+		Status:   StatusActive,
 		SubToken: userToken,
 	}
-	usersStore.WithUser(user)
-	// The rotation tests do not exercise the host
-	// resolver path, so the hosts / nodes / inbounds
-	// services can be nil — the Service field
-	// dereferences are only hit by ResolveHostsForUser
-	// / ResolveEndpointsForUser, which the rotation
-	// tests do not call.
-	usersSvc := users.NewService(usersStore)
-	svc := NewService(store, usersStore, usersSvc, nil, nil, nil)
-	svc.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	store.WithUser(user)
 	return &rotationFixture{
-		svc:       svc,
+		usersSvc:  usersSvc,
+		store:     store,
 		user:      user,
 		userToken: userToken,
 	}
