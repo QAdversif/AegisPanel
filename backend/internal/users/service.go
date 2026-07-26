@@ -368,6 +368,22 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	return s.store.Delete(ctx, id)
 }
 
+// DefaultSubTokenRotationGrace is the grace window
+// the Service applies when RotateSubToken is called
+// with grace <= 0 (a "rotate immediately" intent that
+// the canonical design maps to the safe default).
+// 24h matches the 3X-UI convention: the end user has
+// 24h to re-import the new URL on every device
+// before the old one stops working.
+//
+// Re-exported as a package constant so callers
+// (admin handler, future cabinet UI, tests) can
+// reference the canonical duration without
+// duplicating the literal. The literal in
+// RotateSubToken was the magic-number site; the
+// constant lives here as a public symbol.
+const DefaultSubTokenRotationGrace = 24 * time.Hour
+
 // RotateSubToken mints a fresh sub_token, parks the
 // old one in sub_token_prev, and sets the prev-token
 // grace window. The default grace is 24 hours, per
@@ -381,7 +397,7 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 		return nil, &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
 	if grace <= 0 {
-		grace = 24 * time.Hour
+		grace = DefaultSubTokenRotationGrace
 	}
 	cur, err := s.store.GetByID(ctx, id)
 	if err != nil {
