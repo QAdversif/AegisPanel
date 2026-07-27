@@ -7,16 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added (v0.3.0-mvp-byo-node, in progress)
+### Documentation (v0.4.0 release, #100)
+
+- **`docs/ROADMAP.md`** — the project roadmap. Documents the
+  v0.4.0-d Path C status, v0.5.0 polish, v0.6.0 plans,
+  v0.7.0 webhooks, v1.0.0-mvp-soft-launch GA, and the 9
+  open-gap packages (cabinet, caddy, cascades, decoy,
+  events, mcp, notifications, stats, subscriptions-plural)
+  with their post-v1.0 targeting. Closes #100.
+
+## [0.4.0] - 2026-07-26
+
+**Tag:** `v0.4.0` on this commit. v0.4.0 ships two parallel
+work streams:
+
+1. **v0.4.0-mvp-batched** (PRs #92 / #93 / #94) — the
+   `BatchedApplier` + real apply transport + the
+   `install_singbox` Ansible role. The end-to-end
+   panel → aegis-agent → sing-box config write → reload
+   flow ships green. Closes the v0.4.0-a / b / c
+   sub-PRs.
+2. **v0.4.0-d Path C** (PRs #95 / #96 / #97 / #99 / #100) —
+   the user-CRUD surface moves from `internal/subscription`
+   into a dedicated `internal/users` package. The
+   subscription package is now a pure render
+   orchestrator: zero user-CRUD surface. The d-r-series
+   cuts roughly 800 lines out of subscription and
+   consolidates the wire format.
+
+### Added (v0.4.0-mvp-batched, #92 / #93 / #94)
+
+- **`internal/cores` `BatchedApplier`** — per-node delta
+  queue with `CancelReplace` semantics (an `add_user`
+  followed by a `remove_user` for the same `UserID`
+  within the window is a no-op). 20s window, 1000 max
+  queue. `FlushFn` callback. The `cmd/aegis-agent` /
+  apply transport is wired through the new
+  `Provider.Configure(nodes, httpClient)` pattern. Closes #92.
+- **`cmd/aegis-agent` real `/v1/apply` handler** —
+  `writeAtomic` (write to temp + fsync + `os.Rename`),
+  `runReload` (subprocess via `exec.CommandContext`,
+  no shell — `strings.Fields(reloadCmd)`), and
+  `applyEnvelope` / `applyResponse` with `reloaded: bool`,
+  plus `reload_took_ms: int64`. Closes #93.
+- **`deploy/ansible/roles/install_singbox/`** — pins
+  sing-box 1.14.0-beta.2, hard-coded SHA-256
+  `f68715815741e59f25e32904cabcd5924a0461a910d8e9c9612512b957709ef4`.
+  Playbook order: `bootstrap` → `install_caddy` →
+  `install_fail2ban` → `install_singbox` →
+  `install_agent` → `setup_decoy` (install_singbox
+  comes before install_agent because the agent's env
+  file references `/etc/sing-box/config.json`). Closes #94.
+
+### Added (v0.4.0-d, #95 / #96 / #97 / #99 / #100)
+
+- **`internal/users` data layer** — the new home for the
+  end-user CRUD surface (User + Status enum + Create /
+  Update / Delete / RotateSubToken + MemoryStore +
+  PgStore). 32-byte / 64-hex-char `sub_token` (d.1
+  bumped from 16/32 for higher entropy). Closes #95.
+- **`users.User` wire-format compat** with
+  `subscription.User` — both Go types have identical
+  JSON shape (snake_case fields, `[]uuid.UUID` for
+  hosts allow/block lists). Makes the d.r2 → d.r3
+  move possible without render-code churn. Closes #96.
+- **Drop subscription-side user-CRUD** — `Store`,
+  `MemoryStore`, `PgStore` no longer carry the 7
+  user-CRUD methods. The 4 Service-level thin
+  wrappers (`GetUserBySubToken` / `RotateSubToken` /
+  `CreateUser` / `ListUsers`) carry the work
+  temporarily. Closes #97.
+- **Move `admin_handler.go` to `users`** — the
+  user-CRUD admin surface (mounted at `/api/v1/users`)
+  lives in `internal/users/admin_handler.go` now. The
+  Service-level thin wrappers are gone; the render
+  handler consults `*users.Service` directly for the
+  sub_token lookup. Closes #99.
+- **Cleanup pass + roadmap** — `DefaultSubTokenRotationGrace`
+  is now a public package constant on `users` (was a
+  magic-number literal). `docs/ROADMAP.md` documents
+  the v0.4.0-d Path C status, v0.5.0 polish, v0.6.0 plans,
+  v0.7.0 webhooks, v1.0.0-mvp-soft-launch GA, and the 9
+  open-gap packages. `.markdownlint.json` disables
+  `MD060` (the default "aligned" table style is fragile
+  under PR review). Closes #100.
+
+### Behaviour changes (v0.4.0-d)
+
+- **`sub_token` is now 64 hex chars (32 bytes)**, not
+  32 hex chars (16 bytes). The d.1 design bumped from
+  16 bytes to 32 bytes of entropy. Existing fixtures
+  in `internal/users/*_test.go` and the integration
+  tests updated.
+- **`RotateSubToken` grace semantics changed** —
+  `grace <= 0` no longer invalidates the prev token
+  immediately. The d.1 `users.Service.RotateSubToken`
+  maps `grace <= 0` to the canonical 24h default
+  (matching the 3X-UI convention). The pre-existing
+  test that asserted the d.0 behaviour was rewritten
+  as a documentation test.
+
+## [0.3.0-mvp-byo-node] - 2026-07-23
+
+**Tag:** `v0.3.0-mvp-byo-node` on `ba78b35` (post-cleanup-batch
+HEAD). v0.3.0 ships the BYO-node bootstrap path: the
+operator can provision a fresh Linux node, install the
+Caddy reverse proxy + the `aegis-agent` Go binary, and
+have it register with the panel — all from the panel
+admin UI. Closes #67 (v0.3.0-a backend), and the
+subsequent cleanup batch (PRs #74 / #75 / #76 / #77
+/ #82 / #83 / #84 / #87 / #91).
+
+### Added (v0.3.0)
 
 - **`internal/bootstrap/`** package — SSH client (`x/crypto/ssh` +
   `pkg/sftp`), TOFU host-key policy, 32-byte bearer secret
   generation, 5-step install workflow, state machine, provisioner.
   Closes v0.3.0-a (backend). Closes #67.
-- 11 reserved-package `doc.go` stubs for the Phase 2-4 slots
+- **11 reserved-package `doc.go` stubs** for the Phase 2-4 slots
   (`cabinet`, `caddy`, `cascades`, `decoy`, `events`, `mcp`,
   `notifications`, `plans`, `stats`, `subscriptions`,
   `webhooks`). Closes #77.
+- **`cmd/aegis-agent` real Go binary** — replaces the
+  v0.2.0 `sleep infinity` placeholder. Ansible role
+  `install_agent` uploads the binary, writes
+  `/etc/aegis/agent.env`, registers the systemd unit.
+- **Per-node `AgentBearer` storage** — `nodes.agent_bearer`
+  column (migration 0013). v0.3.0 nodes get empty bearer
+  until re-provisioned; production should use Postgres
+  TDE or disk encryption on the agent_bearer column.
 
 ### Fixed (cleanup batch, post-v0.3.0-a)
 
@@ -35,6 +154,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Dependabot #68 (Go minor+patch)** superseded by #75; #69
   (frontend minor+patch) deferred to v0.4.0 cleanup window
   (transitively requires a TypeScript 5.8+ major).
+- **vitest 3 → 4** (#82) — `vi.useFakeTimers` + global setup
+  pattern. The vitest test suite went from 24 flaky
+  tests on CI to 0 in 4.1.
+- **eslint 8 → 10 flat config** (#83) — the new flat
+  config file pattern. Catches plugin ordering bugs the
+  legacy config silently allowed.
+- **vue-router 4 → 5 + vite 6 → 7 + pinia 2 → 3** (#84) —
+  the vue-router 5 breaking change is the data-loader
+  pattern; pinia 3 adds the `defineStore` setup-style
+  syntax that the data loaders need.
+- **`.gitattributes` + `npm ci` standardisation** (#87) —
+  the footgun fix that makes Windows contributors'
+  CRLF/LF noise disappear; CI is now `npm ci` (not
+  `npm install`).
+- **vite 7.3.0 → 7.3.6** (#89) — 6 dependabot advisories
+  (all `Development`-only impact).
+- **brace-expansion@2 → 5 + js-yaml@3 → 4** (#90) — 3
+  HIGH-severity OSV findings resolved.
+- **Custom Caddy binary** (#91) — drops the upstream
+  Caddy `grpc-go` CVE by patching to `v1.82.1` in a
+  BuildKit-built binary. Closes the `trivy-frontend`
+  HIGH findings.
 
 ### Documentation (v9.2 roadmap sync, #78)
 
