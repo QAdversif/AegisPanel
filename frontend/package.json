@@ -27,7 +27,7 @@
     "clsx": "^2.1.1",
     "dayjs": "^1.11.13",
     "lucide-vue-next": "^1.0.0",
-    "pinia": "^3.0.4",
+    "pinia": "^4.0.2",
     "radix-vue": "^1.9.17",
     "tailwind-merge": "^3.6.0",
     "vee-validate": "^4.15.1",
