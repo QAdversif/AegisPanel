@@ -38,6 +38,31 @@ jobs:
           echo "release_tag = ${{ env.release_tag }}"
           git tag --list 'v*' | sort -V
 
+      # Compute the bare semver components from `release_tag`
+      # (e.g. `v0.4.0` → version=`0.4.0`, short=`0.4`). Used
+      # by the panel metadata-action so the generated tags
+      # (`0.4.0`, `0.4`) match the existing convention (no
+      # `v` prefix) on both the tag-push and the
+      # `workflow_dispatch` re-run paths. With the
+      # `type=semver,pattern={{version}}` form, the action
+      # only derives a version from the ref on tag-push
+      # events; on `workflow_dispatch` it sees the branch
+      # ref and emits no semver tags — leaving `0.4.0` /
+      # `0.4` pointing at whatever was last pushed by an
+      # older workflow run. We compute the components
+      # explicitly here so both paths produce the same
+      # tag list.
+      - name: Compute release version
+        id: rel
+        run: |
+          raw="${{ env.release_tag }}"
+          version="${raw#v}"
+          short="$(echo "$version" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')"
+          echo "tag=${raw}"     >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+          echo "Computed: tag=${raw} version=${version} short=${short}"
+
       # Build the panel image.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,8 +81,8 @@ jobs:
         with:
           images: ghcr.io/qadversif/aegispanel
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ steps.rel.outputs.version }}
+            type=raw,value=${{ steps.rel.outputs.short }}
             type=raw,value=latest,enable={{is_default_branch}}
           flavor: latest=auto
 
