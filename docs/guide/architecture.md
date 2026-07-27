@@ -10,6 +10,32 @@ should be edited in lockstep with the code.
 
 ## Current version
 
+**v9.2 (2026-07-23) — roadmap sync + post-v0.3.0 cleanup.**
+v9 introduced the "variant A — sing-box only MVP" model
+(ADR-0003 supersedes ADR-0001; Xray moves to v2.0+).
+v9.1 locked the frontend stack on shadcn-vue,
+Reka UI, and TailwindCSS (ADR-0004).
+v9.2 is a status sync: the §21 unified roadmap is
+rewritten under the v0.x / v1.0 / v2.0+ milestone
+ladder, §21 markers are brought in line with what
+the repo actually ships, and the
+`v0.1.0-mvp-render` (at `5840c13`) and
+`v0.2.0-mvp-agent` (at `c2e773c`) tags are
+created retroactively. See the `v9.2` entry in
+`ARCHITECTURE.md` §25 for the per-PR detail
+(PR #74 trivy fix, PR #75 chi v5.2.4 to v5.3.1
+plus the `ClientIPFrom*` rewrite, PR #76
+eslint --fix, PR #77 11 reserved-package
+`doc.go` stubs).
+
+**v9 (2026-07-17, variant A — sing-box only MVP).**
+The "Xray as production core" assumption
+(ADR-0001) is **cancelled**. ADR-0003
+(`sing-box as MVP-only core, Xray at v2.0+`)
+takes its place. The §21 unified roadmap is
+rewritten under the solo-team timeline
+(5–7 weeks to MVP-1.0, vs the v8 25–35 weeks).
+
 **v8 (2026-07-17) — review-driven fixes.** Major changes:
 
 - **Unified Roadmap (§21)** — single source of truth for the Phase plan.
@@ -40,6 +66,35 @@ should be edited in lockstep with the code.
 - **`ARCHITECTURE_ADDENDUM_1.md` archived** to
   `docs/archive/ARCHITECTURE_ADDENDUM_1.merged-into-v3.md` (its content is
   merged into v3/v8 of the main doc).
+
+**Post-v0.4.0 release workflow fixes (2026-07-27).**
+Four PRs land on `main` after the `v0.4.0` tag
+(commit `39d4d9e`) and stabilise the `release.yml`
+contract:
+
+- #102 — lowercase the GHCR image names (the OCI
+  spec requires the path portion of the image
+  ref to be lowercase; buildx rejected
+  `ghcr.io/QAdversif/AegisPanel-ui:v0.4.0`).
+- #103 — allow `workflow_dispatch` to actually
+  push (the previous gating silently no-op'd
+  the registry write on re-runs).
+- #104 — use the `tag` input for the UI image
+  on `workflow_dispatch` (the previous
+  `github.ref_name` resolved to the branch
+  name `main`, not the supplied tag).
+- #111 — explicit semver tags for the panel
+  image (the `metadata-action`'s semver
+  extraction only worked on tag-push events;
+  on `workflow_dispatch` the panel
+  `0.4.0` / `0.4` tags stayed on the
+  original digest).
+
+Documented under `[Unreleased]` in
+`CHANGELOG.md`; no application code changed,
+only `.github/workflows/release.yml`. See
+`docs/ROADMAP.md` §"v0.4.0 release workflow
+contract" for the consolidated contract.
 
 For detailed history see §25 of `ARCHITECTURE.md`.
 

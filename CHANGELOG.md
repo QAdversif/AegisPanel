@@ -7,14 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Documentation (v0.4.0 release, #100)
+### Fixed (release workflow post-v0.4.0 follow-ups, #102 / #103 / #104 / #111)
 
-- **`docs/ROADMAP.md`** — the project roadmap. Documents the
-  v0.4.0-d Path C status, v0.5.0 polish, v0.6.0 plans,
-  v0.7.0 webhooks, v1.0.0-mvp-soft-launch GA, and the 9
-  open-gap packages (cabinet, caddy, cascades, decoy,
-  events, mcp, notifications, stats, subscriptions-plural)
-  with their post-v1.0 targeting. Closes #100.
+These four PRs land on `main` after the `v0.4.0` git
+tag (which points to `39d4d9e`). They touch only
+`.github/workflows/release.yml`; no application code
+changed. Their purpose is to make the `v0.4.0`
+GHCR images land in the expected state on
+`workflow_dispatch` re-runs (and to leave a stable
+release contract for future maintainers). Documented
+under `[Unreleased]` because they are not part of
+the `v0.4.0` tag itself; they will ship in `v0.4.1`
+or the next release.
+
+- **`fix(ci): lowercase the GHCR image names in
+  release.yml` (#102)** — `release.yml` hardcoded
+  the image paths as `ghcr.io/QAdversif/AegisPanel`
+  and `ghcr.io/QAdversif/AegisPanel-ui`. The OCI
+  image-spec requires the path portion (after the
+  registry) to be lowercase, and buildx rejected
+  the v0.4.0 release build with
+  `repository name must be lowercase`. The
+  `ci.yml` workflow already used the lowercase
+  form (fixed in the v0.3.0 cleanup batch);
+  `release.yml` was the hold-out. The two
+  `QAdversif` / `AegisPanel` tokens became
+  `qadversif` / `aegispanel`. Closes #102.
+- **`fix(ci): allow workflow_dispatch to actually
+  push in release.yml` (#103)** — the
+  `release.yml` workflow gated the GHCR push
+  (and the `Login to GHCR` step) on
+  `github.event_name == 'push'`. On
+  `workflow_dispatch` re-runs, the build steps
+  `push: ${{ github.event_name == 'push' }}`
+  evaluated to `false`, so the build "succeeded"
+  but the registry write was a no-op. The
+  `Create GitHub release` step is intentionally
+  left gated on `'push'` only (a re-run is for
+  re-pushing images, not re-creating the
+  release). The three push/login conditions are
+  extended to `push || workflow_dispatch`.
+  Closes #103.
+- **`fix(ci): use tag input for UI image in
+  release.yml workflow_dispatch` (#104)** — the
+  UI image build step hardcoded `github.ref_name`
+  as the image tag. On `workflow_dispatch`,
+  `github.ref_name` is the branch name (`main`),
+  not the operator-supplied `tag` input, so the
+  UI image ended up tagged
+  `ghcr.io/qadversif/aegispanel-ui:main` instead
+  of `:v0.4.0` on the v0.4.0 re-run. A new
+  job-level `env.release_tag` resolves to
+  `github.ref_name` on `push` and to `inputs.tag`
+  on `workflow_dispatch`; the UI image tag uses
+  it. The `Show tag` step echoes
+  `release_tag = ${{ env.release_tag }}` for log
+  visibility. Closes #104.
+- **`fix(ci): explicit semver tags for panel image
+  in release.yml` (#111)** — the panel
+  `metadata-action` used
+  `type=semver,pattern={{version}}` which only
+  derives a version from the ref on `push` events.
+  On `workflow_dispatch` the ref is the branch
+  (`main`), the action emits no semver tags, and
+  the `0.4.0` / `0.4` tags stayed on the original
+  tag-push digest (acceptable for `v0.4.0` since
+  the same code is on both digests; brittle for
+  any future re-publish that includes an
+  application-code change). A new
+  `Compute release version` step derives `version`
+  and `short` from `env.release_tag` (bash
+  parameter expansion + `sed`) and feeds them to
+  the metadata-action as `type=raw` values. The
+  `latest=auto` flavor and the
+  `enable={{is_default_branch}}` raw `latest` tag
+  are kept. Both event paths now produce the
+  same `[version, short, latest]` tag list.
+  Closes #111.
 
 ## [0.4.0] - 2026-07-26
 

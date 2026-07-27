@@ -5,7 +5,7 @@
 > are listed in `CHANGELOG.md` (per-release log) and `docs/adr/`
 > (architecturally significant decisions).
 
-## Status (2026-07-26)
+## Status (2026-07-27)
 
 | Tag                  | Scope                                                                                                  | Status               |
 | ---                  | ---                                                                                                    | ---                  |
@@ -17,8 +17,9 @@
 | `v0.4.0-d.r1`        | `users.User` wire-format compat with `subscription.User`                                                  | ✅ shipped (#96)      |
 | `v0.4.0-d.r2`        | Drop subscription-side Store / MemoryStore / PgStore user-CRUD (Path C step 2)                          | ✅ shipped (#97)      |
 | `v0.4.0-d.r3`        | Move `admin_handler.go` to `users`; drop Service-level thin wrappers (Path C step 3)                   | ✅ shipped (#99)      |
-| `v0.4.0-d.r4`        | Cleanup pass + roadmap (this doc) — Path C step 4                                                       | 🔄 this PR           |
-| `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#99 + this PR                                                  | ⏳ tag after merge   |
+| `v0.4.0-d.r4`        | Cleanup pass + roadmap — Path C step 4                                                                  | ✅ shipped (#100)     |
+| `v0.4.0-post`        | Release workflow fixes: GHCR image tag lowercase, `workflow_dispatch` push, UI image tag input, explicit semver tags — no application code change | ✅ shipped (#102, #103, #104, #111) |
+| `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#100, on commit `39d4d9e`                                       | ✅ shipped (tag on `39d4d9e`, release notes via `gh release create`) |
 | `v0.5.0`             | Polish: smoke on fresh VM, backup/restore, JSON logs, quickstart doc, GPG-verify sing-box, GitHub API SHA-256 | ⏳ next |
 | `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ⏳                   |
 | `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ⏳                   |
@@ -45,17 +46,58 @@ The d.1 PR (#95) shipped a `users` package that duplicated
    wrappers from `subscription.Service`. Render handler
    consults `*users.Service` directly for the
    `sub_token`-→-user lookup. — landed.
-5. **d.r4 (this PR)**: Cleanup pass + this roadmap.
+5. **d.r4 (#100)**: Cleanup pass + this roadmap.
    `DefaultSubTokenRotationGrace` is now a public constant
    on `users.Service` (was a test-internal re-export).
    Subscription package doc trimmed of the d.r2
-   "AEGIS_USERS_BACKEND" reference. — this PR.
+   "AEGIS_USERS_BACKEND" reference. — landed.
 
 **Net Path C diff:** `internal/subscription` shed ~600 lines
 (Store / MemoryStore / PgStore user-CRUD + Service thin
 wrappers + admin handler); `internal/users` gained ~900
 lines (d.1 + d.r1 + d.r2 + d.r3 + d.r4 in this PR). The
 subscription package is now a pure render orchestrator.
+
+## v0.4.0 release workflow contract
+
+The `release.yml` workflow supports two event
+paths that now produce **identical** GHCR tag
+lists for both images:
+
+- **Tag-push** (`git push origin vX.Y.Z`) —
+  `github.event_name = 'push'`,
+  `github.ref_name = 'vX.Y.Z'`. Login + push +
+  Create GitHub release all run. Panel
+  `metadata-action` emits `[X.Y.Z, X.Y, latest]`;
+  UI tagged `ghcr.io/qadversif/aegispanel-ui:vX.Y.Z`.
+- **workflow_dispatch re-run**
+  (`gh workflow run release -f tag=vX.Y.Z`) —
+  `github.event_name = 'workflow_dispatch'`,
+  `github.ref_name = 'main'`. Login + push run;
+  Create GitHub release is SKIPPED. Panel
+  `[X.Y.Z, X.Y, latest]` (via the
+  `Compute release version` step + raw tags);
+  UI `:vX.Y.Z` (via `env.release_tag`).
+
+This contract was fixed across four PRs
+(#102, #103, #104, #111) that landed on
+`main` *after* the `v0.4.0` git tag (which
+points to `39d4d9e`). The fixes are
+infrastructure-only (no application code
+change) and are documented under `[Unreleased]`
+in `CHANGELOG.md` to be picked up by the next
+`v0.4.1` / `v0.5.0` release. The previous
+behaviour — push silently disabled on
+`workflow_dispatch`, UI image tagged with the
+branch name, panel `X.Y.Z` / `X.Y` tags left
+on the original tag-push digest — is gone.
+
+The `latest` tag follows correctly in both
+cases: skipped for prerelease (`-rc` / `-beta`
+/ `-alpha`) on tag-push via the
+`flavor: latest=auto`; emitted on
+`workflow_dispatch` from the default branch
+via the raw `enable={{is_default_branch}}`.
 
 ## v0.5.0 — polish before v0.6.0+
 
