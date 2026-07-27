@@ -20,6 +20,13 @@ jobs:
   release:
     name: release
     runs-on: ubuntu-latest
+    # The image tag to publish. For tag-push events this is the
+    # pushed tag (e.g. `v0.4.0`); for `workflow_dispatch` re-runs
+    # the operator supplies the tag via the `tag` input. Both
+    # branches need to converge on a single tag value so the
+    # UI image and the panel semver tags end up on the same ref.
+    env:
+      release_tag: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,6 +35,7 @@ jobs:
       - name: Show tag
         run: |
           echo "tag = ${{ github.ref_name }}"
+          echo "release_tag = ${{ env.release_tag }}"
           git tag --list 'v*' | sort -V
 
       # Build the panel image.
@@ -71,7 +79,7 @@ jobs:
           context: .
           file: frontend/Dockerfile
           push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-          tags: ghcr.io/qadversif/aegispanel-ui:${{ github.ref_name }}
+          tags: ghcr.io/qadversif/aegispanel-ui:${{ env.release_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
