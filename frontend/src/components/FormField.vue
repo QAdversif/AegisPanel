@@ -85,7 +85,6 @@ const hasError = computed(() => Boolean(errorMessage.value))
     </Label>
     <slot
       :id="fieldId"
-      :name="props.name"
       :value="value"
       :on-blur="handleBlur"
       :has-error="hasError"
