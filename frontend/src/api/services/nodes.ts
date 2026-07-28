@@ -20,8 +20,12 @@ export interface NodeCreateRequest {
 export type NodeUpdateRequest = Partial<NodeCreateRequest>
 
 export async function listNodes(): Promise<Node[]> {
-  const { data } = await api.get<Node[]>('/api/v1/nodes/')
-  return data
+  // The panel's /api/v1/nodes/ endpoint returns
+  // `{ nodes: Node[] }` rather than a bare array, so
+  // unwrap before handing the list back to callers.
+  // (Same shape used by listHosts / listUsers / listAudits.)
+  const { data } = await api.get<{ nodes: Node[] }>('/api/v1/nodes/')
+  return data.nodes ?? []
 }
 
 export async function getNode(id: UUID): Promise<Node> {

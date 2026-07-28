@@ -17,6 +17,24 @@ import type { ApiError } from '@/types'
 
 const STORAGE_KEY = 'aegis.tokens'
 
+// Recursively convert snake_case object keys to camelCase.
+// Used in the response interceptor to bridge the panel's
+// snake_case OpenAPI output to the UI's camelCase TS types.
+function camelizeKeys<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => camelizeKeys(item)) as unknown as T
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const camelKey = k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase())
+      out[camelKey] = camelizeKeys(v as unknown)
+    }
+    return out as unknown as T
+  }
+  return value
+}
+
 interface TokenPair {
   accessToken: string
   refreshToken: string
@@ -44,7 +62,18 @@ function persistTokens(tokens: TokenPair | null): void {
 }
 
 export const api = axios.create({
-  baseURL: '/',
+  // Base URL is the directory part of the current URL.
+  // In the Phase 1 sub-path deploy this resolves to
+  // "/p-7k2mx9n4q8r3/" so API calls go through top-level
+  // Caddy's `handle_path` rule; in dev it resolves to "/"
+  // and Vite's `/api` dev-proxy takes over. The previous
+  // hard-coded `'/'` sent every request to the apex, which
+  // top-level Caddy has no route for and answered with the
+  // decoy HTML site (and CORS-blocked the real POST).
+  baseURL: (() => {
+    const m = window.location.pathname.match(/^(\/[^/]+\/)/)
+    return m ? m[1] : '/'
+  })(),
   timeout: 15_000,
   headers: {
     Accept: 'application/json',
@@ -85,7 +114,14 @@ async function refreshTokens(): Promise<string | null> {
       flushRefreshQueue(null)
       return null
     }
-    const { data } = await axios.post<{
+    // Use the `api` instance, not the bare `axios` import —
+    // the bare `axios.post` doesn't honour the dynamic
+    // baseURL set in this file, so in the Phase 1 sub-path
+    // deploy it hit the apex (decoy HTML 200) instead of the
+    // panel's real /api/v1/auth/refresh endpoint, the JSON
+    // parse threw, the catch block wiped the tokens, and
+    // every subsequent /me call came back 401.
+    const { data } = await api.post<{
       access_token: string
       refresh_token: string
       expires_at: string
@@ -108,7 +144,26 @@ async function refreshTokens(): Promise<string | null> {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // The panel's OpenAPI spec uses snake_case (access_token,
+    // refresh_token, expires_at) but every TS interface in
+    // `services/*` and `stores/*` was written in camelCase.
+    // A plain `as` cast on `api.post<LoginResponse>` only
+    // silences the type system; at runtime the response
+    // really is snake_case, so `result.accessToken` is
+    // `undefined`, the token pair stored in localStorage is
+    // `{accessToken: undefined, refreshToken: undefined,
+    // expiresAt: undefined}`, JSON.stringify of which is the
+    // empty object `"{}"` — and the next request's
+    // interceptor finds no accessToken to attach, so the
+    // server answers 401 "missing bearer token". Convert
+    // once on the way in so every consumer can stay in
+    // camelCase.
+    if (response.data && typeof response.data === 'object') {
+      response.data = camelizeKeys(response.data)
+    }
+    return response
+  },
   async (error: AxiosError<ApiError>) => {
     const original = error.config as AxiosRequestConfig & { _retried?: boolean }
     const status = error.response?.status
