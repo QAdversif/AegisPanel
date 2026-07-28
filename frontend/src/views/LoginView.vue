@@ -49,8 +49,12 @@ const { handleSubmit, isSubmitting, setFieldValue } = useZodForm({
   schema: loginSchema,
   initialValues: { username: '', password: '' },
   onSubmit: async (values) => {
+    // eslint-disable-next-line no-console
+    console.log('[DBG]', 'OS', values)
     try {
       await auth.login(values.username, values.password)
+      // eslint-disable-next-line no-console
+      console.log('[DBG]', 'OK', 'redirecting')
       toast.add({
         title: t('login.welcome'),
         description: values.username,
@@ -59,6 +63,8 @@ const { handleSubmit, isSubmitting, setFieldValue } = useZodForm({
       const redirect = (route.query.redirect as string | undefined) ?? '/'
       await router.replace(redirect)
     } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[DBG]', 'THROW', error)
       const apiErr = toApiError(error)
       toast.add({
         title: t('login.failed'),
@@ -68,6 +74,9 @@ const { handleSubmit, isSubmitting, setFieldValue } = useZodForm({
     }
   },
 })
+
+// eslint-disable-next-line no-console
+console.log('[DBG]', 'HS', typeof handleSubmit)
 </script>
 
 <template>
@@ -87,7 +96,7 @@ const { handleSubmit, isSubmitting, setFieldValue } = useZodForm({
         <Form
           class="login__form"
           :is-submitting="isSubmitting"
-          @submit="handleSubmit"
+          @submit="(e?: Event) => { console.log('[DBG]', 'FS', e); return (handleSubmit as any)(e) }"
         >
           <FormField
             name="username"
