@@ -25,7 +25,7 @@
   binding, the control is whatever fits.
 -->
 <script setup lang="ts">
-import { computed, useId } from 'vue'
+import { computed, toRef, useId } from 'vue'
 import { useField } from 'vee-validate'
 
 import FormFieldError from './FormFieldError.vue'
@@ -50,11 +50,25 @@ const props = withDefaults(
 const generatedId = useId()
 const fieldId = computed(() => `field-${props.name}-${generatedId}`)
 
-const { value, errorMessage, handleBlur } = useField<string | number | boolean>(
-  () => props.name,
-  undefined,
-  { syncVModel: false },
-)
+// Bind the field name via `toRef` (reactive) instead of a
+// getter. The previous `() => props.name` form worked in
+// dev but the minified production build lost the
+// getter's `this` context — `useField` saw `undefined`
+// as the path, threw, and the surrounding `<script setup>`
+// blew up before the `<slot>` ever ran. That left the
+// page rendering labels (in the parent) and the submit
+// button (in the parent) but no inputs (in this
+// component's slot). `toRef` keeps the same reactive
+// linkage without depending on closure capture of
+// `props`.
+//
+// The previous `syncVModel: false` option was a v4
+// control-side hint for components that own the value
+// themselves; with the slot-based pattern we hand the
+// raw `value` to the consumer, so the option is not
+// needed (and was producing a different runtime path
+// through vee-validate).
+const { value, errorMessage, handleBlur } = useField<string | number | boolean>(toRef(props, 'name'))
 
 const hasError = computed(() => Boolean(errorMessage.value))
 </script>
