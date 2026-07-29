@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (aegis-pg-backup + aegis-pg-restore CLI, #125)
+
+- **`feat(cli): operator-side backup CLI`** —
+  two new binaries under `cmd/` that call the
+  `backups.Service` directly, bypassing the
+  panel's HTTP surface. The canonical
+  cron-friendly entry point for the
+  operator's own scheduler (`crontab`,
+  systemd-timer, etc.).
+  - `cmd/aegis-pg-backup/main.go` (~250 LOC) —
+    five subcommands: `list`, `get <id>`,
+    `create [--trigger manual|scheduled]`,
+    `delete <id>`, `download <id> <path>`.
+    Every subcommand writes a single JSON
+    value to stdout and exits 0; errors
+    go to stderr in `{"error":"..."}` shape.
+    Reads `AEGIS_BACKUPS_DIR` (default
+    `./var/backups`) and `AEGIS_POSTGRES_DSN`
+    (required for `create`). The `download`
+    subcommand refuses to write into the
+    backups dir itself (a typo by the
+    operator would otherwise overwrite a
+    managed dump with itself).
+  - `cmd/aegis-pg-restore/main.go` (~200 LOC) —
+    a SEPARATE binary from `aegis-pg-backup`
+    so the safety boundary is enforced at
+    the process level. The CLI surface is
+    one positional arg (`<id>`) plus
+    `--yes` / `--dry-run` flags. Two-step
+    confirmation: the operator must type
+    the backup id again before the
+    destructive op runs. Reads
+    `AEGIS_BACKUPS_ALLOW_UI_RESTORE` as a
+    sanity check (the DSN is the actual
+    security boundary; the flag catches
+    a typo in the operator's
+    `EnvironmentFile`). `--dry-run` runs
+    `pg_restore --list` for an eyeball
+    check.
+  - `.gitignore` — added the
+    `.git-commit-*.md` pattern (alongside
+    the existing `.git-commit-*.txt`) so
+    the commit-message draft files don't
+    sneak into the working tree.
+
+- **Why two binaries, not one with a
+  `restore` subcommand:** restore is
+  destructive (drops and recreates the
+  target database). Keeping the binaries
+  separate enforces the safety boundary at
+  the process level: an operator who
+  types `aegis-pg-backup restore <id>`
+  gets an `unknown subcommand` error, not
+  a silent data wipe. The `aegis-pg-backup`
+  binary is the safe default; the
+  `aegis-pg-restore` binary is the
+  intentional one-off path.
+
+- **What this PR does NOT ship** (deferred to
+  follow-ups):
+  - The HTTP-level restore endpoint is still
+    `ScopeBackups` + `AEGIS_BACKUPS_ALLOW_UI_RESTORE`
+    gated (see #120). The CLI is the
+    operator-only path; the UI path is
+    intentionally NOT exposed in v0.5.0.
+  - A `restore --to <timestamp>` flag
+    ("point-in-time recovery from the
+    archive") — would need a separate
+    basebackup + WAL-replay workflow. v0.5.x
+    follow-up.
+  - shell completion (`complete -C
+    "aegis-pg-backup list" ...`). Cosmetic
+    but useful for a daily-driver CLI.
+
+- Verification:
+  - `go build ./...` — clean
+  - `go vet ./...` — clean
+  - `golangci-lint run ./cmd/aegis-pg-backup/
+    ./cmd/aegis-pg-restore/` — 0 issues
+    (errcheck, errorlint, gosec, gofmt all
+    caught and fixed in the same PR cycle)
+  - `go test -count=1 ./...` — all existing
+    tests pass (no new test files; the
+    binaries are CLI-thin and the
+    underlying `backups.Service` is
+    already covered by the #120 tests)
+
 ### Added (container wiring for #119 secrets, #124)
 
 - **`chore(ops): install_panel role + prod
