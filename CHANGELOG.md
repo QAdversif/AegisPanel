@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (secrets via sops+age, #119)
+
+- **`chore(ops): secrets via sops+age`** —
+  replaces the Phase 1 fixture-credentials-in-env
+  model with a proper sops+age encrypted file
+  committed to the repo. The phase 1 deploy
+  shipped JWT, DB password, and admin password as
+  hard-coded env vars on the VPS (`aegis-fixture-*`
+  in `~/.aegis/deploy.local.md`); v0.5.0 moves
+  every one of them to `deploy/secrets/secrets.yml`,
+  encrypted with an operator-generated age keypair.
+  - `.sops.yaml` at the repo root defines
+    `creation_rules` matching `.*secrets.*\.yml$` to
+    the operator's age public key. The committed
+    example public key is a throwaway for the PR
+    demo — operators replace it with their own via
+    `sops updatekeys`.
+  - `deploy/secrets/secrets.example.yml` is a
+    sops-encrypted schema reference. Decrypting it
+    shows the field layout (jwt_secret,
+    admin_password, postgres_password, agent_bearer,
+    panel_path.admin, panel_path.sub,
+    dev.singbox.{version,sha256}). Operators copy
+    this to `secrets.yml` (gitignored), fill in real
+    values, and run `sops --encrypt --in-place`.
+  - `deploy/secrets/README.md` documents the
+    one-time age keygen, the field-by-field
+    generation commands, the rotation procedure,
+    and the security stance.
+  - `deploy/secrets/.gitignore` blocks plaintext
+    `secrets.yml` / `secrets.local.yml` while
+    allowing the example and any future `*.enc`
+    through.
+  - `deploy/ansible/roles/configure_secrets/` is
+    the deploy-side role that installs sops+age
+    (apt or direct download) and decrypts
+    `secrets.yml` to `/etc/aegis/secrets.env` (mode
+    0600, owner `aegis-deploy`). The role is
+    idempotent and runs a round-trip decrypt smoke
+    test before declaring success. The panel
+    container mounts the file at
+    `/run/aegis/secrets.env` and reads it via
+    `--env-file` (the env-var passthrough in
+    `deploy/docker/docker-compose.dev.yml` becomes
+    the only place that mentions the
+    `AEGIS_*_SECRET` env names; the values move from
+    being hard-coded in the compose file to
+    being sourced from the env file).
+  - Root `.gitignore` had a top-level `secrets/`
+    rule that was a catch-all for ad-hoc local
+    files. Removed in favour of the explicit
+    `deploy/secrets/.gitignore` so the canonical
+    `deploy/secrets/` tree can be committed.
+
+- The `secrets.example.yml` ships ENCRYPTED, not
+  plaintext. Reviewers without the matching age
+  private key see only the sops metadata
+  (`sops:` + `ENC[AES256_GCM,...]` blobs). The
+  plaintext is documented in the file's own
+  block-comment at the top, which is also encrypted;
+  decrypting once with `sops --decrypt` reveals
+  the schema.
+
+- The example public key in `.sops.yaml` is a
+  throwaway generated for the PR demo
+  (`age1ekwhyq7xftg3vqjka4rssrg77acrsa7hjjzs2vvlugc23j3gwfpqep7ggk`).
+  The matching private key is at
+  `~/.aegis/test-keys/age-example.key` on the original
+  author's machine only — **not** committed, **not**
+  in the repo. Operators replace both with their own
+  (`age-keygen -o ~/.aegis/age.key` + `sops updatekeys`).
+  This is the same trust model as SSH keypairs.
+
+- Out of scope (deferred to a follow-up):
+  - Wiring the `/etc/aegis/secrets.env` mount into
+    the panel container's `docker run` (the role
+    writes the file; the panel's `install_panel`
+    role needs to add the `--env-file` flag).
+  - Wiring the same into the `aegis-agent`
+    binary's systemd unit (the agent reads its
+    bearer from `/etc/aegis/agent-bearer`; the
+    `install_agent` role needs to copy the
+    `aegis.agent_bearer` value out of
+    `secrets.env`).
+  - Documentation update of `docs/operator-guide.md`
+    (the new doc) and `docs/guide/quickstart.md`
+    with the sops+age flow.
+
 ### Changed (repo hygiene, post-Phase 1)
 
 - **`chore(repo): gitignore the operator deploy
