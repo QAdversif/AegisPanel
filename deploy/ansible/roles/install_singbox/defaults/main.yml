@@ -34,19 +34,33 @@ aegis_singbox_version: "1.14.0-beta.2"
 # just defaults to the empty string for clarity.
 aegis_singbox_linux_variant: ""
 
-# aegis_singbox_sha256 is the SHA-256 of the tarball
-# for the default arch (x86_64 / linux-amd64). sing-box
-# releases do NOT publish a sidecar .sha256 file; the
-# digest is only available via the GitHub API asset
-# metadata. Operators who bump aegis_singbox_version
-# MUST also bump this hash in lockstep. The role
-# enforces the check via ansible.builtin.assert
-# (see tasks/main.yml).
+# aegis_singbox_release_api_url is the GitHub Releases
+# API endpoint the role queries for the per-asset
+# SHA-256. The v0.5.0 workflow looks up the digest
+# at install time (the `assets[].digest` field of
+# the API response, format `sha256:<hex>`) so the
+# operator no longer has to update a hardcoded
+# hash in lockstep with the version bump.
 #
-# v0.5.0 will replace this with a runtime fetch via
-# the GitHub API; the SHA-256 hardcode is a v0.4.0-c
-# shortcut to keep the role self-contained.
-aegis_singbox_sha256: "f68715815741e59f25e32904cabcd5924a0461a910d8e9c9612512b957709ef4"
+# GPG / SHA256SUMS verification was the original
+# scope; SagerNet does not publish detached
+# signatures or a SHA256SUMS file on GitHub
+# releases, so the trust model is the GitHub API
+# response itself (which is signed by GitHub via
+# the standard `X-GitHub-...` headers and TLS).
+# Cosign signing of our own Docker images is a
+# v0.5.x follow-up.
+aegis_singbox_release_api_url: "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{{ aegis_singbox_version }}"
+
+# aegis_singbox_release_api_token is optional. The
+# GitHub Releases API allows 60 unauthenticated
+# requests per hour per IP — more than enough for
+# a one-shot install role. Operators that hammer
+# the role (CI matrix on every push, for example)
+# should set a Personal Access Token (no scopes
+# needed for public repos) via the `secrets.env`
+# indirection. Empty string = unauthenticated.
+aegis_singbox_release_api_token: ""
 
 # aegis_singbox_user is the Linux user sing-box runs
 # as. Matches the Debian package convention (`_sing-box`).
