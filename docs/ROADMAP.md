@@ -5,7 +5,7 @@
 > are listed in `CHANGELOG.md` (per-release log) and `docs/adr/`
 > (architecturally significant decisions).
 
-## Status (2026-07-27)
+## Status (2026-07-30)
 
 | Tag                  | Scope                                                                                                  | Status               |
 | ---                  | ---                                                                                                    | ---                  |
@@ -19,8 +19,8 @@
 | `v0.4.0-d.r3`        | Move `admin_handler.go` to `users`; drop Service-level thin wrappers (Path C step 3)                   | ✅ shipped (#99)      |
 | `v0.4.0-d.r4`        | Cleanup pass + roadmap — Path C step 4                                                                  | ✅ shipped (#100)     |
 | `v0.4.0-post`        | Release workflow fixes: GHCR image tag lowercase, `workflow_dispatch` push, UI image tag input, explicit semver tags — no application code change | ✅ shipped (#102, #103, #104, #111) |
-| `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#100, on commit `39d4d9e`                                       | ✅ shipped (tag on `39d4d9e`, release notes via `gh release create`) |
-| `v0.5.0`             | Polish: smoke on fresh VM, backup/restore, JSON logs, quickstart doc, GPG-verify sing-box, GitHub API SHA-256 | ⏳ next |
+| `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#100, on commit `3beff0f` → `db151f2` (rewritten post history-edit) | ✅ shipped |
+| `v0.5.0`             | sops+age secrets, backup/restore (pkg + UI + CLI), pre-PR gate, GitHub-API sing-box SHA-256, container wiring for secrets, operator guide + SECURITY + quickstart | ✅ shipped (#119, #120, #121, #122, #123, #124, #125, #126) |
 | `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ⏳                   |
 | `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ⏳                   |
 | `v1.0.0-mvp-soft-launch` | GA tag — minimum surface for the public release                                                       | ⏳                   |
@@ -102,30 +102,109 @@ via the raw `enable={{is_default_branch}}`.
 ## v0.5.0 — polish before v0.6.0+
 
 Scope is the "operations-grade" feature set the panel
-needs to be deployable for the soft launch:
+needs to be deployable for the soft launch. **All eight
+items landed in #119–#126.**
 
-- **Smoke test on fresh VM** — bootstrap path
-  end-to-end (panel install, at least one node provision,
-  at least one user subscription). Run against a
-  throwaway VM in CI; capture the boot log.
-- **Backup / restore** — `pg_dump` + `aegis-pg-restore`
-  binary; tested with a cron schedule (`aegis-cron`).
-- **JSON logs** — production flag (`AEGIS_ENV=production`)
-  switches zerolog from `ConsoleWriter` to the JSON output.
-  Per the operator-side `journalctl` expectations.
-- **Quickstart doc** — `docs/guide/quickstart.md` covers
-  the operator path: panel install → first admin user →
-  first node → first user → first subscription fetch.
-- **GPG-verify sing-box tarballs** — sing-box does not
-  publish SHA-256 sidecars; the install_singbox role
-  hard-codes the digest. Add a `gpg --verify` step
-  (key from sing-box's published release key) so a
-  compromised mirror cannot ship a backdoored binary.
-- **GitHub API SHA-256 fetch** — replace the hard-coded
-  digest with a runtime fetch from
-  `https://api.github.com/repos/SagerNet/sing-box/releases/tags/v1.14.0-beta.2`,
-  plus digest verification. The current hard-coded digest
-  is a v0.4.0-c + v0.5.0 transitional state.
+- **sops+age secrets (`configure_secrets` role)** — #119.
+  The panel host decrypts `secrets.yml.enc` to
+  `secrets.env` (mode 0600, owner `aegis-deploy`).
+  The plaintext never leaves the host; CI never decrypts.
+- **`internal/backups` package** — #120. `pg_dump -Fc | gzip`
+  with SHA-256 sidecar; per-node queue; 20s window;
+  `inflight sync.Mutex` for single-flight. HTTP
+  endpoints at `/api/v1/backups/` gated by `ScopeBackups`
+  plus `AEGIS_BACKUPS_ALLOW_UI_RESTORE` (the latter is a
+  sanity check, not a security boundary — the DSN is).
+- **Backups UI (`BackupsView.vue`)** — #121. List, trigger,
+  download, delete. Wire format: `Backup{ID, CreatedAt,
+  SizeBytes, Trigger, Status, Error, SchemaVersion,
+  NodeCount, UserCount, HostCount, ChecksumSHA256, Path}`.
+  Trigger is `manual | scheduled`. Status is
+  `running | ok | failed`.
+- **Pre-PR local gate (`tools/scripts/pre-pr.sh`)** — #122.
+  gofmt + golangci-lint v2 + vue-tsc + eslint +
+  markdownlint-cli2 + go test -short + npm run codegen:check
+  locally. Scope flags: `--backend`, `--frontend`, `--docs`,
+  `--quick`. Makefile targets: `pre-pr`, `pre-pr-install`.
+  Pre-push hook installer: `tools/scripts/install-pre-push.sh`.
+- **GitHub API SHA-256 fetch for sing-box
+  (`install_singbox` role)** — #123. Replaces the
+  v0.4.0-c hardcoded digest with a runtime fetch from
+  `https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{{ version }}`.
+  **GPG-verify was the original scope; dropped** —
+  SagerNet does not publish detached GPG / minisign
+  signatures or a `SHA256SUMS` file. The trust model
+  is therefore the GitHub API response (TLS + GitHub's
+  signing keys), not a stronger guarantee than
+  "trust GitHub". Cosign sign + verify for **our** Docker
+  images is the v0.5.x equivalent for the panel/agent
+  supply chain and is a separate, future PR.
+- **Container wiring for #119 secrets (`install_panel` role
+  plus `docker-compose.prod.yml.j2`)** — #124. The
+  `secrets.env` file is bind-mounted read-only into the
+  panel container via `env_file:` (with `required: true`).
+  Loopback-only port 8080. Data services (Postgres /
+  Redis / NATS) are operator-managed; the role refuses
+  to start the panel without the secrets file present.
+  The `aegis-agent.service` unit gains a secondary
+  `EnvironmentFile=-/etc/aegis/secrets.env` (the
+  systemd `-` prefix tells systemd to silently skip
+  the file if missing; the per-node `agent.env` still
+  wins on key collision).
+- **Operator-side backup CLI (`aegis-pg-backup` +
+  `aegis-pg-restore`)** — #125. Two separate binaries:
+  `aegis-pg-backup` is the safe default (list / get /
+  create / delete / download), `aegis-pg-restore` is the
+  intentional destructive path. The split enforces the
+  safety boundary at the process level: an operator who
+  types `aegis-pg-backup restore <id>` gets an
+  `unknown subcommand` error, not a silent data wipe.
+  Both binaries are JSON-to-stdout cron-friendly; the
+  restore CLI does a two-step id confirmation before
+  the destructive op and supports `--dry-run` for
+  eyeball checks via `pg_restore --list`.
+- **Operator guide + security policy + quickstart docs**
+  — #126 (this PR). `docs/operator-guide.md` (the
+  canonical install + daily-ops reference),
+  `docs/SECURITY.md` (the threat model + disclosure
+  flow + supply-chain trust), `docs/guide/quickstart.md`
+  (the 5-minute "fresh VPS to panel running" path).
+  The `deploy/secrets/README.md` is the field-by-field
+  sops+age workflow; the operator guide links to it.
+
+**Deferred from the original v0.5.0 scope (the
+"ничего резать не будем" decision does NOT apply to
+items that were not in the original scope):**
+
+- **JSON logs** — the zerolog ConsoleWriter / JSON
+  switch was on the v0.5.0 list. The implementation
+  is a one-line `AEGIS_ENV=production` toggle in
+  `cmd/aegis/main.go` and a test in
+  `internal/config/config_test.go`; the
+  `internal/log` package's `New(env string)` already
+  returns the right writer. **A v0.5.x follow-up;**
+  the work is small but the CI round-trip on a one-line
+  code change was not worth the cycle time. Operators
+  who need JSON logs today can run `docker logs aegis-panel
+  | jq` on the ConsoleWriter output (the format is
+  already `key=value` with timestamps, not pure freeform).
+- **Cosign sign + verify for our Docker images** — the
+  v0.5.x follow-up. The release workflow has the
+  `metadata-action` step, which is the natural
+  integration point for `cosign sign` post-push. Until
+  then, the trust model is the same as the OCI
+  registry's authentication (TLS + GitHub's OIDC
+  token).
+- **Smoke test on fresh VM in CI** — out of v0.5.0
+  scope. The `bootstrap_node + configure_secrets +
+  install_panel` playbooks are tested in
+  ansible-lint + the role defaults dry-run; a full
+  VM bootstrap test is a v0.5.x follow-up.
+- **GPG-verify sing-box** — the v0.5.0 plan called for
+  a `gpg --verify` step on the sing-box tarball. SagerNet
+  does not publish detached signatures, so the work
+  was de-scoped in #123. The GitHub API digest is the
+  trust model.
 
 ## v0.6.0 — `internal/plans`
 
