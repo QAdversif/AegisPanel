@@ -209,6 +209,56 @@ type Config struct {
 	// must be writable by the panel process; the
 	// installer creates it if absent.
 	AgentKnownHosts string `env:"AEGIS_AGENT_KNOWN_HOSTS" envDefault:"./var/known_hosts"`
+
+	// BackupsDir is the local directory where the
+	// `backups` package stores its dump files
+	// (`<id>.dump.gz`) and the JSON metadata index
+	// (`_index.json`). The directory is auto-created
+	// at boot with mode 0700; the operator's
+	// `configure_secrets` role (#119) and a future
+	// `install_panel` role update are responsible
+	// for ownership (`aegis-deploy:aegis-deploy`).
+	// In dev the default `./var/backups` is
+	// fine; production sets
+	// `/var/lib/aegis/backups` via the sops+age
+	// secrets file or the systemd unit's
+	// EnvironmentFile.
+	BackupsDir string `env:"AEGIS_BACKUPS_DIR" envDefault:"./var/backups"`
+
+	// BackupsAllowUIRestore gates the HTTP-level
+	// restore endpoint. Default false — the
+	// restore button in the UI is hidden, and
+	// the POST /api/v1/backups/{id}/restore
+	// call returns 403. The CLI binary
+	// (cmd/aegis-pg-restore, future PR) bypasses
+	// the HTTP path entirely and calls
+	// Service.Restore directly.
+	BackupsAllowUIRestore bool `env:"AEGIS_BACKUPS_ALLOW_UI_RESTORE" envDefault:"false"`
+
+	// BackupsRetentionDays is the maximum age (in
+	// days) of any retained backup. The Cleanup
+	// pass at the end of every Create removes
+	// anything older. Zero or negative disables
+	// the age cap (use MaxCount instead, or both
+	// at zero to retain forever).
+	BackupsRetentionDays int `env:"AEGIS_BACKUPS_RETENTION_DAYS" envDefault:"30"`
+
+	// BackupsMaxCount is the maximum number of
+	// backups to keep. The Cleanup pass trims to
+	// the most recent N if there are more. Zero
+	// or negative disables the count cap.
+	BackupsMaxCount int `env:"AEGIS_BACKUPS_MAX_COUNT" envDefault:"0"`
+
+	// BackupsCron is a 5-field cron expression
+	// (M H DoM Mo DoW) the in-process scheduler
+	// ticks against. Empty disables the
+	// scheduler (manual-only mode). The parser
+	// supports wildcards and specific values
+	// only — no `*/N` step syntax and no
+	// `1-5` ranges in v0.5.0. The operator
+	// typically writes "0 2 * * *" (every day
+	// at 02:00 panel-local time).
+	BackupsCron string `env:"AEGIS_BACKUPS_CRON" envDefault:""`
 }
 
 // Load reads `.env` (if present) and then parses the environment.
