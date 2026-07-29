@@ -16,6 +16,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/backups"
 	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
@@ -44,6 +45,7 @@ func Build(
 	panelCfgSvc *panelcfg.Service,
 	auditsSvc *audits.Service,
 	bootstrapSvc *bootstrap.Service,
+	backupsSvc *backups.Service,
 	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -141,6 +143,17 @@ func Build(
 		// full entry with before/after. v0.3+ adds
 		// the mutating-handler write call-sites.
 		r.Mount("/audits", audits.Router(auditsSvc, authSvc.Middleware()))
+
+		// Backups — v0.5.0 (#120). Mounts the
+		// internal/backups handler at
+		// /api/v1/backups. All endpoints require
+		// ScopeBackups; the scope is granted only
+		// to the `admin` role. The handler is a
+		// thin wrapper around the backups.Service;
+		// the actual pg_dump subprocess, retention
+		// cleanup, and (optional) scheduler live
+		// in the Service.
+		r.Mount("/backups", backups.NewHandler(backupsSvc, authSvc.Middleware()).Mount())
 
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)
