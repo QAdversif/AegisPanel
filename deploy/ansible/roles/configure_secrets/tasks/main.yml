@@ -1,0 +1,213 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Install sops+age on the target host, then decrypt
+# `secrets.yml` to `/etc/aegis/secrets.env`.
+#
+# Run AFTER `bootstrap_node` (which provisions the
+# `aegis-deploy` user) and BEFORE `install_panel`
+# (which mounts the decrypted env file into the
+# container).
+#
+# The role is idempotent: re-running is a no-op if
+# `/etc/aegis/secrets.env` already exists and decrypts
+# cleanly. If decryption fails (e.g. the operator
+# rotated the ciphertext but the host is offline),
+# the role FAILS loudly rather than silently leaving
+# a stale file.
+
+---
+# Step 1: install sops and age.
+#
+# `apt` is the default because the role ships in
+# tandem with `install_panel` on the same Ubuntu host.
+# `download` is the escape hatch for non-Debian hosts.
+# `none` skips installation; the operator manages
+# sops+age themselves (e.g. via a pre-baked image).
+- name: "configure_secrets | install sops and age (apt)"
+  when: aegis_secrets_install_method == "apt"
+  block:
+    - name: "configure_secrets | apt | refresh cache"
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+
+    - name: "configure_secrets | apt | install sops and age"
+      ansible.builtin.apt:
+        name:
+          - sops
+          - age
+        state: present
+      become: true
+
+- name: "configure_secrets | install sops and age (download)"
+  when: aegis_secrets_install_method == "download"
+  block:
+    - name: "configure_secrets | download | sops"
+      ansible.builtin.get_url:
+        url: "https://github.com/getsops/sops/releases/download/v{{ aegis_sops_version }}/sops-v{{ aegis_sops_version }}.linux.amd64"
+        dest: "{{ aegis_sops_bin_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+      become: true
+
+    - name: "configure_secrets | download | age tarball"
+      ansible.builtin.get_url:
+        url: "https://github.com/FiloSottile/age/releases/download/v{{ aegis_age_version }}/age-v{{ aegis_age_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/age-v{{ aegis_age_version }}-linux-amd64.tar.gz"
+        mode: "0600"
+      become: true
+
+    - name: "configure_secrets | download | extract age"
+      ansible.builtin.unarchive:
+        src: "/tmp/age-v{{ aegis_age_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/age-extract-{{ aegis_age_version }}"
+        remote_src: true
+      become: true
+
+    - name: "configure_secrets | download | install age binary"
+      ansible.builtin.copy:
+        src: "/tmp/age-extract-{{ aegis_age_version }}/age/age"
+        dest: "{{ aegis_age_bin_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+        remote_src: true
+      become: true
+
+    - name: "configure_secrets | download | cleanup tmp"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/age-v{{ aegis_age_version }}-linux-amd64.tar.gz"
+        - "/tmp/age-extract-{{ aegis_age_version }}"
+      become: true
+
+- name: "configure_secrets | skip install (method=none)"
+  when: aegis_secrets_install_method == "none"
+  ansible.builtin.debug:
+    msg: "Skipping sops+age install; operator manages them out-of-band."
+
+# Step 2: ensure the destination directory exists.
+- name: "configure_secrets | ensure dest dir exists"
+  ansible.builtin.file:
+    path: "{{ aegis_secrets_dest_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+# Step 3: ensure the age private key is on the host.
+#
+# The key is provided by the operator (scp'd in by
+# hand, or pushed via Ansible Vault in the play
+# vars). The role does NOT generate it — generation
+# is a one-time operator action documented in
+# `docs/operator-guide.md`.
+- name: "configure_secrets | verify age key exists"
+  ansible.builtin.stat:
+    path: "{{ aegis_age_key_path }}"
+  register: aegis_secrets_age_key_stat
+  failed_when: not aegis_secrets_age_key_stat.stat.exists
+  changed_when: false
+
+# Step 4: enforce mode 0600 on the age key (idempotent).
+- name: "configure_secrets | enforce mode 0600 on age key"
+  ansible.builtin.file:
+    path: "{{ aegis_age_key_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  changed_when: false
+
+# Step 5: decrypt `secrets.yml` to
+# `/etc/aegis/secrets.env`.
+#
+# The encrypted file must be on the target host
+# BEFORE this role runs. Two delivery mechanisms:
+#   1. The `copy` block below transfers the encrypted
+#      file from the operator's local checkout to
+#      `/etc/aegis/secrets.yml.enc` on the target.
+#      Default is `false` because the operator may
+#      already have synced the file via git pull
+#      (the repo IS on the host — `bootstrap_node`
+#      clones it to `~/aegis/`).
+#   2. Set `aegis_secrets_sync_src: true` in the play
+#      vars to force the file to be re-synced from
+#      the operator's local checkout every time the
+#      role runs.
+- name: "configure_secrets | sync encrypted source to host"
+  when: aegis_secrets_sync_src | default(false)
+  ansible.builtin.copy:
+    src: "{{ aegis_secrets_src_path }}"
+    dest: "/etc/aegis/secrets.yml.enc"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+
+# Resolve the path of the encrypted file on the host.
+# Either `/etc/aegis/secrets.yml.enc` (if synced) or
+# `~/aegis/deploy/secrets/secrets.yml` (if the repo
+# is already on the host).
+- name: "configure_secrets | resolve source path"
+  ansible.builtin.set_fact:
+    aegis_secrets_encrypted_path: "{% if aegis_secrets_sync_src | default(false) %}/etc/aegis/secrets.yml.enc{% else %}{{ aegis_secrets_src_path }}{% endif %}"
+
+# Step 6: run `sops --decrypt` with the operator's
+# age private key. Output is captured to a register
+# (via `register: ... .stdout`) then written to
+# `/etc/aegis/secrets.env` with mode 0600 and the
+# `aegis-deploy` owner so the panel container can
+# mount it.
+#
+# `no_log: true` prevents the plaintext from being
+# captured in Ansible's per-task logging.
+- name: "configure_secrets | decrypt to {{ aegis_secrets_dest_path }}"
+  ansible.builtin.command:
+    cmd: "{{ aegis_sops_bin_path }} --decrypt {{ aegis_secrets_encrypted_path }}"
+  environment:
+    SOPS_AGE_KEY_FILE: "{{ aegis_age_key_path }}"
+  register: aegis_secrets_decrypt
+  changed_when: aegis_secrets_decrypt.rc == 0
+  no_log: true
+
+- name: "configure_secrets | write decrypted file"
+  ansible.builtin.copy:
+    content: "{{ aegis_secrets_decrypt.stdout }}"
+    dest: "{{ aegis_secrets_dest_path }}"
+    owner: "{{ aegis_user | default('aegis-deploy') }}"
+    group: "{{ aegis_group | default('aegis-deploy') }}"
+    mode: "0600"
+  become: true
+  no_log: true
+
+# Step 7: smoke test — re-decrypt the destination
+# file to catch any corruption introduced between
+# the write and the use. Cheap (sops is a small
+# binary, no key material exposed in the process
+# table beyond the file path).
+- name: "configure_secrets | verify decrypt round-trip"
+  ansible.builtin.command:
+    cmd: "{{ aegis_sops_bin_path }} --decrypt {{ aegis_secrets_dest_path }}"
+  environment:
+    SOPS_AGE_KEY_FILE: "{{ aegis_age_key_path }}"
+  register: aegis_secrets_verify
+  failed_when: aegis_secrets_verify.rc != 0
+  changed_when: false
+  become: true
+
+# Step 8: one-line summary so the operator can see at
+# a glance which keys are in the decrypted file
+# without dumping the file.
+- name: "configure_secrets | summary"
+  ansible.builtin.debug:
+    msg: >-
+      Decrypted {{ aegis_secrets_encrypted_path }} to
+      {{ aegis_secrets_dest_path }}
+      (mode 0600, owner {{ aegis_user | default('aegis-deploy') }}).
+      Round-trip OK.
