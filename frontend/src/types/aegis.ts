@@ -304,3 +304,50 @@ export interface NodeProvisionResponse {
   /** ISO-8601 duration for the systemd is-active poll (e.g. `PT2.5S`). */
   verify_latency?: string
 }
+
+// --- v0.5.0 backups (#120 backend, #121 frontend) ---
+
+/**
+ * Who or what initiated the backup.
+ *  - `manual`    — operator clicked Create / POSTed with `{"trigger":"manual"}`
+ *  - `scheduled` — the in-process scheduler fired on cron match
+ */
+export type BackupTrigger = 'manual' | 'scheduled'
+
+/**
+ * Lifecycle of a single backup. The state machine is
+ * `running -> ok` (success) or `running -> failed`
+ * (error; the row is retained for forensics with
+ * `error` populated and the partial file deleted).
+ */
+export type BackupStatus = 'running' | 'ok' | 'failed'
+
+/**
+ * One row of the v0.5.0 backup table. Mirrors the
+ * Go `backups.Backup` struct (snake_case on the wire
+ * is auto-camelCased by the axios response interceptor
+ * in `api/client.ts`, so this interface is camelCase
+ * even though the API emits snake_case).
+ *
+ * `sizeBytes` is 0 while the backup is `running`; the
+ * row is updated to the real value before the Service
+ * marks it `ok`. `error` is empty on success; the
+ * `running` state has it empty too.
+ */
+export interface Backup {
+  id: string
+  createdAt: string
+  sizeBytes: number
+  trigger: BackupTrigger
+  status: BackupStatus
+  error?: string
+  schemaVersion: number
+  nodeCount: number
+  userCount: number
+  hostCount: number
+  checksumSha256: string
+  /** Server-side path (relative to the backups root).
+   *  Surfaced so the UI can show `<id>.dump.gz` as
+   *  the download filename. Empty for in-flight rows. */
+  path?: string
+}
