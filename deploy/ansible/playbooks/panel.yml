@@ -1,0 +1,37 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Provision a single Aegis PANEL host:
+#   * bootstrap_node    — base user, dirs, packages
+#   * configure_secrets — install sops+age, decrypt secrets.yml
+#                          to /etc/aegis/secrets.env
+#   * install_panel     — drop docker-compose.prod.yml, pull the
+#                          panel image, start the stack
+#
+# Run:
+#   cd deploy/ansible
+#   ansible-playbook -i inventories/prod/hosts.ini playbooks/panel.yml
+#
+# Operator pre-conditions:
+#   - the age private key is on the host at
+#     /etc/aegis/age.key (mode 0600) — see
+#     `roles/configure_secrets/defaults/main.yml`.
+#   - the encrypted secrets.yml is at
+#     /etc/aegis/secrets.yml.enc OR in the repo
+#     checkout on the host (the role picks
+#     whichever the operator points
+#     `aegis_secrets_src_path` at).
+#   - the panel image is pullable from
+#     ghcr.io (anonymous is fine for public
+#     repos) OR a local mirror
+#     (`aegis_panel_image_tag` override).
+
+- name: Provision a single Aegis panel host
+  hosts: aegis_panels
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: bootstrap_node
+    - role: configure_secrets
+    - role: install_panel

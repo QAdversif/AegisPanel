@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (container wiring for #119 secrets, #124)
+
+- **`chore(ops): install_panel role + prod
+  compose + secrets.env mount`** — wires
+  the v0.5.0 sops+age indirection from #119
+  into the actual production deploy. The
+  `configure_secrets` role (PR #119) writes
+  `/etc/aegis/secrets.env` (mode 0600,
+  owner aegis-deploy) on the panel host.
+  This PR adds the three pieces that consume
+  that file end-to-end:
+  - `deploy/docker/docker-compose.prod.yml`
+    (new, ~80 lines) — the production panel
+    stack. Pulls `ghcr.io/qadversif/aegispanel:${AEGIS_PANEL_IMAGE_TAG}`
+    (default `latest`), bind-mounts
+    `/etc/aegis/secrets.env:ro` into the
+    container via `env_file:`, bind-mounts
+    `/var/lib/aegis` for the future backups
+    volume, and publishes the panel's port
+    8080 on the loopback only
+    (`127.0.0.1:8080:8080`) — the reverse
+    proxy (Caddy or any other) is the
+    public ingress. The data services
+    (Postgres, Redis, NATS) are NOT
+    managed by this compose; the operator
+    provisions them out-of-band (managed
+    RDS, a sibling compose, etc.) and
+    wires the panel's `aegis.postgres_dsn`
+    in the sops+age secrets file.
+  - `deploy/ansible/roles/install_panel/`
+    (new, three files: defaults + tasks +
+    handlers) — refuses to run without
+    `/etc/aegis/secrets.env`, drops the
+    compose file in `/etc/aegis/`, pulls
+    the image, starts the stack, and
+    prints `docker compose ps` as a
+    summary. Idempotent: re-runs are no-ops
+    (compose pull + up skip when the
+    stack is already at the desired state).
+  - `deploy/ansible/playbooks/panel.yml`
+    (new) — the three-role canonical
+    deploy for a panel host:
+    `bootstrap_node` → `configure_secrets`
+    → `install_panel`. Operators pin
+    `aegis_panel_image_tag` in
+    `group_vars/all.yml` to a stable
+    release (e.g. `0.5.0` — note: no `v`
+    prefix, per the release workflow
+    rewrite in #111).
+  - `deploy/ansible/roles/install_agent/files/aegis-agent.service`
+    — added a secondary
+    `EnvironmentFile=-/etc/aegis/secrets.env`
+    line (the leading `-` tells systemd to
+    silently skip a missing file). On
+    panel hosts with `configure_secrets`
+    this means the agent picks up any
+    future AEGIS_* secret from the
+    canonical source; on dev hosts that
+    do not run `configure_secrets` the
+    service is unaffected. Per-node
+    values in `agent.env` still take
+    precedence over panel-level values
+    in `secrets.env` on a key collision
+    (later env vars in the same file
+    override earlier ones).
+
+- **Why this PR does NOT also provision the data
+  services:** the panel's data layer (Postgres,
+  Redis, NATS) is operator-managed. The panel
+  already speaks the canonical pgx DSN /
+  `redis://` / `nats://` URL shape; the sops+age
+  secrets file is the canonical place to set
+  them. A future PR can ship a sibling
+  `docker-compose.data.yml` for operators that
+  want a single-host dev/prod path; v0.5.0 ships
+  panel-only.
+
+- **What this PR does NOT ship** (deferred to
+  follow-ups):
+  - The reverse proxy (Caddy) is still installed
+    per-node by `install_caddy`. A future PR adds
+    a panel-side Caddy that fronts the panel
+    container on `127.0.0.1:8080`.
+  - A healthcheck for the panel container (the
+    distroless image has no shell; a v0.5.x
+    follow-up ships a tiny healthcheck binary
+    inside the image, or a sibling `wget` shim
+    via buildx).
+  - The `/var/lib/aegis` bind mount is reserved
+    for the v0.5.x backups volume; the current
+    PR mounts the directory but the panel does
+    not yet write to it.
+
 ### Changed (singbox install role — runtime SHA-256 lookup, #123)
 
 - **`chore(ops): install_singbox looks up the
