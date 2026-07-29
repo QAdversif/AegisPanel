@@ -42,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     field still pins the download.
   - `docs/guide/getting-started.md` — added
     an `Operator quickstart (v0.5.0+)`
-    section that walks the `playbooks/panel.yml`
-    + `playbooks/node.yml` two-step install
+    section that walks the `playbooks/panel.yml`,
+    plus `playbooks/node.yml` two-step install
     flow and points the operator at the
     sops+age indirection from #119.
 
