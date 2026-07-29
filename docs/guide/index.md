@@ -59,5 +59,12 @@ inside a single tenant.
 
 ## Where to next?
 
+- [Quickstart](./quickstart) — 5 minutes from a fresh VPS to a
+  panel running.
 - [Architecture](./architecture) — the full design document.
-- [Getting started](./getting-started) — bringing up the dev stack.
+- [Getting started](./getting-started) — bringing up the dev
+  stack on a laptop.
+- [Operator guide](../operator-guide) — the full install +
+  daily-ops reference.
+- [Security policy](../security) — the threat model and
+  disclosure flow.
