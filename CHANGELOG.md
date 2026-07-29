@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (singbox install role — runtime SHA-256 lookup, #123)
+
+- **`chore(ops): install_singbox looks up the
+  SHA-256 via the GitHub Releases API`** —
+  the v0.4.0-c hardcoded `aegis_singbox_sha256`
+  default is gone. Bumping `aegis_singbox_version`
+  in `group_vars/all.yml` is now a one-line
+  change; the role queries the GitHub Releases
+  API at install time, picks the `assets[]`
+  entry whose `name` matches the per-arch
+  tarball, and uses the `digest` field
+  (format `sha256:<hex>`) as the `get_url
+  checksum:` argument.
+  - `deploy/ansible/roles/install_singbox/defaults/main.yml` —
+    removed `aegis_singbox_sha256`; added
+    `aegis_singbox_release_api_url` (default
+    `https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{{ version }}`)
+    and `aegis_singbox_release_api_token`
+    (optional, for rate-limit headroom on
+    busy CI matrices).
+  - `deploy/ansible/roles/install_singbox/tasks/main.yml` —
+    replaced the `Refuse to run without a
+    SHA-256 pin` assert with two tasks:
+    `Look up the sing-box SHA-256 via the
+    GitHub Releases API` (3 retries, 5s
+    delay, optional Bearer auth) and
+    `Extract the SHA-256 of the target tarball
+    from the API response` (filter by name,
+    strip the `sha256:` prefix, fail with
+    "no asset" if the arch is missing for
+    the version). The rest of the pipeline
+    is unchanged — the `get_url checksum:`
+    field still pins the download.
+  - `docs/guide/getting-started.md` — added
+    an `Operator quickstart (v0.5.0+)`
+    section that walks the `playbooks/panel.yml`,
+    plus `playbooks/node.yml` two-step install
+    flow and points the operator at the
+    sops+age indirection from #119.
+
+- **Why no GPG / SHA256SUMS verification** —
+  the original scope included a detached
+  signature check. Research during this
+  PR showed that SagerNet does NOT publish
+  `SHA256SUMS` or detached GPG/minisign
+  signatures for sing-box GitHub releases
+  (the only integrity metadata is the
+  per-asset `digest` field in the API
+  JSON). The trust model is therefore the
+  GitHub API response itself, which is
+  authenticated by the standard
+  `X-GitHub-...` headers and TLS. Cosign
+  signing of our own Docker images
+  (panel + agent) is the v0.5.x
+  equivalent for the panel/agent supply
+  chain and is a separate, future PR.
+
+- Operator-visible changes:
+  - No more `aegis_singbox_sha256` in
+    `group_vars/all.yml`. The role no longer
+    reads or writes this variable.
+  - Bumping `aegis_singbox_version` is now
+    a one-line change. The role fails with
+    a clear error if the requested version
+    does not ship the requested arch.
+  - Operators running the role in a
+    hermetic / air-gapped environment (no
+    outbound `api.github.com`) need to
+    either set `aegis_singbox_release_base_url`
+    to a local mirror that also serves the
+    same JSON shape, or stay on the
+    v0.4.0-c hardcoded hash flow. The
+    v0.5.0 release notes call this out.
+
 ### Added (pre-PR local CI gate, #124)
 
 - **`chore(ops): tools/scripts/pre-pr.sh + pre-push
