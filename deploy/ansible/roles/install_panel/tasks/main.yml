@@ -39,8 +39,8 @@
   # the typical case where the user can escalate
   # to root.
 
-- name: "install_panel | drop the production docker-compose file"
-  ansible.builtin.copy:
+- name: "install_panel | render the production docker-compose file"
+  ansible.builtin.template:
     src: "{{ aegis_panel_compose_src }}"
     dest: "{{ aegis_panel_compose_path }}"
     owner: root
@@ -49,29 +49,27 @@
   become: true
   notify: restart aegis-panel
 
-# Pull the image. Idempotent: re-runs with the same
-# tag are no-ops. Operators on a hermetic / air-
-# gapped network override `aegis_panel_image_tag`
-# to a local mirror (`ghcr.io.local/qadversif/aegispanel:0.5.0`)
+# Pull the image. Idempotent: re-runs with the
+# same tag are no-ops. Operators on a hermetic /
+# air-gapped network override
+# `aegis_panel_image_tag` to a local mirror
+# (e.g. `ghcr.io.local/qadversif/aegispanel:0.5.0`)
 # and pre-stage the image on the host.
 - name: "install_panel | pull the panel image ({{ aegis_panel_image_tag }})"
   ansible.builtin.command:
     cmd: "docker compose -f {{ aegis_panel_compose_path }} pull"
-    environment:
-      AEGIS_PANEL_IMAGE_TAG: "{{ aegis_panel_image_tag }}"
   register: aegis_panel_pull
   changed_when: "'Downloaded' in aegis_panel_pull.stdout or 'Pulled' in aegis_panel_pull.stdout"
   become: true
 
-# Start the stack. `up -d --remove-orphans` cleans
-# up containers from a previous version (the
-# `aegis-panel` name is stable across releases; an
-# older image with the same name is removed).
+# Start the stack. `up -d --remove-orphans`
+# cleans up containers from a previous version
+# (the `aegis-panel` name is stable across
+# releases; an older image with the same name
+# is removed).
 - name: "install_panel | start the panel"
   ansible.builtin.command:
     cmd: "docker compose -f {{ aegis_panel_compose_path }} up -d --remove-orphans"
-    environment:
-      AEGIS_PANEL_IMAGE_TAG: "{{ aegis_panel_image_tag }}"
   register: aegis_panel_up
   changed_when: "'Started' in aegis_panel_up.stdout or 'Recreated' in aegis_panel_up.stdout"
   become: true

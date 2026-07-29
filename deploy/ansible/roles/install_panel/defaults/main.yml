@@ -33,8 +33,8 @@ aegis_panel_image_tag: "latest"
 aegis_panel_compose_path: "/etc/aegis/docker-compose.prod.yml"
 
 # aegis_panel_compose_src is the local path of the
-# compose file in the operator's checkout. The role
-# copies it from the control host; an operator on a
-# different topology (the compose file is not in
-# the playbook's source tree) can override.
-aegis_panel_compose_src: "deploy/docker/docker-compose.prod.yml"
+# compose template in the operator's checkout. The
+# role renders it via `template:`; an operator on a
+# different topology (the template is not in the
+# playbook's source tree) can override.
+aegis_panel_compose_src: "deploy/docker/docker-compose.prod.yml.j2"
