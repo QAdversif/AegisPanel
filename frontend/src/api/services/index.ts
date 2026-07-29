@@ -11,4 +11,5 @@ export * from './subscription'
 export * from './panelcfg'
 export * from './users'
 export * from './audits'
+export * from './backups'
 
