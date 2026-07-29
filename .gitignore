@@ -119,11 +119,13 @@ logs/
 # --- Throwaway local files (commit message drafts, temp scripts) ---
 # These patterns match the throwaway file convention
 # documented in agent memory: every PR cycle creates
-# `.git-commit-<name>.txt` (commit-message draft) and
-# `.tmp-*.py` (helper script); both must be mavis-trash'd
-# before `git add`. The .github/pr-body-<name>.md files
-# are tracked intentionally (see PR body convention).
+# `.git-commit-<name>.{txt,md}` (commit-message
+# draft) and `.tmp-*.py` (helper script); both must be
+# mavis-trash'd before `git add`. The
+# .github/pr-body-<name>.md files are tracked
+# intentionally (see PR body convention).
 .git-commit-*.txt
+.git-commit-*.md
 .tmp-*.py
 .tmp-*.log
 .tmp-*.json
