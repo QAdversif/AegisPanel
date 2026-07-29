@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Defaults for the configure_secrets role (PR #119).
+#
+# This role decrypts the sops+age-encrypted
+# `secrets.yml` from the operator's local checkout
+# into a host-local file that the AegisPanel
+# container can mount at boot.
+#
+# The encrypted file is part of the repo (under
+# `deploy/secrets/`). The decryption key (an age
+# private key) is held ONLY on the operator's local
+# machine at `~/.aegis/age.key` (configurable below).
+# The role NEVER reads or accepts the private key over
+# the wire — Ansible receives only the encrypted
+# ciphertext.
+#
+# WHY A SEPARATE ROLE
+# ------------------
+# The existing `install_panel` role (or whatever role
+# runs the panel container in your play) is the right
+# place to wire `/etc/aegis/secrets.env` into the
+# container. Keeping `configure_secrets` separate
+# means the role can be re-run independently to rotate
+# secrets without restarting the panel: just re-run
+# the role, and the panel picks up the new file on its
+# next reload (or via the `AegisDevReloadOnSecretsChange`
+# signal — future work).
+#
+# ROTATION
+# --------
+# To rotate the JWT secret or DB password:
+#
+#   1. Re-encrypt the file:
+#        sops --encrypt --in-place deploy/secrets/secrets.yml
+#   2. Commit the new encrypted file.
+#   3. Re-run this role.
+#   4. Restart the panel container.
+#
+# See `docs/operator-guide.md` §"Secrets via sops+age"
+# for the full rotation procedure.
+
+# Path on the operator's local checkout that holds
+# the encrypted secrets file. Relative to the Ansible
+# play's `inventory_dir` (or `playbook_dir` if the
+# inventory doesn't sit next to the play).
+aegis_secrets_src_path: "deploy/secrets/secrets.yml"
+
+# Path on the target host where the decrypted
+# secrets will be written. The panel container
+# mounts this file at `/run/aegis/secrets.env` (see
+# the panel container's `docker run --env-file` in
+# the deploy role).
+#
+# Mode is enforced to 0600, owner
+# `{{ aegis_user }}:{{ aegis_group }}` (defaults to
+# `aegis-deploy:aegis-deploy`). The file MUST NOT be
+# world-readable — that is the entire point of moving
+# secrets out of env.
+aegis_secrets_dest_path: "/etc/aegis/secrets.env"
+
+# Path on the target host where the operator's age
+# private key is mounted or copied to. In production,
+# the operator should provide this via Ansible Vault
+# (`ansible-vault encrypt_string`) or a separate
+# vars file with `no_log: true` so the private key
+# never appears in the play log.
+#
+# In dev, you can scp the file in by hand before
+# running the play:
+#   scp ~/.aegis/age.key aegis-deploy@<host>:/tmp/age.key
+# and set this to `/tmp/age.key`.
+aegis_age_key_path: "/etc/aegis/age.key"
+
+# Install method for sops and age on the target host.
+# `apt` uses the OS package manager (works on Ubuntu
+# 24.04+ and Debian 12+). `download` fetches the
+# upstream binary into `/usr/local/bin` (works on any
+# Linux). `none` skips installation — the operator
+# manages sops+age themselves (e.g. via a pre-baked
+# image).
+#
+# For v0.5.0 the default is `apt` because the role
+# ships in tandem with `install_panel`, and both roles
+# are expected to run on the same Ubuntu host that
+# already has the docker engine installed via the
+# `bootstrap_node` role.
+aegis_secrets_install_method: "apt"
+
+# sops version to install when `install_method=download`.
+# Pinned to the version AegisPanel CI runs against
+# (3.7.x at v0.5.0). Override per-environment.
+aegis_sops_version: "3.7.3"
+
+# age version to install when `install_method=download`.
+# Pinned to the version AegisPanel CI runs against
+# (1.3.x at v0.5.0). Override per-environment.
+aegis_age_version: "1.3.1"
+
+# sops install path on the target host.
+aegis_sops_bin_path: "/usr/local/bin/sops"
+
+# age install path on the target host.
+aegis_age_bin_path: "/usr/local/bin/age"
