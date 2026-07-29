@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (backups package, #120)
+
+- **`feat(backups): internal/backups package +
+  admin router`** — the v0.5.0 backup surface. The
+  panel can now dump its own Postgres on demand,
+  keep a retention window of the most recent N
+  dumps, and stream the dump back to an operator
+  over the admin API. Restore is gated behind an
+  explicit opt-in env var and is not exposed in
+  the v0.5.0 UI (the v0.5.x follow-up #121 wires
+  the button into the SPA).
+  - `internal/backups/backup.go` — the canonical
+    `Backup` row struct, plus `Trigger`
+    (`manual`/`scheduled`) and `Status`
+    (`running`/`ok`/`failed`) enums. JSON tags are
+    snake_case to match the rest of the panel's
+    wire format.
+  - `internal/backups/store.go` — the
+    `Store` interface and the v0.5.0
+    `LocalStore` implementation. The metadata is
+    a single `<backupsDir>/_index.json` file
+    re-sorted by `CreatedAt` ascending on every
+    write. The dump bytes are written and read
+    via the `Backend` interface, with the
+    `osBackend` rooted at `BackupsDir` rejecting
+    `..`, absolute paths, and backslashes to keep
+    the safety guarantees identical to a future
+    S3 backend.
+  - `internal/backups/service.go` — the
+    orchestrator. `Create` is single-flight via
+    an `inflight sync.Mutex`; a second concurrent
+    caller gets `ErrBackupInProgress` (HTTP 409).
+    The full lifecycle is: allocate ID → insert
+    `running` row → stream `pg_dump -Fc` through
+    gzip to `<id>.dump.gz` → SHA-256 the file →
+    write `<id>.sha256` sidecar → update the row
+    to `ok` with size, hash, and per-table counts
+    → run a retention `Cleanup` pass. A failed
+    Create persists the `failed` row (so the
+    operator sees the failure in the UI) and
+    removes the partial file.
+  - `internal/backups/schedule.go` — a tiny
+    custom 5-field cron parser (wildcards +
+    specific values only; no `*/N` step and no
+    `1-5` range in v0.5.0) and a `Service.Run`
+    method that ticks every minute and fires
+    `Create(TriggerScheduled)` on match. The
+    scheduler is started from `main()` only when
+    `AEGIS_BACKUPS_CRON` is set; an empty
+    expression disables it (manual-only mode,
+    the v0.5.0 default for dev).
+  - `internal/backups/handler.go` — the HTTP
+    surface, mounted at `/api/v1/backups` by
+    `router.go`. Endpoints: `POST /` (create,
+    202), `GET /` (list), `GET /{id}` (get),
+    `GET /{id}/download` (stream gzip with
+    `Content-Disposition: attachment`), `DELETE
+    /{id}` (204), `POST /{id}/restore` (202,
+    gated by `AEGIS_BACKUPS_ALLOW_UI_RESTORE`).
+  - `internal/auth/scopes.go` — new
+    `ScopeBackups = "backups"`. Granted only to
+    the `admin` role; viewers and operators
+    cannot see or touch backups.
+  - `internal/router/router.go` — mounts the
+    backup handler behind `authSvc.Middleware()`,
+    plus `auth.RequireScope(auth.ScopeBackups)`.
+  - `cmd/aegis/main.go` — constructs the
+    `backups.Service` from `cfg.BackupsDir`,
+    passes it to `router.Build`, and (when
+    `cfg.BackupsCron != ""`) spawns the
+    scheduler goroutine on a child of the
+    shutdown context.
+  - `internal/config/config.go` — five new
+    env vars: `AEGIS_BACKUPS_DIR` (default
+    `./var/backups`), `AEGIS_BACKUPS_ALLOW_UI_RESTORE`
+    (`false`), `AEGIS_BACKUPS_RETENTION_DAYS`
+    (30), `AEGIS_BACKUPS_MAX_COUNT` (0 = off),
+    `AEGIS_BACKUPS_CRON` (empty = scheduler
+    disabled).
+  - `internal/router/router_test.go` —
+    updated the `Build()` test helper to thread
+    `nil` for the new `backupsSvc` parameter
+    (the test scope is route wiring, not the
+    backup surface).
+  - Tests: 11 new tests across `store_test.go`,
+    `schedule_test.go`, `service_test.go`
+    covering LocalStore CRUD, the path-traversal
+    rejection, cron parser accept/reject paths,
+    service happy path, single-flight
+    `ErrBackupInProgress`, dump failure, delete
+    idempotency, gzip magic bytes on
+    `Open()`, age-based retention, count-based
+    retention, and the `ErrBackupDisabled`
+    gate.
+
+- The store is **deliberately orthogonal to
+  Postgres**: a restore is exactly the case where
+  the panel DB is unavailable. The JSON index
+  sits next to the dumps and is self-describing
+  — no separate DB query is required to know
+  what files exist. Restoring from a partial
+  filesystem (some dump files missing) is a
+  trivial "list + filter" walk.
+
+- The `pg_dump` subprocess is invoked with
+  `-Fc --no-password --dbname=<db>` and `PGPASSWORD`
+  inherited from the panel's own DSN. A custom
+  5-field cron parser avoids pulling in
+  `github.com/robfig/cron/v3` for one line of
+  code (the only schedule the v0.5.0 operator
+  will write is `0 2 * * *`).
+
+- Restore from the UI is **off by default**. The
+  v0.5.x follow-up CLI binary
+  (`cmd/aegis-pg-restore`, not in this PR) is
+  the only thing trusted to drop the panel DB;
+  the HTTP path is the convenience surface for
+  dev environments that set
+  `AEGIS_BACKUPS_ALLOW_UI_RESTORE=true`.
+
+- Out of scope (deferred to follow-ups):
+  - The BackupsView.vue UI (#121) — the surface
+    is implemented and curl-able, but the
+    buttons and download links live in a
+    follow-up PR.
+  - Wiring the panel container's `--env-file`
+    for `AEGIS_BACKUPS_*` (#119 follow-up
+    chore) — the envs are read by the panel
+    directly, the operator sets them in
+    `secrets.env` after #119 lands.
+  - `docs/operator-guide.md` and
+    `docs/guide/quickstart.md` updates with the
+    backup workflow (a follow-up alongside the
+    secrets wiring chore).
+
 ### Added (secrets via sops+age, #119)
 
 - **`chore(ops): secrets via sops+age`** —

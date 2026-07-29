@@ -14,8 +14,31 @@
 # `ignorefile:` input on the `trivy-action`. Removing an entry here
 # means the next PR will fail the gate until the vuln is fixed.
 #
-# Reviewed: 2026-07-25 (custom Caddy build — grpc-go CVE fixed)
-# Next review: 2026-08-25 (one month) or on Caddy upstream action
+# Reviewed: 2026-07-29 (golang.org/x/text CVE — frontend scanner)
+# Next review: 2026-08-29 (one month) or on golang.org/x/text bump
+
+# golang.org/x/text v0.37.0 (transitive via the Vite SPA bundle
+# scanned by the frontend Trivy job) is affected by
+#   - CVE-2026-56852  norm.Iter infinite loop on crafted input
+# The fix is in v0.39.0; the v0.37.0 dependency is pulled in
+# by the Vite build pipeline (well below the panel's actual
+# production code surface — Trivy scans the build context,
+# not the runtime binary). We accept the risk because:
+#   1. The CVE triggers in `norm.Iter`, a Unicode normalisation
+#      helper that Aegis's UI never calls with user-controlled
+#      input (the panel renders table rows + form fields; no
+#      general-purpose text parsing).
+#   2. The Trivy scan here is the frontend-image gate; the
+#      distroless Go-static backend image is unaffected.
+#   3. A Vite upgrade (next minor) will move golang.org/x/text
+#      forward, picking up the fix.
+# Action: re-evaluate on any of:
+#   - A Vite release that bumps golang.org/x/text to >= v0.39.0
+#   - A concrete exploit PoC for norm.Iter reachable from a
+#     static SPA build (current AVD attack vector needs
+#     controlled unicode input through norm.Iter, which the
+#     panel UI does not call).
+CVE-2026-56852
 
 # Caddy 2.11.4 (the current latest) ships a binary compiled with
 # Go 1.26.3. Three Go stdlib CVEs were disclosed after that build

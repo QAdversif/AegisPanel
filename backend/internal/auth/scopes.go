@@ -58,6 +58,16 @@ const (
 	// v0.2.0 GET /api/v1/audits and GET /api/v1/audits/
 	// {id} endpoints are gated by this scope.
 	ScopeAudits Scope = "audits"
+
+	// ScopeBackups lets a principal manage panel backups:
+	// create, list, download, delete, and (when
+	// AEGIS_ALLOW_UI_RESTORE=true is set on the host)
+	// trigger a UI-driven restore. The scope is granted
+	// only to the `admin` role; viewers and operators
+	// cannot see or touch backups. The v0.5.0
+	// GET/POST/DELETE /api/v1/backups endpoints
+	// (#120) are gated by this scope.
+	ScopeBackups Scope = "backups"
 )
 
 // Scopes is a non-empty set of Scope values.
