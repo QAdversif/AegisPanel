@@ -165,4 +165,7 @@ deploy/secrets/secrets.yml
 deploy/secrets/secrets.local.yml
 
 # --- Aegis safety bundles ---
-backups/
+# Top-level ad-hoc dump folders (legacy).
+# `backend/internal/backups/` is the package
+# source and is NOT ignored.
+/backups/

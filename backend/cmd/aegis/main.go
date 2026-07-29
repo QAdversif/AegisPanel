@@ -43,6 +43,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/backups"
 	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
@@ -380,6 +381,59 @@ func main() {
 		SSHPort:     cfg.AgentSSHPort,
 	})
 
+	// v0.5.0 backups service. The store is
+	// always LocalStore in v0.5.0: a JSON index
+	// file next to the dump files. The store is
+	// deliberately orthogonal to Postgres so a
+	// restore is exactly the case where the panel
+	// DB is unavailable. The pool argument is
+	// passed for the per-backup metadata counts
+	// (node/user/host counts) — it may be nil
+	// when the panel runs without pg (dev mode),
+	// in which case counts are zero.
+	//
+	// The pg_dump and pg_restore binaries are
+	// expected at AEGIS_BACKUPS_PG_DUMP / _PG_RESTORE
+	// (with the standard /usr/bin/* default).
+	// The install_panel role update (follow-up to
+	// #119) installs postgresql-client on the
+	// panel host.
+	backupsBackend, err := backups.NewOSBackend(cfg.BackupsDir)
+	if err != nil {
+		log.Fatal().Err(err).Str("dir", cfg.BackupsDir).Msg("backups: failed to initialise backend")
+	}
+	backupsStore := backups.NewLocalStore(backupsBackend)
+	backupsSvc := backups.New(backups.Config{
+		PostgresDSN:    cfg.PostgresDSN,
+		BackupsDir:     cfg.BackupsDir,
+		AllowUIRestore: cfg.BackupsAllowUIRestore,
+		RetentionDays:  cfg.BackupsRetentionDays,
+		MaxCount:       cfg.BackupsMaxCount,
+	}, backupsStore, pool)
+	log.Info().
+		Str("dir", cfg.BackupsDir).
+		Int("retention_days", cfg.BackupsRetentionDays).
+		Int("max_count", cfg.BackupsMaxCount).
+		Bool("allow_ui_restore", cfg.BackupsAllowUIRestore).
+		Msg("backups: service initialised")
+
+	// Optional in-process scheduler. When
+	// AEGIS_BACKUPS_CRON is set (typical
+	// production: "0 2 * * *"), a goroutine
+	// ticks every minute and triggers a
+	// scheduled backup on cron match. Empty
+	// disables the scheduler (manual-only mode,
+	// the v0.5.0 default for dev).
+	if cfg.BackupsCron != "" {
+		schedCtx, schedCancel := context.WithCancel(ctx)
+		go func() {
+			defer schedCancel()
+			if err := backupsSvc.Run(schedCtx, cfg.BackupsCron); err != nil {
+				log.Error().Err(err).Str("cron", cfg.BackupsCron).Msg("backups: scheduler exited with error")
+			}
+		}()
+	}
+
 	// v0.4.0-mvp-batched: wire the sing-box
 	// provider's HTTP transport (panel -> agent)
 	// and the per-node BatchedApplier queue.
@@ -434,7 +488,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, bootstrapSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, bootstrapSvc, backupsSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
