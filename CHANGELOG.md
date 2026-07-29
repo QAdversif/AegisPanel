@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     UI; the v0.5.0 surface intentionally
     hides UI-driven restore), and
     `downloadBackup` (the blob + ObjectURL
-    + anchor.click() dance for browser-side
+    plus anchor.click() dance for browser-side
     file save with a Bearer-authenticated
     GET).
   - `frontend/src/views/BackupsView.vue` —
