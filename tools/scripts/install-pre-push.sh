@@ -18,6 +18,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
 HOOK="$REPO_ROOT/.git/hooks/pre-push"
 
 if [[ -e "$HOOK" && ! -f "$HOOK" ]]; then
