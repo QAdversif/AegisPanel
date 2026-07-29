@@ -51,10 +51,19 @@ func newTestService(t *testing.T, dumpBytes []byte) (*Service, string) {
 		t.Fatalf("NewOSBackend: %v", err)
 	}
 	store := NewLocalStore(bk)
+	// Use a non-existent binary path for the
+	// default dump/restore configs. `/bin/true`
+	// is the obvious placeholder but it is a
+	// real binary on Linux that exits 0
+	// (silently swallowing every arg), which
+	// would make Restore() succeed where the
+	// test expects an error. A path that does
+	// not exist on any supported runtime gives
+	// a portable "exec: not found" failure.
 	svc := New(Config{
 		BackupsDir:    dir,
-		PgDumpBin:     "/bin/true", // never invoked because SetDumpFn overrides
-		PgRestoreBin:  "/bin/true",
+		PgDumpBin:     "/dev/null/aegis-no-such-pg_dump-for-tests",
+		PgRestoreBin:  "/dev/null/aegis-no-such-pg_restore-for-tests",
 		RetentionDays: 30,
 		MaxCount:      10,
 	}, store, nil)

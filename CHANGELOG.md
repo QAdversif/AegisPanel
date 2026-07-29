@@ -71,8 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     the `admin` role; viewers and operators
     cannot see or touch backups.
   - `internal/router/router.go` — mounts the
-    backup handler behind `authSvc.Middleware()`
-    + `auth.RequireScope(auth.ScopeBackups)`.
+    backup handler behind `authSvc.Middleware()`,
+    plus `auth.RequireScope(auth.ScopeBackups)`.
   - `cmd/aegis/main.go` — constructs the
     `backups.Service` from `cfg.BackupsDir`,
     passes it to `router.Build`, and (when

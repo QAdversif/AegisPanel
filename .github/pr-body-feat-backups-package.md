@@ -18,8 +18,8 @@ admin API.
 
 ## What this PR ships
 
-- A new `internal/backups` package (≈950 LOC
-  + 540 LOC tests, 11 tests passing) with:
+- A new `internal/backups` package (≈950 LOC,
+  plus 540 LOC tests, 11 tests passing) with:
   - `Backup` row struct (snake_case JSON),
     `Trigger` (`manual`/`scheduled`), `Status`
     (`running`/`ok`/`failed`).
