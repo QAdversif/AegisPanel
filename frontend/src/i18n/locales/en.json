@@ -8,6 +8,7 @@
     "subscription": "Subscription",
     "settings": "Settings",
     "audits": "Audit log",
+    "backups": "Backups",
     "profile": "Profile",
     "openMenu": "Open menu",
     "soon": "Soon"
@@ -351,6 +352,47 @@
     "until": "Until",
     "inspect": "Inspect"
   },
+  "backups": {
+    "title": "Backups",
+    "subtitle": "Panel Postgres snapshots. Trigger on demand, keep a retention window, download the dump.",
+    "create": "Create backup",
+    "createHint": "Spawn a new pg_dump subprocess and stream it to a dump file. Single-flight — only one backup runs at a time.",
+    "createFailed": "Could not start the backup",
+    "createAlreadyRunning": "Another backup is already in progress",
+    "created": "Backup started",
+    "refresh": "Refresh",
+    "loadFailed": "Could not load the backup list",
+    "download": "Download",
+    "downloadFailed": "Could not download the dump",
+    "downloaded": "Backup downloaded",
+    "delete": "Delete",
+    "confirmDelete": "Delete backup \"{id}\"? This removes the dump file and the sidecar — the row is removed from the index too.",
+    "deleteFailed": "Could not delete the backup",
+    "deleted": "Backup deleted",
+    "id": "ID",
+    "createdAt": "Created at",
+    "size": "Size",
+    "trigger": "Trigger",
+    "status": "Status",
+    "schemaVersion": "Schema",
+    "nodes": "Nodes",
+    "users": "Users",
+    "hosts": "Hosts",
+    "checksum": "SHA-256",
+    "error": "Error",
+    "actions": "Actions",
+    "search": "Search backups…",
+    "empty": "No backups yet. Click “Create backup” to start one.",
+    "statuses": {
+      "running": "Running",
+      "ok": "OK",
+      "failed": "Failed"
+    },
+    "triggers": {
+      "manual": "Manual",
+      "scheduled": "Scheduled"
+    }
+  },
   "profile": {
     "title": "Profile",
     "subtitle": "Your operator identity + security settings.",
@@ -386,7 +428,8 @@
       "users": "Users",
       "subscriptions": "Subscriptions",
       "hosts": "Hosts",
-      "audits": "Audit log"
+      "audits": "Audit log",
+      "backups": "Backups"
     }
   }
 }

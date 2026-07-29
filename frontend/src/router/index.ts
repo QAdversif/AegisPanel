@@ -72,6 +72,12 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.audits', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/backups',
+    name: 'backups',
+    component: () => import('@/views/BackupsView.vue'),
+    meta: { titleKey: 'nav.backups', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/me',
     name: 'profile',
     component: () => import('@/views/ProfileView.vue'),

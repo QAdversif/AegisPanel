@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (backups UI, #121)
+
+- **`feat(backups): BackupsView.vue + API client`**
+  — the SPA surface for the v0.5.0 backup
+  package. The view is reachable from the
+  sidebar under a Database icon between
+  `Audit log` and `Profile`, and ships a
+  toolbar with `Refresh` + `Create backup`
+  actions, a six-column DataTable (id,
+  createdAt, size, trigger, status badge,
+  node/user/host counts), and per-row
+  download + delete buttons.
+  - `frontend/src/api/services/backups.ts` —
+    the v0.5.0 client for the
+    `/api/v1/backups/*` surface shipped in
+    #120. Exports: `listBackups`, `getBackup`,
+    `createBackup`, `deleteBackup`,
+    `restoreBackup` (not yet wired into the
+    UI; the v0.5.0 surface intentionally
+    hides UI-driven restore), and
+    `downloadBackup` (the blob + ObjectURL
+    plus anchor.click() dance for browser-side
+    file save with a Bearer-authenticated
+    GET).
+  - `frontend/src/views/BackupsView.vue` —
+    the page component. Polls the list
+    endpoint every 2 seconds while at
+    least one row is in `running` status,
+    so the transition to `ok` (or
+    `failed`) shows up without a manual
+    refresh. Failed rows expose the
+    pg_dump error string as a tooltip on
+    the destructive-status badge.
+  - `frontend/src/router/index.ts` — new
+    `/backups` route (auth-required, app
+    layout) wired to the BackupsView.
+  - `frontend/src/layouts/AppLayout.vue`
+    — new `Backups` nav entry with a
+    `Database` lucide icon, positioned
+    between `Audit log` and `Profile`.
+  - `frontend/src/types/aegis.ts` — new
+    `Backup`, `BackupTrigger`, `BackupStatus`
+    TS types mirroring the Go struct's
+    wire format. The `api/client.ts`
+    response interceptor already
+    snake_case -> camelCases incoming
+    JSON, so the UI types stay in
+    camelCase while the wire stays in
+    snake_case.
+  - `frontend/src/i18n/locales/en.json`
+    plus `ru.json` — full `backups` key
+    set (title, subtitle, actions,
+    statuses, triggers, error
+    messages) plus a `backups` entry
+    under `nav` and `profile.scopes`.
+
+- Out of scope (deferred to follow-ups):
+  - The `Restore` action is intentionally
+    not in the v0.5.0 UI: a UI-driven
+    restore is dangerous (it drops the
+    panel DB) and the operator's safer
+    path is the future `cmd/aegis-pg-restore`
+    CLI binary. The endpoint is already
+    wired in `api/services/backups.ts` so
+    a follow-up PR can surface it behind a
+    confirmation dialog without touching the
+    wire format.
+  - The `cmd/aegis-pg-backup` /
+    `aegis-pg-restore` CLI binaries —
+    the Service API is stable enough to add
+    them without touching the handler or
+    the wire format; this PR is the
+    bookkeeping (UI + types + i18n) only.
+
 ### Added (backups package, #120)
 
 - **`feat(backups): internal/backups package +
