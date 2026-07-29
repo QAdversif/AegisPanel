@@ -1,0 +1,82 @@
+﻿# sops configuration for the AegisPanel repo.
+#
+# Tells `sops` which files are encrypted and with which
+# recipients. Committed to the repo so anyone with sops
+# installed can decrypt files matching the patterns
+# below.
+#
+# How it works
+# ------------
+# `sops --encrypt --age <pubkey> deploy/secrets/secrets.yml`
+# produces `deploy/secrets/secrets.yml` in-place with
+# the YAML values encrypted but the keys / structure
+# preserved. On the operator machine:
+#
+#   1. Generate an age keypair (one-time):
+#        age-keygen -o ~/.aegis/age.key
+#   2. Copy the public key from the printed line
+#      (or `age-keygen -y ~/.aegis/age.key > age.pub`).
+#   3. Update the `&main` recipient below to that pubkey.
+#   4. Encrypt your local secrets file:
+#        sops --encrypt --in-place deploy/secrets/secrets.yml
+#   5. Commit `deploy/secrets/secrets.yml` (now encrypted).
+#
+# On the target host (during deploy), the private key
+# is read from `SOPS_AGE_KEY_FILE` (default
+# `~/.aegis/age.key`) and the file is decrypted back to
+# plaintext at the moment the role runs.
+#
+# Recipients
+# ----------
+# The `&main` anchor holds the public key. The
+# `key_groups` mapping below says "every path matching
+# the regex is encrypted for that recipient". Other
+# paths are not encrypted.
+#
+# Operator rotation
+# -----------------
+# To rotate the recipient, replace the `&main` value
+# with the new public key, then run
+# `sops updatekeys --yes deploy/secrets/secrets.yml`.
+# sops will re-encrypt the file with the new recipient
+# without changing the plaintext.
+#
+# SECURITY
+# --------
+# - The private key (`age.key`) MUST NEVER be committed.
+#   The `.gitignore` at the repo root catches it as
+#   `age.key` and `age-*.key`.
+# - CI's gitleaks detector watches for any committed
+#   file matching the `generic-api-key` / `age` rules
+#   and will fail the docs job if a private key leaks.
+# - The operator's `~/.aegis/age.key` is the only
+#   decryption-capable artefact. Treat it like the SSH
+#   private key it conceptually is.
+#
+# Path regex note
+# ---------------
+# The regex below uses `.*secrets.*\.yml$` rather than
+# `deploy/secrets/secrets.*\.yml$` because sops
+# normalises the file path on Windows by converting
+# forward slashes to backslashes before matching, and
+# the looser pattern matches both layouts. The downside
+# is that any future `secrets.*.yml` file anywhere in
+# the repo would be encrypted — if you add a non-secret
+# file matching this pattern, override with a more
+# specific `creation_rules` entry.
+creation_rules:
+  - path_regex: .*secrets.*\.yml$
+    key_groups:
+      - age:
+          # EXAMPLE KEY. This is a real age public key
+          # generated for the AegisPanel example. The
+          # matching private key is NOT committed and
+          # lives only on the operator's machine (in
+          # this case, generated as a one-off for the
+          # sops+age PR demo).
+          #
+          # Operator rotation: see
+          # `docs/operator-guide.md` §"Secrets via
+          # sops+age" for replacing this with the
+          # production key (via `sops updatekeys`).
+          - &main "age1ekwhyq7xftg3vqjka4rssrg77acrsa7hjjzs2vvlugc23j3gwfpqep7ggk"

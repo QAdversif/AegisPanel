@@ -18,8 +18,14 @@ Thumbs.db
 *.pem
 *.key
 *.crt
-secrets/
 config/local.*
+
+# The bare `secrets/` rule was removed in PR #119.
+# Old top-level `secrets/` was an unnamed catch-all
+# for ad-hoc local files. The new `deploy/secrets/`
+# is the canonical home for sops-encrypted secrets
+# and is committed (with per-directory gitignore
+# controlling what plaintext is allowed locally).
 
 # --- Go ---
 backend/bin/
@@ -141,6 +147,22 @@ tools/scripts/aegis-*.sh
 *.key
 *.p12
 *.pfx
+
+# --- sops+age secrets (PR #119) ---
+# Per the `Secrets via sops+age` section of
+# `docs/operator-guide.md`: the age *private* key
+# (`age.key`) is the most sensitive artefact in the
+# deploy chain — losing it loses every encrypted
+# secret. The `*.example.*` / `*.enc` files are safe
+# to commit (encrypted blobs); the `secrets.yml`
+# plaintext must never reach the repo. Both `*.key`
+# and `*.pem` above already catch most forms; the
+# explicit `age.key` rule below is for the no-suffix
+# default path that `age-keygen` produces.
+age.key
+age-*.key
+deploy/secrets/secrets.yml
+deploy/secrets/secrets.local.yml
 
 # --- Aegis safety bundles ---
 backups/
