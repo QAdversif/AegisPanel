@@ -30,7 +30,8 @@ ANSIBLE   := $(shell command -v ansible-playbook 2>/dev/null)
 # --- Phony ------------------------------------------------------------------
 
 .PHONY: help dev dev-down build test lint clean docs docs-build \
-        backend frontend ansible docker docker-dev docker-prod
+        backend frontend ansible docker docker-dev docker-prod pre-pr \
+        pre-pr-install
 
 # --- Default ----------------------------------------------------------------
 
@@ -115,3 +116,11 @@ docker-prod: ## Bring up the production stack (panel, ui, caddy, dependencies).
 		$(MAKE) -f docker-compose.prod.yml up
 
 docker: docker-dev ## Alias for docker-dev.
+
+# --- Pre-PR gate -----------------------------------------------------------
+
+pre-pr: ## Run the CI-equivalent checks locally before pushing a PR.
+	@tools/scripts/pre-pr.sh
+
+pre-pr-install: ## Install the git pre-push hook that runs pre-pr.sh.
+	@tools/scripts/install-pre-push.sh
