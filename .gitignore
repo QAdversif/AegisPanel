@@ -123,6 +123,18 @@ logs/
 .tmp-*.json
 .tmp-*.sh
 
+# --- Operator deploy scripts (live in the repo path but are
+# operator-only; contain VPS IP, SSH pubkey, DB password,
+# container names, panel sub-path, etc. — see
+# ~/.aegis/deploy.local.md for the canonical private notes).
+# Tracked-by-accident is a hard fail because git history is
+# world-readable after the repo is public. Pattern matches
+# every `aegis-*.{py,sh}` under tools/scripts/; if a future
+# commit needs to add a shared, non-secret helper there, it
+# should be NAMED differently (e.g. `panel-healthcheck.py`).
+tools/scripts/aegis-*.py
+tools/scripts/aegis-*.sh
+
 # --- Generated keys / certs (sandbox only) ---
 *.csr
 *.crt

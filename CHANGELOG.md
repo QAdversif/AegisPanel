@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (repo hygiene, post-Phase 1)
+
+- **`chore(repo): gitignore the operator deploy
+  scripts`** — the Phase 1 deploy scripts (the
+  `aegis-*.{py,sh}` set under `tools/scripts/`) live in
+  the repo path but are operator-only artefacts: they
+  hardcode the VPS IP, the deploy-user SSH pubkey, the
+  DB password, the container names, the panel sub-path,
+  and the panel/UI image tags. They were untracked by
+  accident (nothing matched them in `.gitignore`), so a
+  future `git add tools/scripts/` could have pushed
+  them to a public GH history. Two new patterns under
+  `tools/scripts/`: `aegis-*.py` and `aegis-*.sh`. The
+  rest of the scripts in that directory (the shared
+  developer tooling: `branch-start.sh`, `release.sh`,
+  `smoke-frontend.sh`, `backup.sh`, `restore.sh`) stay
+  trackable. The canonical private notes for the deploy
+  live in `~/.aegis/deploy.local.md` (outside the repo).
+- **`chore(repo): drop the tracked stale pr-body from
+  #117** — the file
+  `.github/pr-body-fix-ui-runtime-api-quirks.md`
+  was committed in #117. The
+  `gh pr create --body-file` draft got
+  `git add`-ed along with the actual code.
+  The gitignore pattern
+  `.github/pr-body-*.md` was planned for
+  #117 as a future-proofing measure but the
+  file that triggered the rule was already
+  in the same squash commit. The PR
+  description now lives on GitHub at #117;
+  the local file is redundant. The deletion
+  is folded into the same chore PR as the
+  gitignore change above so #117 stops
+  being a one-off exception.
+
 ### Fixed (release workflow post-v0.4.0 follow-ups, #102 / #103 / #104 / #111)
 
 These four PRs land on `main` after the `v0.4.0` git
