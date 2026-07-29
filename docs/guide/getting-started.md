@@ -4,9 +4,11 @@ title: Getting started
 
 # Getting started
 
-> The skeleton is still being assembled (Phase 0). This page documents
-> the *intended* workflow; commands marked with `🚧` are not yet wired
-> up.
+This page documents the **dev stack** — Postgres, Redis, NATS,
+and the panel + UI on your laptop. If you are an **operator**
+installing the panel on a VPS, the
+[quickstart](./quickstart) is the right entry; the
+[operator guide](../operator-guide) is the long form.
 
 ## Prerequisites
 
@@ -14,7 +16,8 @@ title: Getting started
 - **Node.js 20+** and **pnpm 9+** (or `npm`) — for the admin UI.
 - **Docker 24+** and **Docker Compose v2** — for the local dev stack.
 - **Make** — to drive the top-level targets.
-- **Ansible 9+** — for the panel / node provisioning playbooks.
+- **Ansible 9+** — for the panel / node provisioning playbooks
+  (only needed for the operator path).
 
 ## Clone the repository
 
@@ -22,6 +25,19 @@ title: Getting started
 git clone <your-fork-or-clone-url> aegis
 cd aegis
 ```
+
+## Install the pre-push gate (recommended)
+
+```bash
+make pre-pr-install
+```
+
+This installs a `.git/hooks/pre-push` hook that runs the
+CI-equivalent checks locally before every push. A red build is
+caught at the laptop, not 4 minutes into a CI run. The script
+lives at `tools/scripts/pre-pr.sh`; the same script is also
+the entry point for ad-hoc checks (`tools/scripts/pre-pr.sh
+--backend`, `--frontend`, `--docs`, `--quick`).
 
 ## Bring up the dev stack
 
@@ -57,38 +73,12 @@ make dev-down
 
 ## Where to next?
 
-- [API reference](../api/) — once endpoints land in Phase 1.
+- [Quickstart](./quickstart) — 5 minutes from a fresh VPS to a
+  panel running.
+- [Operator guide](../operator-guide) — the full install +
+  daily-ops reference.
+- [Security policy](../security) — the threat model and
+  disclosure flow.
 - [Architecture](./architecture) — the full design.
-
-## Operator quickstart (v0.5.0+)
-
-The two-step "install the panel" / "register a node" loop is the
-canonical first-run path on a fresh VPS. The Ansible roles live
-under `deploy/ansible/roles/`; `tools/scripts/install-pre-push.sh`
-in the repo root installs a git hook that runs the CI-equivalent
-checks locally before any push (so a red build is caught before
-the CI round-trip).
-
-```bash
-# 1. Pull the sops+age encrypted secrets onto the panel host
-#    (the sops+age workflow is documented in
-#    `deploy/secrets/README.md`; v0.5.0 ships the
-#    `configure_secrets` role that does this in one step).
-ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
-  deploy/ansible/playbooks/panel.yml
-
-# 2. From the panel UI, register the first node (or run
-#    `playbooks/node.yml` against an existing SSH endpoint).
-#    The role installs sing-box from the GitHub release tarball,
-#    looks up the SHA-256 via the GitHub Releases API at install
-#    time, and verifies the download with `get_url checksum:`.
-#    The v0.4.0 hardcoded hash is gone — bumping
-#    `aegis_singbox_version` in `group_vars/all.yml` is now a
-#    one-line change.
-ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
-  deploy/ansible/playbooks/node.yml
-```
-
-The sops+age indirection is the v0.5.0+ default. Operators on
-v0.4.0 still set `AEGIS_*_SECRET` env vars directly on the
-host; the `configure_secrets` role is a no-op on those hosts.
+- [Developer guide](../developer/) — for the panel's own
+  contributors.

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (operator guide + security policy + quickstart docs, #126)
+
+- **`docs/operator-guide.md`** (new) — the
+  canonical "from a fresh VPS to a panel that serves
+  real users" reference. Audience, TL;DR, prerequisites,
+  architecture-in-one-screen, install path, secrets
+  management, first node, daily operations (backups,
+  restores, rotations), disaster recovery, upgrades,
+  observability, common pitfalls. Cross-links to
+  `deploy/secrets/README.md` for the sops+age
+  field-by-field workflow.
+- **`docs/SECURITY.md`** (new) — the threat model and
+  disclosure flow. Sections: reporting a vulnerability
+  (GitHub Security Advisories), supported versions,
+  threat model (what Aegis defends against and what it
+  does not), cryptography (JWT, age, sing-box, backup
+  integrity), container isolation (distroless, nonroot,
+  read-only secrets.env, loopback port), privilege
+  boundaries (aegis-deploy / aegis-agent / \_sing-box),
+  supply chain (panel images, sing-box, sops+age), what
+  to do if a compromise is suspected.
+- **`docs/guide/quickstart.md`** (new) — the 5-minute
+  "fresh VPS to panel running" flow. Promoted out of
+  the in-line "Operator quickstart (v0.5.0+)" section
+  in `getting-started.md` and expanded with the backup
+  cron entry.
+- **`docs/guide/getting-started.md`** — refreshed to
+  the dev-stack entry (Postgres + Redis + NATS on a
+  laptop). The old operator-quickstart section is
+  gone; the new `quickstart.md` is the operator
+  entry. Adds a `make pre-pr-install` line so
+  developers hit the local CI gate on first checkout.
+- **`docs/guide/index.md`** — adds links to
+  `quickstart`, `operator-guide`, and `security`.
+- **`docs/README.md`** — `Where to start` block
+  reorders the operator path to the top (quickstart
+  → operator guide → security), with the dev path
+  below. The `Project status` table is updated to
+  v0.5.0 reality (the v0.5.0 row is now `✅ shipped`
+  with the per-component status).
+- **`docs/developer/index.md`** — branch pattern
+  updated (`feat/<scope>/<name>`, `chore/<scope>/<name>`,
+  `fix/<scope>/<name>`, `refactor/<scope>/<name>`;
+  the `develop` branch is gone). Adds a
+  `Pre-PR local gate` section with the
+  `tools/scripts/pre-pr.sh` scope flags. Adds a
+  `Module overview` table with the new CLI binaries
+  and the v0.5.0 packages.
+- **`docs/ROADMAP.md`** — v0.5.0 row updated to
+  `✅ shipped (#119, #120, #121, #122, #123, #124,
+  #125, #126)`. The v0.5.0 scope section
+  reorganised to "All eight items landed" with a
+  per-item PR cross-reference; the items that did
+  not land (JSON logs, cosign, VM smoke test,
+  GPG-verify) are listed in a "Deferred" sub-section
+  with the v0.5.x follow-up path.
+- The VuePress site (`docs/.vuepress/config.ts`)
+  sidebar is **not** updated — the site is local-only
+  and not published until v1.0.0. The new pages are
+  reachable via direct paths in the rendered HTML.
+
 ### Added (aegis-pg-backup + aegis-pg-restore CLI, #125)
 
 - **`feat(cli): operator-side backup CLI`** —
