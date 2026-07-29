@@ -1,0 +1,90 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Install the Aegis panel on a host.
+#
+# The role is the v0.5.0 minimum viable deploy:
+#   1. Refuse to run if the sops+age secrets file is
+#      not present (the panel needs every AEGIS_* env
+#      var in it to start).
+#   2. Drop the production docker-compose.prod.yml
+#      in /etc/aegis/ (alongside secrets.env).
+#   3. `docker compose pull` the panel image.
+#   4. `docker compose up -d` to start the stack.
+#   5. `docker compose ps` for the summary line.
+#
+# The role does NOT manage Postgres, Redis, or NATS
+# — the operator provisions those out-of-band and
+# sets the DSN/Addr env vars in the sops+age
+# secrets file. The panel's ENTRYPOINT is
+# `/app/aegis` (distroless) and the host's
+# /etc/aegis/secrets.env is bind-mounted into the
+# container via `env_file:` (read-only).
+
+- name: "install_panel | refuse to run without secrets.env"
+  ansible.builtin.stat:
+    path: /etc/aegis/secrets.env
+  register: aegis_panel_secrets_stat
+  failed_when: not aegis_panel_secrets_stat.stat.exists
+  changed_when: false
+  become: true
+  # This stat is best-effort: if the file is
+  # readable by the aegis-deploy user (the
+  # `configure_secrets` role writes it mode 0600
+  # owner aegis-deploy) the stat succeeds. If the
+  # operator runs the panel playbook as a
+  # different user, the stat returns
+  # `stat.exists=false` regardless of the file's
+  # actual presence; the `become: true` covers
+  # the typical case where the user can escalate
+  # to root.
+
+- name: "install_panel | drop the production docker-compose file"
+  ansible.builtin.copy:
+    src: "{{ aegis_panel_compose_src }}"
+    dest: "{{ aegis_panel_compose_path }}"
+    owner: root
+    group: "{{ aegis_user | default('aegis-deploy') }}"
+    mode: "0640"
+  become: true
+  notify: restart aegis-panel
+
+# Pull the image. Idempotent: re-runs with the same
+# tag are no-ops. Operators on a hermetic / air-
+# gapped network override `aegis_panel_image_tag`
+# to a local mirror (`ghcr.io.local/qadversif/aegispanel:0.5.0`)
+# and pre-stage the image on the host.
+- name: "install_panel | pull the panel image ({{ aegis_panel_image_tag }})"
+  ansible.builtin.command:
+    cmd: "docker compose -f {{ aegis_panel_compose_path }} pull"
+    environment:
+      AEGIS_PANEL_IMAGE_TAG: "{{ aegis_panel_image_tag }}"
+  register: aegis_panel_pull
+  changed_when: "'Downloaded' in aegis_panel_pull.stdout or 'Pulled' in aegis_panel_pull.stdout"
+  become: true
+
+# Start the stack. `up -d --remove-orphans` cleans
+# up containers from a previous version (the
+# `aegis-panel` name is stable across releases; an
+# older image with the same name is removed).
+- name: "install_panel | start the panel"
+  ansible.builtin.command:
+    cmd: "docker compose -f {{ aegis_panel_compose_path }} up -d --remove-orphans"
+    environment:
+      AEGIS_PANEL_IMAGE_TAG: "{{ aegis_panel_image_tag }}"
+  register: aegis_panel_up
+  changed_when: "'Started' in aegis_panel_up.stdout or 'Recreated' in aegis_panel_up.stdout"
+  become: true
+
+# Summary so the operator can see the panel's
+# state at a glance (and `docker compose ps` is
+# useful for "is it actually running" debugging
+# when the up command exits 0 but a misconfig in
+# the secrets file makes the container
+# crash-loop).
+- name: "install_panel | summary"
+  ansible.builtin.command:
+    cmd: "docker compose -f {{ aegis_panel_compose_path }} ps"
+  register: aegis_panel_ps
+  changed_when: false
+  become: true

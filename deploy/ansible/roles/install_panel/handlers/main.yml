@@ -1,0 +1,9 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Handlers for install_panel.
+
+- name: restart aegis-panel
+  ansible.builtin.command:
+    cmd: "docker compose -f /etc/aegis/docker-compose.prod.yml restart"
+  become: true
