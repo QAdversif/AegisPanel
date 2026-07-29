@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (pre-PR local CI gate, #124)
+
+- **`chore(ops): tools/scripts/pre-pr.sh + pre-push
+  hook + Makefile target`** — run the
+  CI-equivalent checks locally before pushing a
+  PR. The script catches the lint / test /
+  markdown formatting failures that otherwise cost
+  a 5+ minute round-trip through GitHub Actions;
+  the v0.5.0 PR batch (#120, #121) shipped with
+  a `fix(ci)` follow-up commit on each push
+  because the local gate did not exist.
+  - `tools/scripts/pre-pr.sh` — the canonical
+    script. Runs:
+    1. `gofmt -l backend/`
+    2. `go build -trimpath ./...` (skip with
+       `--quick`)
+    3. `go test -short -count=1 ./...` (skip
+       with `--quick`)
+    4. `golangci-lint run --config .golangci.yml`
+       with `GOFLAGS=-tags=integration`
+    5. `npm ci` (skipped if `node_modules` is
+       already present; the CI uses `npm ci` for
+       a clean install)
+    6. `npm run codegen:check` (openapi-typescript
+       up to date)
+    7. `npm run type-check` (vue-tsc)
+    8. `npm run lint` (eslint + check-raw-text)
+    9. `npm run build` (skip with `--quick`)
+    10. `markdownlint-cli2` on `**/*.md` (fetched
+        via `npx -y`; the CI pins the same version
+        via the `DavidAnson/markdownlint-cli2-action@v19`
+        action)
+    Each step prints pass/fail with elapsed
+    seconds; the failing step's stdout+stderr is
+    dumped verbatim so the operator can fix and
+    re-run. The final summary is green-on-red and
+    the script exits non-zero on the first failure.
+  - `tools/scripts/install-pre-push.sh` — installs
+    `.git/hooks/pre-push` to delegate to
+    `pre-pr.sh`. Idempotent (re-running rewrites
+    the stub). One-line uninstall: `rm
+    .git/hooks/pre-push`.
+  - `Makefile` — new `pre-pr` and `pre-pr-install`
+    targets (so `make pre-pr` and `make pre-pr-install`
+    work alongside the existing `test` / `lint` /
+    `build` targets).
+  - Scope flags: `--backend`, `--frontend`,
+    `--docs`, `--quick`. The default is `all`
+    (everything, full set). The CI doesn't
+    parallelise per-scope yet, but the flags are
+    there for the day we add a pre-PR
+    parallel-orchestrator.
+
+- Out of scope (deferred to follow-ups):
+  - Parallel orchestrator (e.g. `dx pre-pr
+    --parallel`) — the per-scope flags are in
+    place but the script is sequential today.
+    The CI matrix already parallelises per
+    job, so a local parallel mode is a
+    convenience, not a correctness gate.
+  - A pre-commit hook that runs the same gate
+    on `git commit` (rather than `git push`).
+    The pre-push gate is enough for the v0.5.0
+    polish; a pre-commit gate would be
+    annoying during a work-in-progress commit
+    chain.
+
 ### Added (backups UI, #121)
 
 - **`feat(backups): BackupsView.vue + API client`**
