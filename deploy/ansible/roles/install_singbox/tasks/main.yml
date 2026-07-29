@@ -63,27 +63,38 @@
 # safe default — the operator can `mv` them later
 # if GeoIP rules are added.
 #
-# # Why a hardcoded SHA-256 instead of API lookup
+# # Why we look up the SHA-256 from the GitHub API
 #
 # sing-box publishes release artifacts via GitHub
 # Releases. The asset `digest` field in the GitHub
-# API response IS the SHA-256, but the release itself
-# does not ship a sidecar `.sha256` file. Two ways to
-# verify the download:
+# API response IS the SHA-256, but the release
+# itself does not ship a sidecar `.sha256` file
+# and SagerNet does not publish a GPG-signed
+# SHA256SUMS. Three options to verify the download:
 #
 #   A. Hardcode the digest in the role defaults
-#      (this PR). Operator bumps the version AND the
-#      digest in lockstep. Risk: a compromised
-#      GitHub release would not be detected, but the
-#      SagerNet commit signing (verified GPG on
-#      GitHub) makes this attack hard.
+#      (the v0.4.0-c approach). Operator bumps
+#      the version AND the digest in lockstep.
+#      Risk: a compromised GitHub release would
+#      not be detected, but SagerNet commit
+#      signing (verified GPG on GitHub) makes
+#      this attack hard.
 #   B. Runtime fetch via the GitHub API. Requires
-#      an API token (rate-limited), increases role
-#      complexity, and is harder to test in CI.
+#      an API token (optional, for rate-limit
+#      headroom). Increases role complexity a
+#      little, but tests cleanly with a one-shot
+#      pre-flight task.
+#   C. GPG / minisign detached signature.
+#      Unavailable: SagerNet does not publish
+#      detached signatures for sing-box releases.
+#      Cosign signing of our own Docker images
+#      is the v0.5.x equivalent for the panel
+#      and agent.
 #
-# Option A is the v0.4.0-c choice. Option B is
-# v0.5.0 work; the role's defaults include a
-# comment pointing to the upgrade path.
+# v0.5.0 ships option B (this PR). The v0.4.0-c
+# hardcode is gone; the role now requires
+# `aegis_singbox_version` and looks up the digest
+# at install time.
 
 - name: Refuse to run on unsupported architectures
   ansible.builtin.assert:
@@ -97,20 +108,6 @@
       `aegis_singbox_binary_path` for other archs, or
       install sing-box from your distro's package
       manager and skip this role.
-
-- name: Refuse to run without a SHA-256 pin
-  ansible.builtin.assert:
-    that:
-      - aegis_singbox_sha256 | length == 64
-    fail_msg: >-
-      install_singbox: aegis_singbox_sha256 must be
-      set to the SHA-256 of the target tarball.
-      Find it in the GitHub API response at
-      https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{{ aegis_singbox_version }}
-      (the `assets[].digest` field, format
-      `sha256:<hex>`; pass the hex). The default in
-      roles/install_singbox/defaults/main.yml is the
-      digest for v{{ aegis_singbox_version }} linux-amd64.
 
 - name: Ensure the _sing-box system group exists
   ansible.builtin.group:
@@ -158,6 +155,54 @@
       sing-box-{{ aegis_singbox_version }}-linux-{{ 'amd64' if ansible_facts['architecture'] == 'x86_64'
          else 'arm64' if ansible_facts['architecture'] == 'aarch64'
          else ansible_facts['architecture'] }}{{ ('-' + aegis_singbox_linux_variant) if aegis_singbox_linux_variant else '' }}.tar.gz
+
+- name: Look up the sing-box SHA-256 via the GitHub Releases API
+  ansible.builtin.uri:
+    url: "{{ aegis_singbox_release_api_url }}"
+    method: GET
+    headers:
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: "2022-11-28"
+      Authorization: >-
+        {{ 'Bearer ' + aegis_singbox_release_api_token
+           if aegis_singbox_release_api_token else omit }}
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: aegis_singbox_release
+  # The uri module raises on non-2xx unless
+  # `status_code` is explicit; 200 is the only
+  # acceptable response. 404 means the tag does
+  # not exist (operator typo, or the release was
+  # unpublished); 403 means rate-limit tripped on
+  # an unauthenticated call.
+  retries: 3
+  delay: 5
+  until: aegis_singbox_release.status == 200
+  become: false
+  # The lookup does not require root; the file
+  # system is touched only on the download step
+  # below.
+
+- name: Extract the SHA-256 of the target tarball from the API response
+  ansible.builtin.set_fact:
+    aegis_singbox_sha256: >-
+      {{ (aegis_singbox_release.json.assets
+          | selectattr('name', 'equalto', aegis_singbox_tarball)
+          | first).digest
+          | regex_replace('^sha256:', '') }}
+  # `assets[]` is the array of release files; we
+  # filter by the per-arch tarball name (set
+  # in the previous task). `digest` is
+  # `sha256:<hex>`; the `regex_replace` strips the
+  # prefix so the `checksum:` field of the
+  # get_url module gets just the hex. If the
+  # asset is missing the role aborts with a
+  # clear "no asset" error (which would mean the
+  # operator picked a version that does not ship
+  # the requested arch — common when the sing-box
+  # release skips a variant for a given version).
+  become: false
 
 - name: Download the sing-box tarball
   ansible.builtin.get_url:

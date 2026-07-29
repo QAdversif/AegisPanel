@@ -59,3 +59,36 @@ make dev-down
 
 - [API reference](../api/) — once endpoints land in Phase 1.
 - [Architecture](./architecture) — the full design.
+
+## Operator quickstart (v0.5.0+)
+
+The two-step "install the panel" / "register a node" loop is the
+canonical first-run path on a fresh VPS. The Ansible roles live
+under `deploy/ansible/roles/`; `tools/scripts/install-pre-push.sh`
+in the repo root installs a git hook that runs the CI-equivalent
+checks locally before any push (so a red build is caught before
+the CI round-trip).
+
+```bash
+# 1. Pull the sops+age encrypted secrets onto the panel host
+#    (the sops+age workflow is documented in
+#    `deploy/secrets/README.md`; v0.5.0 ships the
+#    `configure_secrets` role that does this in one step).
+ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
+  deploy/ansible/playbooks/panel.yml
+
+# 2. From the panel UI, register the first node (or run
+#    `playbooks/node.yml` against an existing SSH endpoint).
+#    The role installs sing-box from the GitHub release tarball,
+#    looks up the SHA-256 via the GitHub Releases API at install
+#    time, and verifies the download with `get_url checksum:`.
+#    The v0.4.0 hardcoded hash is gone — bumping
+#    `aegis_singbox_version` in `group_vars/all.yml` is now a
+#    one-line change.
+ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
+  deploy/ansible/playbooks/node.yml
+```
+
+The sops+age indirection is the v0.5.0+ default. Operators on
+v0.4.0 still set `AEGIS_*_SECRET` env vars directly on the
+host; the `configure_secrets` role is a no-op on those hosts.
