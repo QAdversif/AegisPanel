@@ -1,0 +1,40 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Defaults for the install_panel role. Variables
+# that are usually site-specific live in
+# `group_vars/all.yml`; the ones here are per-host
+# defaults the operator can override per host.
+#
+# v0.5.0 install_panel is intentionally minimal —
+# it drops the production `docker-compose.prod.yml`
+# in place and starts the stack. The data services
+# (Postgres, Redis, NATS) are NOT managed by this
+# role; the operator provisions them out-of-band
+# (managed RDS, a sibling compose, systemd
+# services, etc.) and wires the panel's
+# `aegis.postgres_dsn` to the external service in
+# the sops+age secrets file.
+
+# aegis_panel_image_tag is the image tag the
+# compose file uses. The default `latest` follows
+# the main branch build; the v0.5.0 release pipeline
+# pushes the panel under the semver tag (e.g.
+# `0.5.0` — note: no `v` prefix; the release workflow
+# was rewritten in #111). Operators on a stable
+# release pin this in `group_vars/all.yml` to the
+# exact tag.
+aegis_panel_image_tag: "latest"
+
+# aegis_panel_compose_path is the absolute path
+# the role writes the docker-compose.prod.yml to
+# on the target host. `/etc/aegis/` is the canonical
+# install dir (same as the secrets.env path).
+aegis_panel_compose_path: "/etc/aegis/docker-compose.prod.yml"
+
+# aegis_panel_compose_src is the local path of the
+# compose template in the operator's checkout. The
+# role renders it via `template:`; an operator on a
+# different topology (the template is not in the
+# playbook's source tree) can override.
+aegis_panel_compose_src: "deploy/docker/docker-compose.prod.yml.j2"

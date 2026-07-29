@@ -1,0 +1,19 @@
+---
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Handlers for install_panel.
+
+- name: restart aegis-panel
+  ansible.builtin.command:
+    cmd: "docker compose -f /etc/aegis/docker-compose.prod.yml restart"
+  become: true
+  changed_when: true
+  # The handler is best-effort: a misconfigured
+  # secrets.env will leave the container in a
+  # crash loop, and `docker compose restart` on a
+  # not-yet-running container is a no-op. The
+  # `register: aegis_panel_restart` capture
+  # pattern is left to future iterations; for
+  # now the role's `summary` task is the
+  # canonical "is the panel actually up?"
+  # check.
