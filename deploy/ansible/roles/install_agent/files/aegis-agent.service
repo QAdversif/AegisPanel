@@ -12,7 +12,30 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The per-node bearer + node config. Written by the
+# install_agent role from agent.env.j2.
 EnvironmentFile=/etc/aegis/agent.env
+# v0.5.0+#119 follow-up: the sops+age secrets file.
+# Currently the agent only reads AEGIS_AGENT_BEARER
+# (and a handful of AEGIS_AGENT_* knobs) — all of
+# which are sourced from agent.env above. The
+# secrets.env EnvironmentFile is loaded here so
+# that any future AEGIS_* secret the agent may
+# pick up (e.g. a shared AEGIS_AGENT_LOG_LEVEL
+# default, a metrics endpoint URL) flows from the
+# canonical secrets source without a second
+# template edit.
+#
+# systemd silently skips missing EnvironmentFile
+# entries, so dev hosts that do not run
+# configure_secrets are unaffected. Hosts that DO
+# run configure_secrets get the secondary env for
+# free; later env vars in the same file override
+# earlier ones on a key collision (so per-node
+# values in agent.env take precedence over panel-
+# level values in secrets.env when both define
+# the same key).
+EnvironmentFile=-/etc/aegis/secrets.env
 ExecStart=/usr/local/bin/aegis-agent
 Restart=always
 RestartSec=5
