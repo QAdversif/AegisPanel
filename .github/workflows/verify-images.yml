@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: verify-images
+
+on:
+  # Run after every release workflow completes. The trigger
+  # is a `workflow_run` event — fires once the upstream
+  # workflow's `release` job has finished, regardless of
+  # success. The verify step inside this workflow filters
+  # on `conclusion == 'success'` so a failed release does
+  # not produce a spurious verify failure (the signature
+  # was never written).
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  # Manual trigger: re-verify the most recent tag (or a
+  # specific one via inputs.tag). Useful when an operator
+  # wants to confirm a signature outside the release cycle.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to verify (default: latest versioned tag from git describe)"
+        required: false
+  # Weekly schedule: silent breakage detector. If a
+  # signature is ever lost (e.g. someone deletes the OOB
+  # signature in GHCR), the verify fails and we find out
+  # within a week. The schedule is Mon 06:00 UTC (low
+  # traffic window).
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    name: verify cosign signatures
+    runs-on: ubuntu-latest
+    # The OIDC identity used to sign images is tied to the
+    # release workflow. The regex matches any release run
+    # on this repo, on any tag (v0.5.0, v0.5.1, …).
+    env:
+      PANEL_IMAGE: ghcr.io/qadversif/aegispanel
+      UI_IMAGE: ghcr.io/qadversif/aegispanel-ui
+      IDENTITY_REGEXP: '^https://github.com/QAdversif/AegisPanel/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+.*$'
+      OIDC_ISSUER: 'https://token.actions.githubusercontent.com'
+    steps:
+      - name: Skip when release failed
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success'
+        run: |
+          echo "::notice::Upstream release workflow did not succeed (conclusion=${{ github.event.workflow_run.conclusion }}); skipping verify."
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Resolve the tag to verify. Three sources, in order:
+      #   1. workflow_dispatch input (operator override)
+      #   2. workflow_run head_branch (the tag that triggered
+      #      the release)
+      #   3. git describe --tags (most recent versioned tag
+      #      for the weekly schedule)
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # github.event.workflow_run.head_branch is the
+            # ref name; for tag-push events this is `vX.Y.Z`.
+            echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          else
+            # schedule trigger: use the most recent versioned tag.
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [[ -z "$tag" ]]; then
+              echo "::error::No versioned tag found in repo; cannot verify"
+              exit 1
+            fi
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Verifying tag: ${{ steps.tag.outputs.tag }}"
+
+      - name: Verify panel image signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # The panel image is tagged with bare semver
+          # (e.g. 0.5.0, not v0.5.0); the UI image keeps the
+          # 'v' prefix.
+          panel_tag="${TAG#v}"
+          cosign verify \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            "${PANEL_IMAGE}:${panel_tag}"
+
+      - name: Verify UI image signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            "${UI_IMAGE}:${TAG}"
