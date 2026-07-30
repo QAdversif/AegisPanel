@@ -17,6 +17,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/plans"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 	"github.com/QAdversif/AegisPanel/internal/users"
 )
@@ -155,8 +156,10 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
 	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
 	auditsSvc := audits.NewService(audits.NewMemoryStore())
+	plansStore := plans.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	plansSvc := plans.NewService(plansStore)
 
-	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil)
+	return Build(nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil)
 }
 
 // contains is a small strings.Contains alias to keep

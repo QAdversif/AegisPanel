@@ -310,9 +310,18 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 // This is the only place where the wire format of the role enum
 // (from migration 0001) meets our internal Scope vocabulary.
 //
-//	super-admin -> admin, read, write, hosts, audits
-//	operator    -> read, write, hosts, audits
-//	viewer      -> read, audits
+//	super-admin -> admin, read, write, hosts, plans, audits
+//	operator    -> read, write, hosts, plans, audits
+//	viewer      -> read, plans, audits
+//
+// The `plans` scope is granted to every role (admin /
+// operator / viewer) because every operator-facing
+// surface that lists users (the "this user is on
+// plan X" column in the UsersView, the "0 users on
+// this plan" badge in the PlansView) reads the
+// plans catalog. A viewer who cannot see the
+// catalog cannot resolve a `plan_id` to a name —
+// the same fail-closed logic as the `audits` scope.
 //
 // Unknown roles get only `read` — fail-closed. The `audits` scope
 // is granted to every role because the audit log is the
@@ -322,11 +331,11 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 func scopesForRole(role string) Scopes {
 	switch role {
 	case "super-admin":
-		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopeAudits}
+		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeAudits}
 	case "operator":
-		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopeAudits}
+		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeAudits}
 	case "viewer":
-		return Scopes{ScopeRead, ScopeAudits}
+		return Scopes{ScopeRead, ScopePlans, ScopeAudits}
 	default:
 		return Scopes{ScopeRead}
 	}
