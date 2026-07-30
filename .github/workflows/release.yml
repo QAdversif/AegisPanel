@@ -75,6 +75,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Install cosign for the post-push signing steps below.
+      # The workflow already has `id-token: write` permission
+      # at the job level, so the keyless OIDC flow works
+      # against the GitHub Actions OIDC issuer.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Extract version metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -100,6 +107,7 @@ jobs:
           # versions on any event).
 
       - name: Build and push panel image
+        id: build_panel
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -112,6 +120,7 @@ jobs:
           provenance: false
 
       - name: Build and push UI image
+        id: build_ui
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -121,6 +130,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+
+      # Sign the panel image by its actual digest (NOT by
+      # tag) — the digest is what the signature is bound
+      # to. Using the tag would also work, but signing by
+      # digest is the most precise: the signature is
+      # unambiguously attached to one specific image
+      # manifest, regardless of any future tag moves.
+      # The `id-token: write` job permission above enables
+      # cosign's keyless OIDC flow against the GitHub
+      # Actions issuer.
+      - name: Sign panel image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/qadversif/aegispanel@${{ steps.build_panel.outputs.digest }}
+
+      - name: Sign UI image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/qadversif/aegispanel-ui@${{ steps.build_ui.outputs.digest }}
 
       # Create a GitHub release with auto-generated notes (uses the
       # conventional-commits PR titles we already produce).
