@@ -117,6 +117,18 @@ type Config struct {
 	// backend covered both).
 	UsersBackend string `env:"AEGIS_USERS_BACKEND" envDefault:"memory"`
 
+	// PlansBackend selects the persistence layer for the
+	// plans service (the v0.6.0 plan-CRUD surface).
+	// "memory" (default) keeps rows in RAM — dev only.
+	// "pg" uses the PostgreSQL backend (PgStore) backed
+	// by the `plans` table (migration 0001). The
+	// `plan_pool` join table is NOT touched by this
+	// store in v0.6.0; the subscription package keeps
+	// its read-only view of plan_pool for the render
+	// path. v0.6.x folds plan_pool into this store and
+	// lets subscription delegate to it.
+	PlansBackend string `env:"AEGIS_PLANS_BACKEND" envDefault:"memory"`
+
 	// PanelcfgBackend selects the persistence layer for the
 	// panel-wide config service. "memory" (default) keeps
 	// the panel_path_config rows in RAM — dev only.
