@@ -19,26 +19,41 @@
 //
 // # Duration handling
 //
-// The `duration` column is `INTERVAL NOT NULL`. pgx
-// has built-in support for `pgtype.Interval`, which
-// has three components: Months, Days, Microseconds.
-// The Service stores Duration as a `time.Duration`
-// (nanoseconds). The conversion to / from Interval
-// is day-precision:
+// The `duration` column is `INTERVAL NOT NULL`. The
+// Service stores Duration as a `time.Duration`
+// (nanoseconds). The PgStore encodes / decodes it
+// as int64 microseconds (the natural unit for
+// Postgres INTERVAL — `bigint::INTERVAL` interprets
+// the value as microseconds, matching the
+// intervalToDuration decode on the read side).
 //
-//   - encode: days = int(d / 24h), microseconds =
-//     remainder * 1e3
-//   - decode: 24h * days + 1us * microseconds
+// Why microseconds, not the pgx-native
+// `pgtype.Interval`? Two reasons:
 //
-// Months are accepted on encode (a Duration that
-// divides cleanly into 30-day chunks is stored as
-// days; the conversion in durationToInterval is the
-// maths). Months are NOT decoded back to Duration
-// — the operator who stored a 1-month duration will
-// read it back as 30 days, not as a "month" unit.
-// The panel does not model months; the closest is
-// the `reset_period = 'monthly'` knob, which is the
-// traffic-reset cadence (a separate field).
+//   1. The `pgtype.Interval.Valid` bool makes the
+//      zero value encode as SQL NULL, which silently
+//      blows up against the `NOT NULL` constraint
+//      with a confusing error (we hit this once — see
+//      PR #131 CI failure). Microsecond-int64 +
+//      `::INTERVAL` cast is bulletproof.
+//
+//   2. The Subscription package's `Plan.Duration`
+//      is already `time.Duration` (nanoseconds), so
+//      a single canonical unit on the Go side keeps
+//      the call sites clean.
+//
+// Sub-microsecond precision is lost (Postgres
+// INTERVAL is microsecond-precision). The
+// subscription tariff use case does not need
+// nanosecond granularity; the human-readable
+// "30 days" / "1 year" / "1 hour" granularity is
+// what the operator picks from the UI.
+//
+// Months are NOT modelled. The Go side has
+// `time.Duration` (nanoseconds) which is
+// month-unaware. A 30-day tariff round-trips
+// exactly. A 31-day tariff round-trips as 31 days
+// (no "month" component is involved).
 //
 // # Concurrency
 //
@@ -93,14 +108,14 @@ func (s *PgStore) Create(ctx context.Context, p *Plan) error {
 			id, name, traffic_limit_bytes, duration,
 			device_limit, reset_period, price_cents
 		) VALUES (
-			$1, $2, $3, $4,
+			$1, $2, $3, $4::INTERVAL,
 			$5, $6, $7
 		)`
 	_, err := s.pool.Exec(ctx, q,
 		p.ID,
 		p.Name,
 		p.TrafficLimitBytes,
-		durationToInterval(p.Duration),
+		durationToMicroseconds(p.Duration),
 		p.DeviceLimit,
 		string(p.ResetPeriod),
 		p.PriceCents,
@@ -167,7 +182,7 @@ func (s *PgStore) Update(ctx context.Context, p *Plan) error {
 		UPDATE plans SET
 			name = $2,
 			traffic_limit_bytes = $3,
-			duration = $4,
+			duration = $4::INTERVAL,
 			device_limit = $5,
 			reset_period = $6,
 			price_cents = $7,
@@ -177,7 +192,7 @@ func (s *PgStore) Update(ctx context.Context, p *Plan) error {
 		p.ID,
 		p.Name,
 		p.TrafficLimitBytes,
-		durationToInterval(p.Duration),
+		durationToMicroseconds(p.Duration),
 		p.DeviceLimit,
 		string(p.ResetPeriod),
 		p.PriceCents,
@@ -300,60 +315,40 @@ func mapPgError(err error, op string) error {
 // test.)
 var _ Store = (*PgStore)(nil)
 
-// --- interval <-> duration helpers ------------------------------------
+// --- duration <-> microsecond helpers --------------------------------
 //
-// The Go side uses time.Duration (nanoseconds). The
-// DB side uses INTERVAL (months, days, microseconds).
-// The conversion is day-precision — months are
-// accepted on encode (a Duration that divides
-// cleanly into 30-day chunks is stored as days by
-// the encode path; the maths is below) but not
-// decoded back (the operator who stored a 1-month
-// duration will read it back as 30 days, not as a
-// "month" unit). The choice of 30 days per "month"
-// is documented at the call site; v0.6.x may
-// introduce a calendar-aware duration if real
-// customer demand appears.
+// Encode: time.Duration -> int64 microseconds.
+// Postgres `bigint::INTERVAL` interprets the
+// value as microseconds, which is the natural
+// unit for INTERVAL (sub-microsecond precision
+// is not needed for a subscription tariff).
+//
+// Decode: pgtype.Interval -> time.Duration. pgx
+// scans the binary INTERVAL into a
+// pgtype.Interval{Months, Days, Microseconds,
+// Valid}. We sum the three components (months
+// mapped as 30 days, the documented policy — see
+// service.go for the rationale) into a single
+// time.Duration in nanoseconds.
 
-// durationToInterval converts a time.Duration to a
-// pgtype.Interval. The conversion is day-precision:
-// a Duration of 36h becomes {Days: 1, Microseconds:
-// 12 * 3600 * 1_000_000}. Months are not produced
-// (Duration is nanoseconds, not a calendar unit;
-// the closest is the `reset_period = 'monthly'`
-// knob, which is a separate field).
-//
-// The Service caps Duration at MaxDuration
-// (10 * 365 * 24h = 87600h = 3650 days), so the
-// int64 → int32 cast for `days` is bounded and
-// cannot overflow in production. We add an
-// explicit guard so a future config change (or a
-// direct call to the Store layer) cannot
-// silently produce a negative day count.
-func durationToInterval(d time.Duration) pgtype.Interval {
-	const nsPerDay = int64(24 * 3600 * 1e9)
-	total := int64(d)
-	days := total / nsPerDay
-	remainder := total - days*nsPerDay
-	micros := remainder / 1_000
-	// Cap days at the int32 max as a safety net.
-	// The Service-layer MaxDuration (10y) is well
-	// under this; the cap is here for defence in
-	// depth against a future Service-replacement
-	// that forgets the bound. #nosec G115 --
-	// bounded by the const above.
-	const int32Max int64 = 1<<31 - 1
-	if days > int32Max {
-		days = int32Max
-	}
-	return pgtype.Interval{Days: int32(days), Microseconds: micros} // #nosec G115 -- bounded above
+// durationToMicroseconds converts a time.Duration
+// to int64 microseconds. Integer division truncates
+// sub-microsecond nanoseconds; the subscription
+// tariff use case does not need that precision.
+func durationToMicroseconds(d time.Duration) int64 {
+	return int64(d / time.Microsecond)
 }
 
 // intervalToDuration converts a pgtype.Interval to a
-// time.Duration. Months are mapped as 30 days. The
-// choice is documented in the package doc comment;
-// v0.6.x may revisit if real customer demand for
-// calendar-aware durations appears.
+// time.Duration. Months are mapped as 30 days; the
+// panel does not model calendar months in a
+// Duration (the closest is `reset_period =
+// 'monthly'`, which is the traffic-reset cadence,
+// a separate field). The choice of 30 days per
+// "month" is documented in the service.go package
+// doc comment; v0.6.x may introduce a
+// calendar-aware duration if real customer demand
+// appears.
 func intervalToDuration(iv pgtype.Interval) time.Duration {
 	const (
 		nsPerDay   = int64(24 * 3600 * 1e9)
