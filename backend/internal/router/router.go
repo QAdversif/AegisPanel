@@ -24,6 +24,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/plans"
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 	"github.com/QAdversif/AegisPanel/internal/users"
@@ -44,6 +45,7 @@ func Build(
 	usersSvc *users.Service,
 	panelCfgSvc *panelcfg.Service,
 	auditsSvc *audits.Service,
+	plansSvc *plans.Service,
 	bootstrapSvc *bootstrap.Service,
 	backupsSvc *backups.Service,
 	subLimiter *ratelimit.Limiter,
@@ -116,6 +118,15 @@ func Build(
 		// lives in the users package (d-refactor.3);
 		// the mount takes the *users.Service directly.
 		r.Mount("/users", users.AdminRouter(usersSvc, authSvc.Middleware()))
+
+		// Plans CRUD — admin surface. List / get / create /
+		// patch / delete. The plan-CRUD surface lives in
+		// the plans package (v0.6.0). Every operator
+		// role (admin / operator / viewer) gets
+		// ScopePlans so the catalog is readable from
+		// every role (the UsersView needs it to resolve
+		// a `plan_id` to a name).
+		r.Mount("/plans", plans.AdminRouter(plansSvc, authSvc.Middleware()))
 
 		// Subscription URL — the public endpoint that
 		// turns a sub_token into a base64 / sing-box /

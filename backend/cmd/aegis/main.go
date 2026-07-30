@@ -56,6 +56,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/plans"
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/router"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
@@ -156,6 +157,8 @@ func main() {
 			cfg.NodesBackend == "pg" ||
 			cfg.InboundsBackend == "pg" ||
 			cfg.SubscriptionBackend == "pg" ||
+			cfg.UsersBackend == "pg" ||
+			cfg.PlansBackend == "pg" ||
 			cfg.PanelcfgBackend == "pg" ||
 			cfg.AuditsBackend == "pg"
 	)
@@ -287,7 +290,28 @@ func main() {
 	}
 	usersSvc := users.NewService(usersStore)
 
-	// 9. Subscription service. After d-refactor.2 the
+	// 9. Plans service. v0.6.0 owner of the
+	//    `plans` table CRUD (the subscription
+	//    package continues to read it for the
+	//    render path; v0.6.x will consolidate).
+	//
+	//    Backend is selected at startup:
+	//      AEGIS_PLANS_BACKEND=memory (default)
+	//      uses the Phase 0 MemoryStore; =pg uses
+	//      PgStore backed by the shared pool and
+	//      the `plans` table (migration 0001).
+	var plansStore plans.Store
+	switch cfg.PlansBackend {
+	case "pg":
+		plansStore = plans.NewPgStore(pool)
+		log.Info().Msg("plans: using pgx-backed store (PgStore)")
+	default:
+		plansStore = plans.NewMemoryStore(nil)
+		log.Info().Msg("plans: using in-memory store (MemoryStore, dev only)")
+	}
+	plansSvc := plans.NewService(plansStore)
+
+	// 10. Subscription service. After d-refactor.2 the
 	//    subscription package only owns the plan /
 	//    pool / member join tables and the render
 	//    orchestrator (Service.ResolveHostsForUser /
@@ -487,7 +511,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, bootstrapSvc, backupsSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, bootstrapSvc, backupsSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.

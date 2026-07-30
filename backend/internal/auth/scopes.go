@@ -68,6 +68,16 @@ const (
 	// GET/POST/DELETE /api/v1/backups endpoints
 	// (#120) are gated by this scope.
 	ScopeBackups Scope = "backups"
+
+	// ScopePlans lets a principal manage the plan
+	// catalog: list, create, update, delete. Every
+	// `users.plan_id` FK references a `plans.id`, so
+	// the plan CRUD is operator-facing (operator sets
+	// the tariff ladder) and admin-facing (admin
+	// sets the catalog defaults). The v0.6.0
+	// GET/POST/PATCH/DELETE /api/v1/plans endpoints
+	// (#132) are gated by this scope.
+	ScopePlans Scope = "plans"
 )
 
 // Scopes is a non-empty set of Scope values.
