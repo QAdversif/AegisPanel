@@ -9,16 +9,60 @@ package obs
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/config"
 )
 
+// AEGISEnvProduction is the value the AEGIS_ENV env var takes
+// when the panel should emit JSON-formatted logs (one record
+// per line, suitable for log shippers). Any other value
+// (the default "development", "staging", ...) produces the
+// human-readable console writer for dev-time ergonomics.
+const AEGISEnvProduction = "production"
+
 // CleanupFunc releases observability resources (flush, close, etc.).
 type CleanupFunc func(ctx context.Context) error
+
+// ConfigureLogger sets the global zerolog output format. The rule
+// is binary:
+//
+//   - AEGIS_ENV=production  →  JSON to stderr (one record per line)
+//   - anything else         →  ConsoleWriter to stderr (colorised, RFC3339)
+//
+// The function reads AEGIS_ENV directly (NOT from cfg) so it can
+// be called BEFORE config.Load() — that way, if config.Load()
+// itself logs.Fatal on a misconfiguration, the error line is
+// already in the right format. Config validation is the first
+// thing the boot does; the format must be ready before that.
+//
+// This is safe to call multiple times (the second call just
+// overwrites the global logger). Tests rely on the global
+// logger being reset to the default between subtests.
+func ConfigureLogger() {
+	configureLoggerTo(os.Stderr)
+}
+
+// configureLoggerTo is the testable seam: it applies the same
+// rule as ConfigureLogger but writes to the provided writer
+// instead of os.Stderr. Production code calls ConfigureLogger;
+// tests use this directly to capture output.
+func configureLoggerTo(w io.Writer) {
+	if os.Getenv("AEGIS_ENV") == AEGISEnvProduction {
+		log.Logger = zerolog.New(w).
+			With().Timestamp().Logger()
+		return
+	}
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: w, TimeFormat: time.RFC3339}).
+		With().Timestamp().Logger()
+}
 
 // Init wires up the standard observability stack. The returned cleanup
 // function must be called before the process exits.
