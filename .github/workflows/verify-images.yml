@@ -36,13 +36,28 @@ jobs:
   verify:
     name: verify cosign signatures
     runs-on: ubuntu-latest
-    # The OIDC identity used to sign images is tied to the
-    # release workflow. The regex matches any release run
-    # on this repo, on any tag (v0.5.0, v0.5.1, …).
+    # The OIDC identity in a cosign keyless Fulcio cert is
+    # bound to the workflow FILE + REF + SHA. The release
+    # workflow can be legitimately triggered from TWO
+    # different ref paths:
+    #
+    #   1. tag-push event           → refs/tags/vX.Y.Z
+    #   2. workflow_dispatch        → refs/heads/main (or the
+    #                                  branch the dispatch was
+    #                                  triggered from; in
+    #                                  practice always `main`)
+    #
+    # Both paths produce a fully-trustworthy signature —
+    # the cert still binds to OUR release workflow, not to
+    # some random PR. The regex accepts BOTH paths so
+    # re-runs (dispatch) don't false-fail. v0.5.0 doesn't
+    # have a `heads/main` release yet, so accept all `heads/*`
+    # for now; tighten later if we ever trigger release from
+    # a non-default branch.
     env:
       PANEL_IMAGE: ghcr.io/qadversif/aegispanel
       UI_IMAGE: ghcr.io/qadversif/aegispanel-ui
-      IDENTITY_REGEXP: '^https://github.com/QAdversif/AegisPanel/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+.*$'
+      IDENTITY_REGEXP: '^https://github.com/QAdversif/AegisPanel/\.github/workflows/release\.yml@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+.*|heads/.+)$'
       OIDC_ISSUER: 'https://token.actions.githubusercontent.com'
     steps:
       - name: Skip when release failed
@@ -50,26 +65,42 @@ jobs:
         run: |
           echo "::notice::Upstream release workflow did not succeed (conclusion=${{ github.event.workflow_run.conclusion }}); skipping verify."
 
+      - name: Checkout repo
+        # Required by `git describe --tags` to find the
+        # most recent versioned tag. The default checkout
+        # fetches a single ref, not all tags, so describe
+        # would return "fatal: No names found" without
+        # `fetch-tags: true`.
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      # Resolve the tag to verify. Three sources, in order:
+      # Resolve the tag to verify. Sources, in order:
       #   1. workflow_dispatch input (operator override)
-      #   2. workflow_run head_branch (the tag that triggered
-      #      the release)
-      #   3. git describe --tags (most recent versioned tag
-      #      for the weekly schedule)
+      #   2. workflow_run head_branch (the tag for tag-push
+      #      events, or `main` for dispatch re-runs — we
+      #      fall through to git describe in the latter
+      #      case because the panel image is not tagged
+      #      `main`)
+      #   3. git describe --tags --abbrev=0 (most recent
+      #      versioned tag for dispatch re-runs and the
+      #      weekly schedule)
       - name: Resolve tag
         id: tag
         run: |
           if [[ -n "${{ inputs.tag }}" ]]; then
             echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            # github.event.workflow_run.head_branch is the
-            # ref name; for tag-push events this is `vX.Y.Z`.
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]] && [[ "${{ github.event.workflow_run.head_branch }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            # tag-push event: head_branch IS the tag.
             echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
           else
-            # schedule trigger: use the most recent versioned tag.
+            # workflow_run from workflow_dispatch (head_branch = main,
+            # which is not an image tag), or the weekly schedule.
+            # Use the most recent versioned tag.
             tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
             if [[ -z "$tag" ]]; then
               echo "::error::No versioned tag found in repo; cannot verify"
@@ -88,6 +119,7 @@ jobs:
           # (e.g. 0.5.0, not v0.5.0); the UI image keeps the
           # 'v' prefix.
           panel_tag="${TAG#v}"
+          echo "Verifying ${PANEL_IMAGE}:${panel_tag}"
           cosign verify \
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer "$OIDC_ISSUER" \
@@ -98,6 +130,7 @@ jobs:
           COSIGN_EXPERIMENTAL: "1"
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          echo "Verifying ${UI_IMAGE}:${TAG}"
           cosign verify \
             --certificate-identity-regexp "$IDENTITY_REGEXP" \
             --certificate-oidc-issuer "$OIDC_ISSUER" \
