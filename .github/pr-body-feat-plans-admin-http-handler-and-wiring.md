@@ -94,8 +94,8 @@ curl -sX POST localhost:8080/api/v1/plans -H "Authorization: Bearer $TOKEN" \
 This is the second of 5 PRs in the v0.6.0 batch:
 
 1. **#131** — internal/plans package (merged)
-2. **#132 — this PR** — admin HTTP handler + ScopePlans
-   + router/main wiring + config
+2. **#132 — this PR** — admin HTTP handler + ScopePlans,
+   plus router/main wiring and config
 3. #133 — OpenAPI `/plans` endpoints + `Plan` schema
 4. #134 — `PlansView.vue` + sidebar nav + i18n en/ru
 5. #135 — v0.6.0 CHANGELOG + ROADMAP + plans API
