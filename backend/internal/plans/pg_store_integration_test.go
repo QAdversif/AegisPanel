@@ -1,58 +1,51 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+//go:build integration
+
 // Integration tests for the pgx-backed plans
-// Store. Gated on INTEGRATION_DATABASE_URL; skipped
-// when the env var is unset (the unit-test path
-// uses MemoryStore, which is the canonical
-// "no Postgres" path).
+// Store. Gated on the `integration` build tag
+// (matches the convention used by every other
+// package's pg_store_integration_test.go) and
+// on INTEGRATION_DATABASE_URL via testutil.MustNewPool.
 //
-// The fixture is a single test database with the
-// standard `plans` table from migration 0001. The
-// tests truncate the table between cases so order
-// does not matter; the test process is the only
-// writer.
+// The fixture is provided by testutil: it DROPs and
+// re-CREATEs the database, then runs every
+// migration in `backend/migrations/`. Each test
+// truncates the `plans` table (CASCADE so the
+// `plan_pool` join is also wiped) so order does not
+// matter; the test process is the only writer.
 
 package plans
 
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/QAdversif/AegisPanel/testutil"
 )
 
-// integrationDSN is the DSN the integration tests
-// read. When unset, the test binary runs as
-// unit-only and every test in this file is
-// skipped.
-func integrationDSN() string { return os.Getenv("INTEGRATION_DATABASE_URL") }
-
-// newPgStore opens a fresh pgxpool against the
-// integration DSN and returns a *PgStore +
-// a cleanup func that closes the pool and
-// truncates the plans table.
-func newPgStore(t *testing.T) (*PgStore, func()) {
+// newPgStore opens a fresh pgxpool via testutil
+// (which drops+recreates the DB + runs all
+// migrations) and returns a *PgStore. The plans
+// table is truncated (CASCADE) so the test starts
+// from an empty state; the same truncate is
+// re-applied on test exit.
+func newPgStore(t *testing.T) *PgStore {
 	t.Helper()
-	dsn := integrationDSN()
-	if dsn == "" {
-		t.Skip("INTEGRATION_DATABASE_URL not set; skipping pg integration test")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
-	}
-	if _, err := pool.Exec(context.Background(), `TRUNCATE TABLE plans`); err != nil {
+	pool := testutil.MustNewPool(t)
+	if _, err := pool.Exec(context.Background(),
+		`TRUNCATE TABLE plans RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE plans: %v", err)
 	}
-	cleanup := func() {
-		_, _ = pool.Exec(context.Background(), `TRUNCATE TABLE plans`)
-		pool.Close()
-	}
-	return NewPgStore(pool), cleanup
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`TRUNCATE TABLE plans RESTART IDENTITY CASCADE`)
+	})
+	return NewPgStore(pool)
 }
 
 // TestPgStore_BasicCRUD is the smoke for the
@@ -60,8 +53,7 @@ func newPgStore(t *testing.T) (*PgStore, func()) {
 // Update / List / Delete.
 func TestPgStore_BasicCRUD(t *testing.T) {
 	ctx := context.Background()
-	s, cleanup := newPgStore(t)
-	defer cleanup()
+	s := newPgStore(t)
 
 	p := &Plan{
 		ID:                uuid.New(),
@@ -142,8 +134,7 @@ func TestPgStore_BasicCRUD(t *testing.T) {
 // 23505 → unique_violation).
 func TestPgStore_DuplicateName(t *testing.T) {
 	ctx := context.Background()
-	s, cleanup := newPgStore(t)
-	defer cleanup()
+	s := newPgStore(t)
 
 	p1 := &Plan{
 		ID:          uuid.New(),
@@ -171,8 +162,7 @@ func TestPgStore_DuplicateName(t *testing.T) {
 // 48h.
 func TestPgStore_DurationRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	s, cleanup := newPgStore(t)
-	defer cleanup()
+	s := newPgStore(t)
 
 	cases := []time.Duration{
 		1 * time.Minute,
@@ -204,8 +194,7 @@ func TestPgStore_DurationRoundTrip(t *testing.T) {
 // branch on Get / Update / Delete.
 func TestPgStore_NotFound(t *testing.T) {
 	ctx := context.Background()
-	s, cleanup := newPgStore(t)
-	defer cleanup()
+	s := newPgStore(t)
 
 	if _, err := s.GetByID(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetByID missing: err = %v, want ErrNotFound", err)
