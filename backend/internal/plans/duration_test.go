@@ -9,25 +9,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// TestDurationMicrosecondsRoundTrip covers the
-// encode path: time.Duration -> int64 microseconds
-// -> Postgres INTERVAL -> pgtype.Interval ->
-// time.Duration. The local helper only owns the
-// two ends (encode to microseconds, decode from
-// pgtype.Interval); the middle is Postgres itself.
+// TestDurationIntervalRoundTrip covers the
+// day-precision encode / decode path. The
+// Service stores Duration as a time.Duration
+// (nanoseconds); the pgx layer encodes / decodes
+// this as a pgtype.Interval.
 //
 // The round-trip properties the package relies on:
 //
-//   - sub-microsecond precision is lost (Postgres
-//     INTERVAL is microsecond-precision);
-//   - whole milliseconds, seconds, minutes, hours,
-//     days survive a round-trip exactly;
+//   - whole days survive a round-trip exactly;
+//   - sub-day remainder (hours, minutes, seconds,
+//     microseconds) survives down to microsecond
+//     precision;
 //   - 30-day "month" units round-trip back as 30
 //     days (the documented month-as-30-days
 //     behaviour).
-func TestDurationMicrosecondsRoundTrip(t *testing.T) {
+func TestDurationIntervalRoundTrip(t *testing.T) {
 	cases := []time.Duration{
 		0,
+		1 * time.Nanosecond,
 		1 * time.Microsecond,
 		1 * time.Millisecond,
 		1 * time.Second,
@@ -40,29 +40,23 @@ func TestDurationMicrosecondsRoundTrip(t *testing.T) {
 		365 * 24 * time.Hour,
 	}
 	for _, d := range cases {
-		micros := durationToMicroseconds(d)
-		// The Go side never sees the int64 microseconds
-		// as an INTERVAL — Postgres does. The
-		// round-trip is "we hand microseconds to
-		// Postgres, Postgres stores the value as
-		// Days/Microseconds components, pgx scans it
-		// back as a pgtype.Interval, we call
-		// intervalToDuration". Simulate that locally:
-		const microsPerDay = int64(24 * 3600 * 1_000_000) // 86_400_000_000
-		iv := pgtype.Interval{
-			Days:         int32(micros / microsPerDay),
-			Microseconds: micros % microsPerDay,
-			Valid:        true,
+		iv := durationToInterval(d)
+		// Valid must be true so the encode path
+		// does not silently produce a SQL NULL.
+		// (See the pgtype.Interval footgun in the
+		// pg_store.go doc comment.)
+		if !iv.Valid {
+			t.Errorf("durationToInterval(%s): Valid = false, want true", d)
 		}
 		got := intervalToDuration(iv)
-		// The original Duration is exact; the
-		// reconstructed Duration may lose sub-microsecond
-		// nanoseconds. Truncate both sides to
-		// microseconds and compare.
+		// Sub-microsecond precision is lost on
+		// the encode path (Days+Microseconds
+		// truncates sub-microsecond nanoseconds).
+		// Round to microsecond and compare.
 		want := (d / time.Microsecond) * time.Microsecond
 		if got != want {
-			t.Errorf("Duration %s -> micros %d -> Interval %+v -> Duration %s; want %s",
-				d, micros, iv, got, want)
+			t.Errorf("Duration %s -> Interval %+v -> Duration %s; want %s",
+				d, iv, got, want)
 		}
 	}
 }
