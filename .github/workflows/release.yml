@@ -83,8 +83,21 @@ jobs:
           tags: |
             type=raw,value=${{ steps.rel.outputs.version }}
             type=raw,value=${{ steps.rel.outputs.short }}
-            type=raw,value=latest,enable={{is_default_branch}}
-          flavor: latest=auto
+            type=raw,value=latest,enable=${{ !contains(steps.rel.outputs.version, '-') }}
+          # The raw `latest` rule above is the canonical
+          # source of truth for the `latest` tag. It fires
+          # for any non-prerelease version (no `-` in
+          # `steps.rel.outputs.version`), on BOTH the
+          # tag-push path AND the workflow_dispatch
+          # re-run path. The previous `flavor:
+          # latest=auto` + `enable={{is_default_branch}}`
+          # combo only fired `latest` on workflow_dispatch
+          # from main; tag-push leaked `latest` to a stale
+          # digest (see v0.5.0: 0.5.0/0.5 emitted, latest
+          # stayed on v0.4.0's digest). `flavor:
+          # latest=auto` removed because the raw rule
+          # covers the only case that matters (non-prerelease
+          # versions on any event).
 
       - name: Build and push panel image
         uses: docker/build-push-action@v6
