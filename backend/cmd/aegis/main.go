@@ -38,7 +38,6 @@ import (
 	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
@@ -65,10 +64,10 @@ import (
 
 func main() {
 	// Pretty console output in dev, structured JSON in prod.
-	if os.Getenv("AEGIS_ENV") != "production" {
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).
-			With().Timestamp().Logger()
-	}
+	// ConfigureLogger reads AEGIS_ENV directly so the format
+	// is ready before config.Load() — see obs.ConfigureLogger
+	// for the rationale.
+	obs.ConfigureLogger()
 
 	// `aegis migrate …` is a maintenance subcommand that
 	// runs before the rest of the boot sequence. It does not
