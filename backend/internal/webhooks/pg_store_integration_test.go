@@ -242,6 +242,42 @@ func TestPgStore_DeleteEndpointCascades(t *testing.T) {
 
 // --- pending retries (v0.7.x) ----------------------------------------
 
+// seedEndpointAndDelivery creates a unique endpoint
+// and a delivery row that points at it. The
+// returned `*Delivery.ID` is safe to use as the
+// `delivery_id` argument of EnqueueRetry — the
+// FK on `webhook_pending_retries.delivery_id` will
+// accept it. The `urlSuffix` is appended to a
+// fixed prefix so the URL is unique across calls
+// (the table has a UNIQUE constraint on `url`).
+func seedEndpointAndDelivery(t *testing.T, s *PgStore, urlSuffix string) uuid.UUID {
+	t.Helper()
+	e := &Endpoint{
+		ID:      uuid.New(),
+		URL:     "https://seed-" + urlSuffix + ".example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}
+	if err := s.CreateEndpoint(context.Background(), e); err != nil {
+		t.Fatalf("seed: CreateEndpoint: %v", err)
+	}
+	d := &Delivery{
+		ID:          uuid.New(),
+		EndpointID:  e.ID,
+		EventType:   EventUserCreated,
+		Payload:     []byte(`{"seed":true}`),
+		RequestBody: []byte(`{"seed":true}`),
+		RequestURL:  e.URL,
+		Signature:   "sha256=00",
+		Timestamp:   time.Now().UTC(),
+		Attempt:     1,
+	}
+	if err := s.CreateDelivery(context.Background(), d); err != nil {
+		t.Fatalf("seed: CreateDelivery: %v", err)
+	}
+	return d.ID
+}
+
 // TestPgStore_PendingRetries_RoundTrip covers the
 // enqueue / dequeue / list-due flow against the
 // pgx-backed store. The migration 0017 must have
@@ -251,9 +287,12 @@ func TestPgStore_PendingRetries_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	s := newPgStore(t)
 	now := time.Now().UTC()
-	d1 := uuid.New()
-	d2 := uuid.New()
-	d3 := uuid.New()
+	// Real delivery rows so the FK on
+	// `webhook_pending_retries.delivery_id` is
+	// satisfied.
+	d1 := seedEndpointAndDelivery(t, s, "roundtrip-1")
+	d2 := seedEndpointAndDelivery(t, s, "roundtrip-2")
+	d3 := seedEndpointAndDelivery(t, s, "roundtrip-3")
 	if err := s.EnqueueRetry(ctx, d1, now.Add(1*time.Second)); err != nil {
 		t.Fatalf("EnqueueRetry d1: %v", err)
 	}
@@ -300,7 +339,7 @@ func TestPgStore_PendingRetries_RoundTrip(t *testing.T) {
 func TestPgStore_EnqueueRetry_UpdatesOnConflict(t *testing.T) {
 	ctx := context.Background()
 	s := newPgStore(t)
-	d := uuid.New()
+	d := seedEndpointAndDelivery(t, s, "upsert")
 	t1 := time.Now().UTC()
 	t2 := t1.Add(10 * time.Second)
 	if err := s.EnqueueRetry(ctx, d, t1); err != nil {
