@@ -444,10 +444,12 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 
 func scanDelivery(row rowScanner) (*Delivery, error) {
 	var (
-		d          Delivery
-		payloadRaw []byte
-		statusCode pgtype.Int4
-		durationMs pgtype.Int4
+		d           Delivery
+		payloadRaw  []byte
+		statusCode  pgtype.Int4
+		durationMs  pgtype.Int4
+		responseRaw pgtype.Text
+		errorRaw    pgtype.Text
 	)
 	if err := row.Scan(
 		&d.ID,
@@ -459,8 +461,8 @@ func scanDelivery(row rowScanner) (*Delivery, error) {
 		&d.Signature,
 		&d.Timestamp,
 		&statusCode,
-		&d.ResponseBody,
-		&d.Error,
+		&responseRaw,
+		&errorRaw,
 		&d.Attempt,
 		&durationMs,
 		&d.CreatedAt,
@@ -475,6 +477,12 @@ func scanDelivery(row rowScanner) (*Delivery, error) {
 	if durationMs.Valid {
 		v := int(durationMs.Int32)
 		d.DurationMs = &v
+	}
+	if responseRaw.Valid {
+		d.ResponseBody = responseRaw.String
+	}
+	if errorRaw.Valid {
+		d.Error = errorRaw.String
 	}
 	return &d, nil
 }
