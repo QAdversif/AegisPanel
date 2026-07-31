@@ -175,7 +175,15 @@ export interface Plan {
   id: UUID
   name: string
   trafficLimitBytes: number
-  durationDays: number
+  // Validity period of a subscription issued on
+  // this plan, in nanoseconds. The Go side stores
+  // it as a Postgres INTERVAL; the API exposes it
+  // as int64 nanoseconds so the UI can render
+  // "30 days" / "1 year" / "1 hour" without losing
+  // precision. Convert to a human-readable unit
+  // at the rendering layer (the PlansView in #134
+  // uses Intl.DurationFormat or a tiny helper).
+  durationNs: number
   deviceLimit: number
   resetPeriod: ResetPeriod
   priceCents: number
