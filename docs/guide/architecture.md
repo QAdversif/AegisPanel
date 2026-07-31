@@ -10,6 +10,29 @@ should be edited in lockstep with the code.
 
 ## Current version
 
+**v9.3 (2026-07-31) — post-v0.7.0 sync.** Five
+milestone tags landed since v9.2: `v0.4.0` (the
+d-r-series plus Path C consolidation), `v0.4.0-post`
+(release workflow fixes for PRs 102, 103, 104, 111),
+`v0.5.0` (sops+age secrets, backups, pre-PR gate,
+container wiring, operator guide, SECURITY, quickstart
+in PRs 119 through 126), `v0.6.0` (`internal/plans`
+promoted from the migration 0001 stub to a full CRUD
+in PRs 131 through 134), and `v0.7.0`
+(`internal/webhooks` with HMAC signing, retry, and DLQ
+in PRs 136 through 140). v9.3 is a status sync: the
+§21 unified roadmap status table is brought in line with
+what the repo actually ships; the `v0.4.0` (at
+`39d4d9e`), `v0.5.0` (at `d7182a0`), and the
+`v0.6.0` / `v0.7.0` tags (pending) are documented. See
+the `v9.3` entry in `ARCHITECTURE.md` §25 for the
+per-PR detail (the v0.5.0 batch, the v0.6.0 plans
+batch, the v0.7.0 webhooks batch, and the post-v0.7.0
+4-PR Go+frontend dependency batch in PRs 141 through
+144). The doc body itself is unchanged from v9.2; the
+§21 / §25 status tables and this "Current version"
+note are the only diffs.
+
 **v9.2 (2026-07-23) — roadmap sync + post-v0.3.0 cleanup.**
 v9 introduced the "variant A — sing-box only MVP" model
 (ADR-0003 supersedes ADR-0001; Xray moves to v2.0+).

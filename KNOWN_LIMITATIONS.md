@@ -1,72 +1,131 @@
-# Known Limitations — AegisPanel v0.4.0
+# Known Limitations — AegisPanel v0.7.0
 
-This document tracks the gaps between what
-`v0.4.0` ships and the full design in
-`ARCHITECTURE.md` §21. Every open entry points
-to the milestone that closes it. **Closed**
-items are kept for context — the PR that
-closed each one is named so future readers can
-find the diff.
+This document tracks the gaps between what the latest shipped
+milestone delivers and the full design in `ARCHITECTURE.md` §21.
+Every open entry points to the milestone that closes it.
+**Closed** items are kept for context — the PR that closed each
+one is named so future readers can find the diff.
 
-## v0.4.0 — currently open
+The current state of the project is **v0.7.0** (the outgoing
+webhook surface) on top of the v0.5.0 operations-grade feature
+set and the v0.6.0 plans CRUD. The v0.7.0 tag is the next
+candidate release; v0.7.x is the planned follow-up batch (see
+`docs/ROADMAP.md`).
+
+## v0.7.0 — currently open
 
 ### Operations
 
-#### Backup / restore — v0.5.0
+#### Webhook call-site wiring — v0.7.x
 
-The DB schema is straightforward Postgres
-but there is no automated backup / restore
-flow yet. v0.5.0 ships `pg_dump`-based backup
-with rotation + a smoke-tested restore
-playbook. Originally planned for v0.2, but
-`tools/scripts/backup.sh` was de-prioritised
-in favour of the v0.2 handler surfaces.
+`internal/webhooks.Service.Dispatch` is wired end-to-end on the
+HTTP / `POST /webhooks/{id}/test` path (v0.7.0). The production
+event flow — calling `Dispatch` from every mutating handler in
+`internal/{auth,nodes,inbounds,hosts,users,plans,backups}` — is
+NOT in v0.7.0; it lands in the v0.7.x follow-up batch. Until
+then, the only way to verify a webhook end-to-end is the
+`POST /webhooks/{id}/test` endpoint. The v0.7.x batch will add
+the `internal/events` package as the in-process event bus that
+the handlers emit into.
 
-#### Smoke on a fresh VM — v1.0
+#### `sops` envelope on `webhook_endpoints.secret` — v0.7.x
 
-The Definition of Done in `ADR-0003` requires
-a clean-VM smoke. v1.0 is the first milestone
-that lands it. The intermediate v0.x milestones
-skip the fresh-VM step because the deploy story
-is not yet final.
+`webhook_endpoints.secret` is stored in plaintext in the
+`webhook_endpoints` table (per v0.7.0). The sops+age flow that
+the `configure_secrets` Ansible role (#119) provides for the
+panel's own boot secrets does not yet wrap this column. v0.7.x
+moves the secret to sops+age at rest via a new migration (or a
+transparent encrypt/decrypt layer on the `Service`); the
+redaction logic on the read path (`***` on every read except the
+verbatim-on-Create response) stays as-is. v0.7.x also extends
+`docs/operator-guide.md` with a "rotating a webhook secret"
+section.
 
-### Cross-cutting
+#### Background worker for retry — v0.7.x
 
-#### Dependabot majors for the v0.x window
+`webhooks.Service.RetryDelivery` exists (v0.7.0) and is called
+from the synchronous `POST /webhooks/{id}/test` flow, but the
+production retry loop (1s / 5s / 25s / 2m15s / 11m15s, max 6
+attempts) is NOT in a background worker. v0.7.0 ships the
+state-machine; v0.7.x lands the goroutine in `cmd/aegis/main.go`
+that ticks the schedule. The infrastructure is ready
+(`webhooks.NewScheduler(svc, tick)` is the v0.7.x API).
 
-Dependabot PRs 69 (frontend minor+patch) and
-73 (zod 3→4) remain open, deferred to v0.5.0.
-PR 69 transitively requires TypeScript 5.8+ for
-`@vue/tsconfig 0.9.1`; PR 73 needs a
-`@vee-validate/zod` zod-4-compatible release.
-PRs 70 (vitest 3→4), 71 (vue-router 4→5),
-and 72 (eslint 8→10) closed in the v0.3.0
-cleanup batch (PRs 82, 84, 83). PR 68 (chi bump
-with the `RealIP` deprecation fix) superseded
-by PR 75.
+#### Webhook event types: "all" wildcard only — v0.7.x
 
-#### Light theme polish — v1.5
+v0.7.0 ships every endpoint subscribing to the wildcard (every
+event the panel emits). v0.7.x replaces the wildcard with a
+multi-select per endpoint (the UI ships the picker; the backend
+validates the closed `EventType` enum on Create / Update).
 
-The light + dark pair ships but the light
-theme is unstyled beyond the CSS variable
-swap. The Aegis long-term look is a slate
-base, but the light variant of the same
-base needs a design pass. v1.5.
+#### Shared zod schema at `frontend/src/schemas/webhook.ts` — v0.7.x
 
-#### Tailwind v4 migration — v1.5
+The `WebhooksView` form uses inline zod via `useZodForm` (same
+pattern as the v0.6.0 `PlansView`). v0.7.x moves the schema to
+`frontend/src/schemas/webhook.ts` so the create / edit / test
+dialogs share a single source of truth (matches the convention
+that other views will adopt as the UI matures).
 
-`tailwindcss@3.4` is the v0.1.0 baseline. v4
-ships oxide engine + container queries; the
-move is deferred until the rest of the
-ecosystem (forms / typography / animate)
-publishes v4-compatible releases.
+## v0.7.0 — closed in v0.7.0
+
+| Item | Closed by |
+| --- | --- |
+| `internal/webhooks` package — Endpoint + Delivery + DLQ models, EventType closed enum (18 types), HMAC sign/verify, retry schedule (1s / 5s / 25s / 2m15s / 11m15s, MaxAttempts=6), Service (`Dispatch` + `RetryDelivery` + `ReplayDLQEntry` + `SendTestEvent`), Store (MemoryStore + PgStore), Migrations 0014 (webhook_deliveries + webhook_dlq) + 0015 (webhook_endpoints.updated_at) + 0016 (`UNIQUE (url)`) | PR #136 |
+| `webhooks.AdminRouter` — 11 endpoints (CRUD + deliveries + test + DLQ CRUD + replay) behind `auth.RequireScope(ScopeWebhooks)`, `AEGIS_WEBHOOKS_BACKEND` env flag (memory / pg), secret redaction (verbatim on Create, `***` on every read) | PR #137 |
+| OpenAPI spec — 11 paths + 12 schemas under `/api/v1/webhooks/*`, hand-mirrored `services/webhooks.ts` (12 functions + 2 DTOs + 5 type re-exports), `api.d.ts` regenerated | PR #138 |
+| `WebhooksView.vue` + sidebar nav + i18n en/ru + `Webhook` lucide icon + one-time secret display widget | PR #139 |
+| Cosign sign + verify for our Docker images (panel + agent) — fixes the post-`v0.4.0` supply-chain gap | PR #129 + #130 |
+| `latest` tag on tag-push for non-prerelease versions (post-`v0.5.0` follow-up) | PR #127 |
+| JSON logs in production via `AEGIS_ENV=production` (post-`v0.5.0` follow-up) | PR #128 |
+
+## Closed in v0.6.0
+
+The `plans` table was in migration 0001 from the start (a
+v0.3.0 stub); v0.6.0 promotes it to a real CRUD surface with
+a typed Go package, an HTTP admin handler, an OpenAPI spec,
+and a UI view. v0.6.0 is the second post-v0.4.0 milestone and
+lands the operator-facing tariff catalog.
+
+| Item | Closed by |
+| --- | --- |
+| `internal/plans` package — Plan + ResetPeriod closed enum (daily / weekly / monthly / never), Store interface + MemoryStore + PgStore + Service with input validation (Name 1..64 chars, Duration [1 minute, 10 years], non-negative numbers, ResetPeriod enum), 23 unit tests + 4 pg integration tests | PR #131 |
+| `plans.AdminRouter` — `GET /` + `GET /{id}` + `POST /` + `PATCH /{id}` + `DELETE /{id}` behind `auth.RequireScope(ScopePlans)`, 11 e2e tests | PR #132 |
+| OpenAPI spec — `/plans` paths + Plan schema + PlanCreateRequest + PlanUpdateRequest + PlanListResponse + PlanResetPeriod enum, `services/plans.ts` hand-mirror, `api.d.ts` regenerated | PR #133 |
+| `PlansView.vue` + sidebar nav + i18n en/ru + zod form schema | PR #134 |
+
+Deferred to v0.6.x (logged in `docs/ROADMAP.md`):
+
+- `plan_pool` writes (the join table linking plans to host
+  pools). v0.6.0 keeps the read-only view in
+  `internal/subscription`.
+- `plan_pool` UI (no HostPool picker in the plan dialog yet).
+- Audit log writes from the mutating handler (the call-site
+  wiring is a separate batch across all admin handlers).
+
+## Closed in v0.5.0
+
+v0.5.0 is the "operations-grade" feature set the panel needs to
+be deployable for the soft launch. All eight items landed in
+PRs 119 through 126. The detailed scope breakdown is in
+`docs/ROADMAP.md` §"v0.5.0 — polish before v0.6.0+".
+
+| Item | Closed by |
+| --- | --- |
+| sops+age secrets (`configure_secrets` Ansible role) | PR #119 |
+| `internal/backups` package — `pg_dump` + sidecar SHA-256, per-node queue, 20s window, single-flight via `inflight sync.Mutex`, retention via age + max count, `pg_restore` gated by `AEGIS_BACKUPS_ALLOW_UI_RESTORE` | PR #120 |
+| `BackupsView.vue` + i18n + sidebar nav + download | PR #121 |
+| Pre-PR local gate (`tools/scripts/pre-pr.sh` + Makefile + pre-push hook) — gofmt, golangci-lint v2, vue-tsc, eslint, markdownlint-cli2, go test -short, npm run codegen:check | PR #122 |
+| GitHub API SHA-256 fetch for sing-box (`install_singbox` role) — replaces the v0.4.0-c hardcoded digest | PR #123 |
+| Container wiring for #119 secrets (`install_panel` role + `docker-compose.prod.yml.j2`) — bind-mount `/etc/aegis/secrets.env` read-only into the panel container; `aegis-agent.service` gains a secondary `EnvironmentFile=-/etc/aegis/secrets.env` | PR #124 |
+| Operator-side backup CLI (`aegis-pg-backup` + `aegis-pg-restore`) — separate binaries; two-step id confirmation; `--dry-run` for `pg_restore --list` | PR #125 |
+| `docs/operator-guide.md` (canonical install + daily-ops reference) + `docs/SECURITY.md` (threat model + disclosure flow + supply-chain trust) + `docs/guide/quickstart.md` (5-minute fresh-VPS flow) | PR #126 |
 
 ## Closed in v0.4.0
 
 These items are kept here so a reader of
-`ARCHITECTURE.md §21 / v0.4.0` can see what
-was actually delivered, and so the diff
-between v0.3.0 and v0.4.0 is auditable.
+`ARCHITECTURE.md §21 / v0.4.0` can see what was actually
+delivered, and so the diff between v0.3.0 and v0.4.0 is
+auditable.
 
 | Item | Closed by |
 | --- | --- |
@@ -82,7 +141,7 @@ between v0.3.0 and v0.4.0 is auditable.
 
 | Item | Closed by |
 | --- | --- |
-| BYO-node bootstrap backend provisioner (PR #67) | v0.3.0-mvp-byo-node |
+| BYO-node bootstrap backend provisioner | v0.3.0-mvp-byo-node |
 | "Add node" UI dialog (modal in `NodesView`, status badge, i18n) | v0.3.0-mvp-byo-node |
 | Real `aegis-agent` Go binary + Ansible `install_agent` role (replaces the `sleep infinity` placeholder) | v0.3.0-mvp-byo-node |
 | Per-node `AgentBearer` storage (`nodes.agent_bearer` column, migration 0013) | v0.3.0-mvp-byo-node |
@@ -101,9 +160,9 @@ between v0.3.0 and v0.4.0 is auditable.
 ## Closed in v0.2.0
 
 These items are kept here so a reader of
-`ARCHITECTURE.md §21 / MVP-0.2` can see what
-was actually delivered, and so the diff
-between v0.1.0 and v0.2.0 is auditable.
+`ARCHITECTURE.md §21 / MVP-0.2` can see what was actually
+delivered, and so the diff between v0.1.0 and v0.2.0 is
+auditable.
 
 | Item | Closed by |
 | --- | --- |
@@ -115,21 +174,28 @@ between v0.1.0 and v0.2.0 is auditable.
 | Real subscription rate-limiting | PR #64 (PR-K) |
 | Argon2id for the admin password (operational gap closed by `aegis admin` CLI; production seed guard) | PR #63 (PR-J) |
 | Audit log + operator profile (read surface) | PR #66 (PR-M) |
-| Sub-token rotation + URL-prefix rotation | #47 |
+| Sub-token rotation + URL-prefix rotation | PR #47 |
 
 ## What's NOT a limitation
 
-These are sometimes mistaken for gaps; they
-are intentional.
+These are sometimes mistaken for gaps; they are intentional.
 
-- The default admin password is documented
-  in `deploy/ansible/group_vars/all.yml` —
-  not a backdoor, just an operator onboarding
-  aid.
-- The default dark theme is intentional
-  (dev-tool aesthetic per `ADR-0004`).
-  Light theme is a token swap away.
-- Subscriptions render the sing-box format
-  by default; Clash / base64 / HTML are
-  available via the `?format=` query
+- The default admin password is documented in
+  `deploy/ansible/group_vars/all.yml` — not a backdoor, just
+  an operator onboarding aid. v0.5.0+ sops+age flow makes the
+  rotation path documented in
+  `docs/operator-guide.md` §"Secrets rotation".
+- The default dark theme is intentional (dev-tool aesthetic
+  per `ADR-0004`). Light theme is a token swap away; the
+  light-theme polish is on the v1.5+ roadmap.
+- Subscriptions render the sing-box format by default; Clash /
+  base64 / HTML are available via the `?format=` query
   parameter and the `/subscription` view.
+- The project is single-tenant by design. See
+  `ARCHITECTURE.md` §27 and the relevant ADR (multi-tenant was
+  explicitly rejected in v9).
+- 9 packages remain `doc.go`-only placeholders (cabinet,
+  caddy, cascades, decoy, events, mcp, notifications, stats,
+  subscriptions-plural). Of these, `plans` and `webhooks` are
+  done (v0.6.0, v0.7.0); the rest are post-v1.0. They are
+  listed in `docs/ROADMAP.md` §"Open gaps (post-v0.4.0 audit)".
