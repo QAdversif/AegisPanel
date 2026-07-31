@@ -760,9 +760,9 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
 
     <DataTable
       :columns="tableColumns"
-      :rows="tableRows"
+      :data="tableRows"
       :loading="loading"
-      :empty-message="t('webhooks.empty')"
+      empty-key="webhooks.empty"
     />
 
     <!-- Create dialog -->
@@ -888,7 +888,7 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
         </DialogHeader>
         <DataTable
           :columns="deliveriesTableColumns"
-          :rows="deliveriesTableRows"
+          :data="deliveriesTableRows"
           :loading="deliveriesLoading"
           :empty-message="t('webhooks.deliveriesEmpty')"
         />
@@ -911,9 +911,9 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
         </DialogHeader>
         <DataTable
           :columns="dlqTableColumns"
-          :rows="dlqTableRows"
+          :data="dlqTableRows"
           :loading="dlqLoading"
-          :empty-message="t('webhooks.dlqEmpty')"
+          empty-key="webhooks.dlqEmpty"
         />
         <DialogFooter>
           <DialogClose as-child>
