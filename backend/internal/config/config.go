@@ -139,8 +139,33 @@ type Config struct {
 	// migration 0015 and a UNIQUE constraint on `url`
 	// added in migration 0016), the
 	// `webhook_deliveries` table (migration 0014),
-	// and the `webhook_dlq` table (migration 0014).
+	// the `webhook_dlq` table (migration 0014), and
+	// the `webhook_pending_retries` work queue
+	// (migration 0017, v0.7.x).
 	WebhooksBackend string `env:"AEGIS_WEBHOOKS_BACKEND" envDefault:"memory"`
+
+	// WebhooksRetryWorkerEnabled toggles the v0.7.x
+	// background retry worker. The default (true)
+	// matches the operational expectation: once the
+	// panel has a webhook configured, retries should
+	// fire on the documented schedule (1s, 5s, 25s,
+	// 2m15s, 11m15s) without operator intervention.
+	// Operators running a read-only / passive
+	// replica (a future v0.8+ HA mode) can disable
+	// the worker on the secondary with
+	// AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false.
+	WebhooksRetryWorkerEnabled bool `env:"AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED" envDefault:"true"`
+
+	// WebhooksRetryWorkerInterval is the wall-clock
+	// period between worker ticks. 5s is a safe
+	// default: the smallest retry interval is 1s, so
+	// 5s gives the worker enough resolution to
+	// pick up a 1s-retry within one tick, while
+	// keeping the query load on the
+	// `webhook_pending_retries` table low.
+	// Operators with a much higher retry volume
+	// can drop this to 1s.
+	WebhooksRetryWorkerInterval time.Duration `env:"AEGIS_WEBHOOKS_RETRY_WORKER_INTERVAL" envDefault:"5s"`
 
 	// PanelcfgBackend selects the persistence layer for the
 	// panel-wide config service. "memory" (default) keeps

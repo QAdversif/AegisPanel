@@ -20,15 +20,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 // Store is the persistence boundary. The interface
-// is intentionally narrow — three concerns
-// (endpoints, deliveries, DLQ) live on the same
-// Store so the call site does not have to juggle
-// three injected dependencies for one webhook.
+// is intentionally narrow — four concerns
+// (endpoints, deliveries, DLQ, pending retries)
+// live on the same Store so the call site does
+// not have to juggle three injected dependencies
+// for one webhook.
 type Store interface {
 	// --- endpoints ---
 
@@ -95,6 +97,41 @@ type Store interface {
 	// DeleteDLQ removes a DLQ entry (the
 	// operator marks it as resolved / dropped).
 	DeleteDLQ(ctx context.Context, id uuid.UUID) error
+
+	// --- pending retries (v0.7.x) ---
+
+	// EnqueueRetry registers a retry for the
+	// given delivery. `nextAttemptAt` is the
+	// wall-clock time the worker should fire
+	// the next attempt (computed by the Service
+	// as `now + webhooks.NextAttemptDelay(attempt)`).
+	//
+	// Idempotent: re-enqueueing the same
+	// delivery_id updates the `next_attempt_at`
+	// (e.g. an operator-initiated retry that
+	// re-arms the worker). The (delivery_id) PK
+	// is the natural conflict key.
+	EnqueueRetry(ctx context.Context, deliveryID uuid.UUID, nextAttemptAt time.Time) error
+
+	// DequeueRetry removes a retry row. Called
+	// by the worker after the retry fires (the
+	// new attempt's deliverSync will re-enqueue
+	// on its own failure). Idempotent: a no-op
+	// when the row is already gone.
+	DequeueRetry(ctx context.Context, deliveryID uuid.UUID) error
+
+	// ListDueRetries returns up to `limit`
+	// delivery IDs whose `next_attempt_at` is
+	// at or before `now`, ordered by
+	// `next_attempt_at` asc. The worker uses
+	// this on every tick to pull a batch of
+	// retries to fire.
+	//
+	// `limit` <= 0 means `DefaultListLimit`;
+	// values above `MaxListLimit` are clamped
+	// (same semantics as the deliveries / DLQ
+	// list methods).
+	ListDueRetries(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error)
 }
 
 // ErrNotFound is returned by Store implementations
@@ -144,3 +181,13 @@ const DefaultListLimit = 100
 // when the caller passes a value > MaxListLimit to
 // ListDeliveries / ListDLQ.
 const MaxListLimit = 1000
+
+// DefaultWorkerBatch is the default number of
+// due retries the background worker pulls per
+// tick. The retry schedule's smallest interval
+// is 1s, so a batch of 100 covers up to 100
+// deliveries whose next attempt is due in the
+// same 1s window. Operators with higher
+// retry-volume should bump
+// AEGIS_WEBHOOKS_RETRY_WORKER_BATCH.
+const DefaultWorkerBatch = 100

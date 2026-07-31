@@ -31,6 +31,14 @@ type MemoryStore struct {
 	deliveries map[uuid.UUID]*Delivery
 	dlq        map[uuid.UUID]*DLQEntry
 
+	// pendingRetries is the v0.7.x work queue:
+	// one entry per delivery that is waiting for
+	// its next attempt. The map's value is the
+	// scheduled wall-clock time; the worker
+	// pulls every entry with value <= now on
+	// each tick.
+	pendingRetries map[uuid.UUID]time.Time
+
 	// URL index is the duplicate-detection
 	// helper. The DB has a UNIQUE constraint on
 	// the column; the in-memory store has to
@@ -49,6 +57,7 @@ func NewMemoryStore() *MemoryStore {
 		endpoints:      make(map[uuid.UUID]*Endpoint),
 		deliveries:     make(map[uuid.UUID]*Delivery),
 		dlq:            make(map[uuid.UUID]*DLQEntry),
+		pendingRetries: make(map[uuid.UUID]time.Time),
 		endpointsByURL: make(map[string]uuid.UUID),
 		now:            time.Now,
 		id:             uuid.New,
@@ -325,6 +334,74 @@ func (s *MemoryStore) DeleteDLQ(_ context.Context, id uuid.UUID) error {
 	}
 	delete(s.dlq, id)
 	return nil
+}
+
+// --- pending retries (v0.7.x) -----------------------------------------
+
+// EnqueueRetry registers a retry for the given
+// delivery. Idempotent: re-enqueueing the same
+// delivery_id updates the next_attempt_at.
+func (s *MemoryStore) EnqueueRetry(_ context.Context, deliveryID uuid.UUID, nextAttemptAt time.Time) error {
+	if deliveryID == uuid.Nil {
+		return fmt.Errorf("enqueue retry: zero delivery id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingRetries[deliveryID] = nextAttemptAt
+	return nil
+}
+
+// DequeueRetry removes a retry row. Idempotent:
+// a no-op when the row is already gone.
+func (s *MemoryStore) DequeueRetry(_ context.Context, deliveryID uuid.UUID) error {
+	if deliveryID == uuid.Nil {
+		return fmt.Errorf("dequeue retry: zero delivery id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingRetries, deliveryID)
+	return nil
+}
+
+// ListDueRetries returns up to `limit` delivery
+// IDs whose next_attempt_at is at or before `now`,
+// ordered by next_attempt_at asc.
+func (s *MemoryStore) ListDueRetries(_ context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Copy matching entries out under the lock;
+	// the rest of the function is pure.
+	type entry struct {
+		id uuid.UUID
+		ts time.Time
+	}
+	matches := make([]entry, 0, len(s.pendingRetries))
+	for id, ts := range s.pendingRetries {
+		if ts.After(now) {
+			continue
+		}
+		matches = append(matches, entry{id: id, ts: ts})
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].ts.Equal(matches[j].ts) {
+			return matches[i].id.String() < matches[j].id.String()
+		}
+		return matches[i].ts.Before(matches[j].ts)
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	out := make([]uuid.UUID, len(matches))
+	for i, m := range matches {
+		out[i] = m.id
+	}
+	return out, nil
 }
 
 // Compile-time check.

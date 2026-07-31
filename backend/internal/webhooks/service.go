@@ -473,10 +473,60 @@ func (s *Service) RetryDelivery(ctx context.Context, deliveryID uuid.UUID) (Disp
 				}
 			}
 			result := s.deliverSync(ctx, ep, d.EventType, d.RequestBody, d.Attempt+1)
+			// v0.7.x: the new attempt's deliverSync
+			// (or recordFailure) re-enqueues itself
+			// on its own failure. We always remove
+			// the OLD retry row here so the worker
+			// does not double-fire. The Dequeue is
+			// idempotent — a no-op when the row is
+			// already gone (e.g. the operator
+			// deleted the endpoint, the cascade
+			// took the row with it).
+			_ = s.store.DequeueRetry(ctx, deliveryID)
 			return result, nil
 		}
 	}
 	return DispatchResult{}, fmt.Errorf("%w: delivery id %s", ErrNotFound, deliveryID)
+}
+
+// ProcessDueRetries fires every retry whose
+// `next_attempt_at` is at or before `now`. The
+// background worker (Worker.Run) calls this on
+// every tick. The returned count is the number
+// of retries that fired successfully — failures
+// are logged by the caller and do not stop the
+// iteration.
+//
+// `limit` caps the batch (0 means
+// DefaultWorkerBatch). The query is an index scan
+// on `webhook_pending_retries.next_attempt_at`,
+// so a batch size of 100 covers up to 100
+// deliveries whose next attempt is due in the
+// same tick window.
+func (s *Service) ProcessDueRetries(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = DefaultWorkerBatch
+	}
+	ids, err := s.store.ListDueRetries(ctx, now, limit)
+	if err != nil {
+		return 0, fmt.Errorf("process due retries: %w", err)
+	}
+	fired := 0
+	for _, id := range ids {
+		// RetryDelivery is best-effort here: a
+		// single bad row (e.g. the underlying
+		// delivery was deleted) must not stop
+		// the rest of the batch. The error is
+		// already recorded on the row (the
+		// ValidationError / ErrNotFound path
+		// does not need the caller to log it
+		// twice).
+		if _, err := s.RetryDelivery(ctx, id); err != nil {
+			continue
+		}
+		fired++
+	}
+	return fired, nil
 }
 
 // ReplayDLQEntry takes a DLQ entry off the queue
@@ -658,6 +708,25 @@ func (s *Service) deliverSync(ctx context.Context, ep *Endpoint, eventType Event
 			Attempts:   attempt,
 		}
 	}
+	// v0.7.x: arm the background worker.
+	// Failure path on EnqueueRetry is logged
+	// (the worker is best-effort — the row in
+	// `webhook_deliveries` is still the
+	// operator-facing source of truth, and an
+	// operator-initiated retry will re-arm it).
+	if err := s.store.EnqueueRetry(ctx, d.ID, now.Add(NextAttemptDelay(attempt))); err != nil {
+		// Best-effort: surface in the result
+		// so the operator sees it in the
+		// dispatch report.
+		return DispatchResult{
+			EndpointID: ep.ID,
+			DeliveryID: d.ID,
+			Status:     DeliveryStatusRetry,
+			StatusCode: intPtr(resp.StatusCode),
+			Error:      errMsg + "; enqueue retry: " + err.Error(),
+			Attempts:   attempt,
+		}
+	}
 	return DispatchResult{
 		EndpointID: ep.ID,
 		DeliveryID: d.ID,
@@ -713,6 +782,18 @@ func (s *Service) recordFailure(ctx context.Context, ep *Endpoint, eventType Eve
 			Status:     DeliveryStatusFailed,
 			StatusCode: statusCode,
 			Error:      errMsg,
+			Attempts:   attempt,
+		}
+	}
+	// v0.7.x: arm the background worker.
+	// Same best-effort treatment as deliverSync.
+	if err := s.store.EnqueueRetry(ctx, d.ID, now.Add(NextAttemptDelay(attempt))); err != nil {
+		return DispatchResult{
+			EndpointID: ep.ID,
+			DeliveryID: d.ID,
+			Status:     DeliveryStatusRetry,
+			StatusCode: statusCode,
+			Error:      errMsg + "; enqueue retry: " + err.Error(),
 			Attempts:   attempt,
 		}
 	}
