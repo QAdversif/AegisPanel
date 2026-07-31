@@ -16,7 +16,9 @@ package webhooks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -126,11 +128,26 @@ func TestPgStore_DeliveryRoundTrip(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 delivery, got %d", len(got))
 	}
-	if string(got[0].Payload) != `{"x":1}` {
-		t.Errorf("Payload round-trip mismatch: got %q", got[0].Payload)
-	}
+	jsonEqual(t, got[0].Payload, map[string]any{"x": float64(1)})
 	if got[0].StatusCode == nil || *got[0].StatusCode != 200 {
 		t.Errorf("StatusCode round-trip mismatch: got %v", got[0].StatusCode)
+	}
+}
+
+// jsonEqual compares two JSON byte strings by
+// parsing both into a generic structure. Postgres
+// JSONB normalises whitespace on read-back
+// (e.g. `{"x":1}` -> `{"x": 1}`), so byte-level
+// comparison is unreliable; the parsed values
+// must match instead.
+func jsonEqual(t *testing.T, raw []byte, want any) {
+	t.Helper()
+	var got any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v (raw=%q)", err, raw)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Payload mismatch: got %v, want %v (raw=%q)", got, want, raw)
 	}
 }
 
@@ -159,9 +176,7 @@ func TestPgStore_DLQRoundTrip(t *testing.T) {
 	if got.LastError != "http 500" {
 		t.Errorf("LastError = %q, want %q", got.LastError, "http 500")
 	}
-	if string(got.Payload) != `{"a":1}` {
-		t.Errorf("Payload = %q", got.Payload)
-	}
+	jsonEqual(t, got.Payload, map[string]any{"a": float64(1)})
 	// List.
 	list, err := s.ListDLQ(ctx, 0)
 	if err != nil {
