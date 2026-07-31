@@ -331,11 +331,11 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 func scopesForRole(role string) Scopes {
 	switch role {
 	case "super-admin":
-		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeAudits}
+		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits}
 	case "operator":
-		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeAudits}
+		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits}
 	case "viewer":
-		return Scopes{ScopeRead, ScopePlans, ScopeAudits}
+		return Scopes{ScopeRead, ScopePlans, ScopeWebhooks, ScopeAudits}
 	default:
 		return Scopes{ScopeRead}
 	}

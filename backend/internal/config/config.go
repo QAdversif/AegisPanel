@@ -129,6 +129,19 @@ type Config struct {
 	// lets subscription delegate to it.
 	PlansBackend string `env:"AEGIS_PLANS_BACKEND" envDefault:"memory"`
 
+	// WebhooksBackend selects the persistence layer for
+	// the outgoing-webhook surface (v0.7.0).
+	// "memory" (default) keeps endpoints, delivery
+	// history, and the DLQ in RAM — dev only.
+	// "pg" uses the PostgreSQL backend (PgStore)
+	// backed by the `webhook_endpoints` table
+	// (migration 0001, with `updated_at` added in
+	// migration 0015 and a UNIQUE constraint on `url`
+	// added in migration 0016), the
+	// `webhook_deliveries` table (migration 0014),
+	// and the `webhook_dlq` table (migration 0014).
+	WebhooksBackend string `env:"AEGIS_WEBHOOKS_BACKEND" envDefault:"memory"`
+
 	// PanelcfgBackend selects the persistence layer for the
 	// panel-wide config service. "memory" (default) keeps
 	// the panel_path_config rows in RAM — dev only.

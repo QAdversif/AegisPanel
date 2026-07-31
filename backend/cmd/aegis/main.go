@@ -61,6 +61,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/router"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 	"github.com/QAdversif/AegisPanel/internal/users"
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 func main() {
@@ -160,7 +161,8 @@ func main() {
 			cfg.UsersBackend == "pg" ||
 			cfg.PlansBackend == "pg" ||
 			cfg.PanelcfgBackend == "pg" ||
-			cfg.AuditsBackend == "pg"
+			cfg.AuditsBackend == "pg" ||
+			cfg.WebhooksBackend == "pg"
 	)
 	if needsPg {
 		p, err := db.Open(ctx, cfg.PostgresDSN)
@@ -310,6 +312,28 @@ func main() {
 		log.Info().Msg("plans: using in-memory store (MemoryStore, dev only)")
 	}
 	plansSvc := plans.NewService(plansStore)
+
+	// 9b. Webhooks service (v0.7.0).
+	//     Backend is selected at startup:
+	//       AEGIS_WEBHOOKS_BACKEND=memory (default)
+	//       uses the Phase 0 MemoryStore; =pg uses
+	//       PgStore backed by the `webhook_endpoints`
+	//       table (migration 0001, with `updated_at`
+	//       added in migration 0015 and a UNIQUE
+	//       constraint on `url` added in migration
+	//       0016), the `webhook_deliveries` table
+	//       (migration 0014), and the `webhook_dlq`
+	//       table (migration 0014).
+	var webhooksStore webhooks.Store
+	switch cfg.WebhooksBackend {
+	case "pg":
+		webhooksStore = webhooks.NewPgStore(pool)
+		log.Info().Msg("webhooks: using pgx-backed store (PgStore)")
+	default:
+		webhooksStore = webhooks.NewMemoryStore()
+		log.Info().Msg("webhooks: using in-memory store (MemoryStore, dev only)")
+	}
+	webhooksSvc := webhooks.NewService(webhooksStore)
 
 	// 10. Subscription service. After d-refactor.2 the
 	//    subscription package only owns the plan /
@@ -511,7 +535,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, bootstrapSvc, backupsSvc, subLimiter)),
+		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, bootstrapSvc, backupsSvc, webhooksSvc, subLimiter)),
 	}
 
 	// 8. Run the server in a goroutine so we can listen for signals.
