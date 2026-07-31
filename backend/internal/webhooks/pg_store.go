@@ -57,14 +57,33 @@ func jsonRawMessage(b []byte) any {
 
 // PgStore is the PostgreSQL-backed Store.
 type PgStore struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	cipher SecretCipher
 }
 
-// NewPgStore wires a PgStore from an open pgxpool.
-// The pool is owned by the caller — close it when
-// the application shuts down.
-func NewPgStore(pool *pgxpool.Pool) *PgStore {
-	return &PgStore{pool: pool}
+// NewPgStore wires a PgStore from an open pgxpool
+// and a SecretCipher. The pool is owned by the
+// caller — close it when the application shuts
+// down. The cipher is consulted on every endpoint
+// write (encrypt the secret) and read (decrypt the
+// ciphertext back to plaintext for the Service).
+//
+// `cipher` is a SecretCipher interface; the
+// production wiring passes an *AgeSecretCipher
+// built from AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS
+// and AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE. Tests
+// can pass a NoopSecretCipher to bypass encryption
+// (the secret round-trips as plaintext through
+// the column).
+func NewPgStore(pool *pgxpool.Pool, cipher SecretCipher) *PgStore {
+	if cipher == nil {
+		// Fail loud: a nil cipher is a wiring
+		// bug, not a "fall back to plaintext"
+		// signal. The Store interface does not
+		// allow plaintext at rest on pg.
+		panic("webhooks.PgStore: SecretCipher must not be nil")
+	}
+	return &PgStore{pool: pool, cipher: cipher}
 }
 
 // --- endpoints ---------------------------------------------------------
@@ -86,16 +105,26 @@ func (s *PgStore) CreateEndpoint(ctx context.Context, e *Endpoint) error {
 	if err != nil {
 		return fmt.Errorf("create endpoint: events: %w", err)
 	}
+	// v0.7.x: encrypt the secret at the
+	// Store boundary so the DB never sees
+	// plaintext. The Service hands plaintext
+	// to the Store (e.IsValid requires non-
+	// empty secret); the Store hands ciphertext
+	// to Postgres.
+	cipher, err := s.cipher.Encrypt([]byte(e.Secret))
+	if err != nil {
+		return fmt.Errorf("create endpoint: encrypt secret: %w", err)
+	}
 	const q = `
 		INSERT INTO webhook_endpoints (
-			id, url, secret, events, enabled
+			id, url, secret_ciphertext, events, enabled
 		) VALUES (
 			$1, $2, $3, $4, $5
 		)`
 	_, err = s.pool.Exec(ctx, q,
 		e.ID,
 		e.URL,
-		e.Secret,
+		cipher,
 		events,
 		e.Enabled,
 	)
@@ -110,7 +139,7 @@ func (s *PgStore) CreateEndpoint(ctx context.Context, e *Endpoint) error {
 func (s *PgStore) GetEndpoint(ctx context.Context, id uuid.UUID) (*Endpoint, error) {
 	const q = baseEndpointSelect + ` WHERE id = $1`
 	row := s.pool.QueryRow(ctx, q, id)
-	e, err := scanEndpoint(row)
+	e, err := scanEndpointWithCipher(row, s.cipher)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: endpoint id %s", ErrNotFound, id)
@@ -131,7 +160,7 @@ func (s *PgStore) ListEndpoints(ctx context.Context) ([]*Endpoint, error) {
 	defer rows.Close()
 	out := make([]*Endpoint, 0)
 	for rows.Next() {
-		e, err := scanEndpoint(rows)
+		e, err := scanEndpointWithCipher(rows, s.cipher)
 		if err != nil {
 			return nil, fmt.Errorf("list endpoints: scan: %w", err)
 		}
@@ -161,10 +190,20 @@ func (s *PgStore) UpdateEndpoint(ctx context.Context, e *Endpoint) error {
 	if err != nil {
 		return fmt.Errorf("update endpoint: events: %w", err)
 	}
+	// v0.7.x: encrypt the (possibly rotated)
+	// secret before update. The handler may
+	// pass an empty string when the operator
+	// does not want to rotate — but the
+	// validator (e.IsValid) requires non-empty,
+	// so we never UPDATE a NULL/empty secret.
+	cipher, err := s.cipher.Encrypt([]byte(e.Secret))
+	if err != nil {
+		return fmt.Errorf("update endpoint: encrypt secret: %w", err)
+	}
 	const q = `
 		UPDATE webhook_endpoints SET
 			url = $2,
-			secret = $3,
+			secret_ciphertext = $3,
 			events = $4,
 			enabled = $5,
 			last_delivery_at = $6,
@@ -182,7 +221,7 @@ func (s *PgStore) UpdateEndpoint(ctx context.Context, e *Endpoint) error {
 	tag, err := s.pool.Exec(ctx, q,
 		e.ID,
 		e.URL,
-		e.Secret,
+		cipher,
 		events,
 		e.Enabled,
 		lastDeliveryAt,
@@ -447,7 +486,7 @@ func (s *PgStore) ListDueRetries(ctx context.Context, now time.Time, limit int) 
 
 const baseEndpointSelect = `
 	SELECT
-		id, url, secret, events, enabled,
+		id, url, secret_ciphertext, events, enabled,
 		last_delivery_at, last_status_code,
 		created_at, updated_at
 	FROM webhook_endpoints`
@@ -471,9 +510,14 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanEndpoint(row rowScanner) (*Endpoint, error) {
+// scanEndpoint reads an endpoint row and decrypts
+// the secret. The cipher is owned by the store
+// that called scanEndpoint (passed in by the
+// caller — see scanEndpointWithCipher).
+func scanEndpointWithCipher(row rowScanner, cipher SecretCipher) (*Endpoint, error) {
 	var (
 		e              Endpoint
+		secretCipher   []byte
 		eventsRaw      []byte
 		lastDeliveryAt pgtype.Timestamptz
 		lastStatusCode pgtype.Int4
@@ -481,7 +525,7 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	if err := row.Scan(
 		&e.ID,
 		&e.URL,
-		&e.Secret,
+		&secretCipher,
 		&eventsRaw,
 		&e.Enabled,
 		&lastDeliveryAt,
@@ -491,6 +535,13 @@ func scanEndpoint(row rowScanner) (*Endpoint, error) {
 	); err != nil {
 		return nil, err
 	}
+	// v0.7.x: decrypt the secret at the Store
+	// boundary. The Service receives plaintext.
+	plain, err := cipher.Decrypt(secretCipher)
+	if err != nil {
+		return nil, fmt.Errorf("scan endpoint: decrypt secret: %w", err)
+	}
+	e.Secret = string(plain)
 	if len(eventsRaw) > 0 {
 		if err := json.Unmarshal(eventsRaw, &e.Events); err != nil {
 			return nil, fmt.Errorf("scan endpoint: events: %w", err)
