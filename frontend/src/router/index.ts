@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.hosts', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/plans',
+    name: 'plans',
+    component: () => import('@/views/PlansView.vue'),
+    meta: { titleKey: 'nav.plans', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/users',
     name: 'users',
     component: () => import('@/views/UsersView.vue'),
