@@ -15,24 +15,64 @@
 package webhooks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/testutil"
 )
 
+// writeAgeIdentity serialises an X25519 identity
+// to a temp file in the standard `age-keygen`
+// format and returns the path. The file is
+// cleaned up automatically via `t.Cleanup`. The
+// resulting path is what NewAgeSecretCipher
+// expects as the `identityFile` argument.
+func writeAgeIdentity(t *testing.T, id *age.X25519Identity) string {
+	t.Helper()
+	recipient := id.Recipient()
+	// The standard `age-keygen` output is the
+	// recipient comment line + the identity
+	// line. Both are required for the round-trip
+	// to be realistic.
+	content := "# public key: " + recipient.String() + "\n" + id.String() + "\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "age-identity.key")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writeAgeIdentity: WriteFile: %v", err)
+	}
+	return path
+}
+
 // newPgStore opens a fresh pgxpool via testutil
-// and returns a *PgStore. The webhook tables are
+// and returns a *PgStore wired with a NoopSecretCipher
+// (the existing tests assert the plaintext secret
+// round-trips through the Store; the sops-envelope
+// tests below use newPgStoreWithCipher to exercise
+// the real age path). The webhook tables are
 // truncated (CASCADE) so the test starts from an
 // empty state; the same truncate is re-applied on
 // test exit.
 func newPgStore(t *testing.T) *PgStore {
+	t.Helper()
+	return newPgStoreWithCipher(t, NewNoopSecretCipher())
+}
+
+// newPgStoreWithCipher is the lower-level helper
+// that lets a test pass a specific cipher (the
+// age-envelope tests build a real AgeSecretCipher
+// from a generated age key pair and assert
+// ciphertext-at-rest via a direct DB query).
+func newPgStoreWithCipher(t *testing.T, cipher SecretCipher) *PgStore {
 	t.Helper()
 	pool := testutil.MustNewPool(t)
 	if _, err := pool.Exec(context.Background(),
@@ -43,7 +83,7 @@ func newPgStore(t *testing.T) *PgStore {
 		_, _ = pool.Exec(context.Background(),
 			`TRUNCATE TABLE webhook_dlq, webhook_deliveries, webhook_pending_retries, webhook_endpoints CASCADE`)
 	})
-	return NewPgStore(pool)
+	return NewPgStore(pool, cipher)
 }
 
 // TestPgStore_EndpointRoundTrip covers the basic
@@ -403,5 +443,137 @@ func TestPgStore_EndpointDeleteCascades_PendingRetries(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 pending retries after cascade, got %d", len(got))
+	}
+}
+
+// --- age secret envelope (v0.7.x) -------------------------------------
+
+// TestPgStore_SecretAge_RoundTrip is the end-to-end
+// proof that the secret envelope works against a
+// real age key pair:
+//
+//  1. Generate an age X25519 identity + recipient
+//     in-memory (no on-disk key file needed; the
+//     helper writes a temp file from the recipient
+//     string and a separate temp file from the
+//     identity, then constructs an AgeSecretCipher
+//     with both).
+//
+//  2. Insert an endpoint with a known plaintext
+//     secret. The Store encrypts before INSERT.
+//
+//  3. Read the endpoint back. The Store decrypts
+//     and returns plaintext. The plaintext must
+//     match the original byte-for-byte.
+//
+//  4. Bypass the Store and query the column
+//     directly. The bytes must NOT contain the
+//     plaintext substring (proving ciphertext at
+//     rest) and the column type must be BYTEA
+//     (proving the migration 0018 type change).
+//
+//  5. Try to decrypt the column bytes with a
+//     DIFFERENT identity (a fresh key pair). The
+//     decrypt must fail (proving the ciphertext is
+//     tied to the operator's key, not a global
+//     "age" symmetric key).
+func TestPgStore_SecretAge_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	// Generate operator's key pair.
+	operatorIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	operatorRecipient := operatorIdentity.Recipient()
+
+	// Write the identity to a temp file in the
+	// standard age-keygen format. The cipher
+	// helper reads this exact format.
+	identityPath := writeAgeIdentity(t, operatorIdentity)
+
+	cipher, err := NewAgeSecretCipher(
+		[]string{operatorRecipient.String()},
+		identityPath,
+	)
+	if err != nil {
+		t.Fatalf("NewAgeSecretCipher: %v", err)
+	}
+
+	// Use a dedicated PgStore so the TRUNCATE in
+	// newPgStoreWithCipher doesn't clobber any
+	// rows the other tests in this file might
+	// be racing for. (testutil's advisory lock
+	// already serialises cross-package, so this
+	// is belt-and-suspenders.)
+	s := newPgStoreWithCipher(t, cipher)
+
+	plaintext := "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa"
+	e := &Endpoint{
+		ID:      uuid.New(),
+		URL:     "https://envelope.example.com/h",
+		Secret:  plaintext,
+		Enabled: true,
+	}
+	if err := s.CreateEndpoint(ctx, e); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	// 3. Read back: plaintext round-trips.
+	got, err := s.GetEndpoint(ctx, e.ID)
+	if err != nil {
+		t.Fatalf("GetEndpoint: %v", err)
+	}
+	if got.Secret != plaintext {
+		t.Errorf("Secret = %q, want %q (plaintext round-trip failed)", got.Secret, plaintext)
+	}
+
+	// 4. Direct DB query: column is BYTEA, does
+	// not contain the plaintext. We use the
+	// pool already attached to the PgStore
+	// (rather than calling testutil.MustNewPool
+	// again — that would deadlock on the
+	// advisory lock the first call already
+	// holds for the duration of the test).
+	var raw []byte
+	var colType string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT secret_ciphertext, pg_typeof(secret_ciphertext)::text FROM webhook_endpoints WHERE id = $1`,
+		e.ID,
+	).Scan(&raw, &colType); err != nil {
+		t.Fatalf("direct SELECT: %v", err)
+	}
+	if colType != "bytea" {
+		t.Errorf("secret_ciphertext column type = %q, want bytea (migration 0018)", colType)
+	}
+	if bytes.Contains(raw, []byte(plaintext)) {
+		t.Errorf("secret_ciphertext column contains plaintext (envelope NOT applied): %q", raw)
+	}
+	// Sanity: ciphertext is non-empty and is
+	// longer than the plaintext (age adds a
+	// header + nonce + MAC overhead).
+	if len(raw) == 0 {
+		t.Errorf("ciphertext is empty")
+	}
+	if len(raw) <= len(plaintext) {
+		t.Errorf("ciphertext length %d, want > plaintext length %d", len(raw), len(plaintext))
+	}
+
+	// 5. A different identity cannot decrypt
+	// the operator's ciphertext.
+	otherIdentity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity (other): %v", err)
+	}
+	otherPath := writeAgeIdentity(t, otherIdentity)
+	otherCipher, err := NewAgeSecretCipher(
+		[]string{otherIdentity.Recipient().String()},
+		otherPath,
+	)
+	if err != nil {
+		t.Fatalf("NewAgeSecretCipher (other): %v", err)
+	}
+	if _, err := otherCipher.Decrypt(raw); err == nil {
+		t.Errorf("expected decrypt to fail with the wrong identity, got success")
 	}
 }
