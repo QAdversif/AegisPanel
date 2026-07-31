@@ -12,12 +12,12 @@ manage the tariff ladder.
 - `frontend/src/views/PlansView.vue` — new view. v0.6.0
   ships the full CRUD surface: list (DataTable with
   name, traffic limit, duration, device limit, reset
-  period, price columns) + create dialog + edit dialog
-  + delete confirm dialog + global search. Mirrors
-  the UsersView / BackupsView pattern (vue-i18n
-  `t('plans.*')` for every string, zod schema for the
-  form, `useZodForm` `onSubmit` handler that maps to
-  the `/api/v1/plans` service).
+  period, price columns) plus create dialog, edit
+  dialog, delete confirm dialog, plus global search.
+  Mirrors the UsersView / BackupsView pattern
+  (vue-i18n `t('plans.*')` for every string, zod
+  schema for the form, `useZodForm` `onSubmit`
+  handler that maps to the `/api/v1/plans` service).
 - `frontend/src/router/index.ts` — adds the `/plans`
   route with `titleKey: 'nav.plans'` and the lazy
   `() => import('@/views/PlansView.vue')` chunk.
