@@ -78,6 +78,20 @@ const (
 	// GET/POST/PATCH/DELETE /api/v1/plans endpoints
 	// (#132) are gated by this scope.
 	ScopePlans Scope = "plans"
+
+	// ScopeWebhooks lets a principal manage the
+	// outgoing-webhook surface: list endpoints, create
+	// / update / delete, view delivery history,
+	// replay DLQ entries, send a test event. Every
+	// role gets the scope so a viewer can see the
+	// endpoint health (the "is the receiver
+	// responding?" column in the WebhooksView) the
+	// same way they can see the plan catalog — the
+	// webhook surface is operator-observability, not
+	// a security boundary. The v0.7.0
+	// GET/POST/PATCH/DELETE /api/v1/webhooks
+	// endpoints (#137) are gated by this scope.
+	ScopeWebhooks Scope = "webhooks"
 )
 
 // Scopes is a non-empty set of Scope values.

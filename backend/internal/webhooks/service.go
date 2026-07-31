@@ -576,7 +576,12 @@ func (s *Service) deliverSync(ctx context.Context, ep *Endpoint, eventType Event
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, s.dispatchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep.URL, bytes.NewReader(body))
+	// The URL comes from the operator-configured
+	// endpoint (Service.Create validates it is
+	// http/https). The taint warning is the
+	// known cost of the dispatcher; the same
+	// trust boundary is in n8n, Zapier, etc.
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep.URL, bytes.NewReader(body)) // #nosec G704 -- operator-configured http/https URL
 	if err != nil {
 		return s.recordFailure(ctx, ep, eventType, body, attempt, now, nil, "build request: "+err.Error())
 	}
