@@ -335,6 +335,29 @@ func main() {
 	}
 	webhooksSvc := webhooks.NewService(webhooksStore)
 
+	// v0.7.x: background retry worker. Fires the
+	// next attempt for every delivery whose
+	// `next_attempt_at` is in the past, on the
+	// schedule the dispatcher computed
+	// (1s, 5s, 25s, 2m15s, 11m15s). Disabled in
+	// tests / read-only replicas via
+	// AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false.
+	if cfg.WebhooksRetryWorkerEnabled {
+		w := webhooks.NewWorker(webhooksSvc, cfg.WebhooksRetryWorkerInterval)
+		workerCtx, workerCancel := context.WithCancel(ctx)
+		go func() {
+			defer workerCancel()
+			if err := w.Run(workerCtx); err != nil {
+				log.Error().Err(err).Msg("webhooks: retry worker exited")
+			}
+		}()
+		log.Info().
+			Dur("interval", cfg.WebhooksRetryWorkerInterval).
+			Msg("webhooks: retry worker started")
+	} else {
+		log.Warn().Msg("webhooks: retry worker DISABLED (AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false); retries must be fired manually")
+	}
+
 	// 10. Subscription service. After d-refactor.2 the
 	//    subscription package only owns the plan /
 	//    pool / member join tables and the render

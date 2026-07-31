@@ -684,3 +684,347 @@ func mustFirstID(t *testing.T, store *MemoryStore) uuid.UUID {
 	t.Fatalf("no endpoints in store")
 	return uuid.Nil
 }
+
+// --- v0.7.x: enqueue/dequeue wiring in deliverSync/RetryDelivery -------
+
+func TestService_Dispatch_Failure_EnqueuesRetry(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 503, Body: "down"}}
+	svc.SetHTTPClient(fake)
+	ep, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if results[0].Status != DeliveryStatusRetry {
+		t.Fatalf("Status = %s, want retry", results[0].Status)
+	}
+	now := time.Now().UTC()
+	store.mu.Lock()
+	ts, ok := store.pendingRetries[results[0].DeliveryID]
+	store.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected enqueue for delivery %s, got none", results[0].DeliveryID)
+	}
+	delta := ts.Sub(now)
+	if delta < 500*time.Millisecond || delta > 1500*time.Millisecond {
+		t.Errorf("next_attempt_at delta = %v, want ~1s", delta)
+	}
+	_ = ep
+}
+
+func TestService_Dispatch_TransportError_EnqueuesRetry(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{FailWith: errors.New("connection refused")}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if results[0].Status != DeliveryStatusRetry {
+		t.Fatalf("Status = %s, want retry", results[0].Status)
+	}
+	store.mu.Lock()
+	_, ok := store.pendingRetries[results[0].DeliveryID]
+	store.mu.Unlock()
+	if !ok {
+		t.Errorf("expected 1 pending retry, got 0")
+	}
+}
+
+func TestService_Dispatch_Success_DoesNotEnqueue(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 200, Body: "ok"}}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if results[0].Status != DeliveryStatusSuccess {
+		t.Fatalf("Status = %s, want success", results[0].Status)
+	}
+	store.mu.Lock()
+	n := len(store.pendingRetries)
+	store.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected 0 pending retries on success, got %d", n)
+	}
+}
+
+func TestService_Dispatch_MaxAttemptsFail_DoesNotEnqueue(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 500, Body: "boom"}}
+	svc.SetHTTPClient(fake)
+	ep, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Pre-seed a delivery at attempt=MaxAttempts-1
+	// so the very next RetryDelivery fires
+	// attempt=MaxAttempts. That attempt fails
+	// (the fake returns 500), exceeds the retry
+	// budget, and is moved to the DLQ. The
+	// deliverSync path inside RetryDelivery must
+	// NOT enqueue a further retry (the budget is
+	// exhausted).
+	d := &Delivery{
+		ID:          uuid.New(),
+		EndpointID:  ep.ID,
+		EventType:   EventUserCreated,
+		Payload:     []byte(`{"a":1}`),
+		RequestBody: []byte(`{"a":1}`),
+		RequestURL:  ep.URL,
+		Signature:   "sha256=00",
+		Timestamp:   time.Now().UTC(),
+		Attempt:     MaxAttempts - 1,
+	}
+	if err := store.CreateDelivery(context.Background(), d); err != nil {
+		t.Fatalf("CreateDelivery: %v", err)
+	}
+	result, err := svc.RetryDelivery(context.Background(), d.ID)
+	if err != nil {
+		t.Fatalf("RetryDelivery: %v", err)
+	}
+	if result.Status != DeliveryStatusFailed {
+		t.Errorf("Status = %s, want failed (max attempts exhausted)", result.Status)
+	}
+	// The DLQ has one entry.
+	dlq, err := store.ListDLQ(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("ListDLQ: %v", err)
+	}
+	if len(dlq) != 1 {
+		t.Fatalf("expected 1 DLQ entry, got %d", len(dlq))
+	}
+	// No pending retries: the final attempt was
+	// the budget ceiling, so the dispatcher
+	// must NOT have enqueued a follow-up.
+	store.mu.Lock()
+	n := len(store.pendingRetries)
+	store.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected 0 pending retries at max attempts, got %d", n)
+	}
+}
+
+func TestService_RetryDelivery_DequeuesOldRetry(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 200, Body: "ok"}}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	oldID := results[0].DeliveryID
+	store.mu.Lock()
+	_, ok := store.pendingRetries[oldID]
+	store.mu.Unlock()
+	if !ok {
+		t.Fatalf("expected enqueue for delivery %s, got none", oldID)
+	}
+	fake.Responses = nil
+	if _, err := svc.RetryDelivery(context.Background(), oldID); err != nil {
+		t.Fatalf("RetryDelivery: %v", err)
+	}
+	store.mu.Lock()
+	n := len(store.pendingRetries)
+	store.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expected 0 pending retries after success, got %d", n)
+	}
+}
+
+func TestService_RetryDelivery_Failure_DequeuesOldReenqueuesNew(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	oldID := results[0].DeliveryID
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	if _, err := svc.RetryDelivery(context.Background(), oldID); err != nil {
+		t.Fatalf("RetryDelivery: %v", err)
+	}
+	store.mu.Lock()
+	n := len(store.pendingRetries)
+	var newID uuid.UUID
+	for id := range store.pendingRetries {
+		newID = id
+	}
+	store.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 pending retry, got %d", n)
+	}
+	if newID == oldID {
+		t.Errorf("old id %s still in queue (should have been dequeued)", oldID)
+	}
+}
+
+func TestService_ProcessDueRetries_FiresDueRows(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 200, Body: "ok"}}
+	svc.SetHTTPClient(fake)
+	ep, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	id := results[0].DeliveryID
+	store.mu.Lock()
+	store.pendingRetries[id] = time.Now().UTC().Add(-1 * time.Second)
+	store.mu.Unlock()
+	fired, err := svc.ProcessDueRetries(context.Background(), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ProcessDueRetries: %v", err)
+	}
+	if fired != 1 {
+		t.Errorf("fired = %d, want 1", fired)
+	}
+	if len(fake.Requests) != 2 {
+		t.Errorf("HTTP requests = %d, want 2", len(fake.Requests))
+	}
+	due, err := store.ListDueRetries(context.Background(), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries: %v", err)
+	}
+	if len(due) != 0 {
+		t.Errorf("expected 0 pending retries, got %d", len(due))
+	}
+	_ = ep
+}
+
+func TestService_ProcessDueRetries_SkipsNotDue(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 200}}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	id := results[0].DeliveryID
+	store.mu.Lock()
+	store.pendingRetries[id] = time.Now().UTC().Add(1 * time.Hour)
+	store.mu.Unlock()
+	fired, err := svc.ProcessDueRetries(context.Background(), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ProcessDueRetries: %v", err)
+	}
+	if fired != 0 {
+		t.Errorf("fired = %d, want 0 (row not due)", fired)
+	}
+	store.mu.Lock()
+	n := len(store.pendingRetries)
+	store.mu.Unlock()
+	if n != 1 {
+		t.Errorf("expected 1 pending retry, got %d", n)
+	}
+}
+
+func TestService_ProcessDueRetries_BadRowDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	svc := NewService(store)
+	fake := &fakeHTTPDoer{Default: &fakeResponse{StatusCode: 200}}
+	svc.SetHTTPClient(fake)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		URL:     "https://example.com/h",
+		Secret:  "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	bogusID := uuid.New()
+	if err := store.EnqueueRetry(context.Background(), bogusID, time.Now().UTC().Add(-1*time.Second)); err != nil {
+		t.Fatalf("EnqueueRetry: %v", err)
+	}
+	fake.Responses = []fakeResponse{{StatusCode: 503}}
+	results, err := svc.Dispatch(context.Background(), EventUserCreated, map[string]any{"id": 1})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	store.mu.Lock()
+	store.pendingRetries[results[0].DeliveryID] = time.Now().UTC().Add(-1 * time.Second)
+	store.mu.Unlock()
+	fired, err := svc.ProcessDueRetries(context.Background(), time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ProcessDueRetries: %v", err)
+	}
+	if fired != 1 {
+		t.Errorf("fired = %d, want 1", fired)
+	}
+}

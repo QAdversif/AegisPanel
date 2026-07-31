@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -376,6 +377,70 @@ func (s *PgStore) DeleteDLQ(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("%w: dlq id %s", ErrNotFound, id)
 	}
 	return nil
+}
+
+// --- pending retries (v0.7.x) -----------------------------------------
+
+// EnqueueRetry registers a retry for the given
+// delivery. Idempotent: re-enqueueing the same
+// delivery_id updates the next_attempt_at.
+func (s *PgStore) EnqueueRetry(ctx context.Context, deliveryID uuid.UUID, nextAttemptAt time.Time) error {
+	const q = `
+		INSERT INTO webhook_pending_retries (
+			delivery_id, next_attempt_at
+		) VALUES (
+			$1, $2
+		)
+		ON CONFLICT (delivery_id) DO UPDATE
+		SET next_attempt_at = EXCLUDED.next_attempt_at`
+	_, err := s.pool.Exec(ctx, q, deliveryID, nextAttemptAt)
+	if err != nil {
+		return mapPgError(err, "enqueue retry")
+	}
+	return nil
+}
+
+// DequeueRetry removes a retry row. Idempotent:
+// a no-op when the row is already gone.
+func (s *PgStore) DequeueRetry(ctx context.Context, deliveryID uuid.UUID) error {
+	const q = `DELETE FROM webhook_pending_retries WHERE delivery_id = $1`
+	// Intentionally ignore RowsAffected — the
+	// delete is idempotent.
+	_, err := s.pool.Exec(ctx, q, deliveryID)
+	if err != nil {
+		return mapPgError(err, "dequeue retry")
+	}
+	return nil
+}
+
+// ListDueRetries returns up to `limit` delivery
+// IDs whose next_attempt_at is at or before `now`,
+// ordered by next_attempt_at asc.
+func (s *PgStore) ListDueRetries(ctx context.Context, now time.Time, limit int) ([]uuid.UUID, error) {
+	limit = clampLimit(limit)
+	const q = `
+		SELECT delivery_id
+		FROM webhook_pending_retries
+		WHERE next_attempt_at <= $1
+		ORDER BY next_attempt_at ASC
+		LIMIT $2`
+	rows, err := s.pool.Query(ctx, q, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list due retries: query: %w", err)
+	}
+	defer rows.Close()
+	out := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list due retries: scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list due retries: rows: %w", err)
+	}
+	return out, nil
 }
 
 // --- shared column lists / scanners ------------------------------------
