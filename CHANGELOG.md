@@ -1154,6 +1154,96 @@ or the next release.
   same `[version, short, latest]` tag list.
   Closes #111.
 
+### Changed (Go+frontend dependency batch, post-v0.7.0, #141–#144)
+
+Four sequential PRs bumped every dependency that was on
+its previous major / minor track. Each PR was a self-contained
+unit so a single regression was independently revertable.
+All 24 CI jobs green on every PR; no code regressions on
+the frontend side; one pre-existing prop-name bug in
+`WebhooksView.vue` caught and fixed (see PR #143 below).
+
+- **`chore(deps): bump Go minors` (#141)** — `prometheus
+  client_golang 1.20.5 → 1.24.1`, `caarlos0/env/v11
+  11.2.2 → 11.4.1`, `zerolog 1.33.0 → 1.35.1`. 3
+  explicit + 7 indirect minor bumps. Local `go build`
+  / `go test` / `gofmt` / `golangci-lint v2` all clean.
+  0 source code changes. 2 files: `backend/go.mod`,
+  `backend/go.sum`.
+- **`chore(deps): bump pinia to 4.0.2 and add
+  @vue/devtools-api` (#142)** — `pinia 3.0.4 → 4.0.2`,
+  added `@vue/devtools-api ^8.2.1` (pinia 4 peer
+  dep; was transitive before). Hit the pnpm-store
+  artifact conflict footgun: `node_modules/.pnpm/`
+  from a previous pnpm run made `npm install` skip
+  lockfile regeneration. Fix: `mavis-trash
+  node_modules` before `npm install` (documented in
+  the project memory). 0 source code changes (the
+  stores already use the new `defineStore('name',
+  () => {...})` form). 2 files: `frontend/package.json`,
+  `frontend/package-lock.json`.
+- **`chore(deps-dev): bump vue-tsc to 3.3.8 and fix
+  WebhooksView DataTable props` (#143)** —
+  `vue-tsc 2.1.10 → 3.3.8`. vue-tsc 3 caught a
+  pre-existing prop-name bug in
+  `frontend/src/views/WebhooksView.vue` (PR #139):
+  the view was calling `DataTable` with `:rows` and
+  `:empty-message` instead of `:data` and
+  `empty-key`. Three prop renames in one file as a
+  no-op fix (same rendered text); without it,
+  vue-tsc 3 fails the strict type-check. The
+  `DataTable` component itself (`frontend/src/components/
+  DataTable.vue`) was correct; the view was the
+  only caller that drifted. 3 source-code lines
+  changed across 1 file. 3 files total:
+  `frontend/package.json`, `frontend/package-lock.json`,
+  `frontend/src/views/WebhooksView.vue`.
+- **`chore(deps): bump vue-i18n 10.0.5 to 11.4.8`
+  (#144)** — `vue-i18n 10.0.5 → 11.4.8`. 0 source
+  code changes: the codebase already used the
+  Composition API with `legacy: false` (set in
+  `frontend/src/i18n/index.ts`), and vue-i18n 11's
+  breaking change is the Legacy API removal, which
+  we never used. 2 files: `frontend/package.json`,
+  `frontend/package-lock.json`.
+
+**Net diff across the 4 PRs:** 13 files, +302/-204, 1
+source file changed (`WebhooksView.vue`, 3 prop
+renames as a no-op fix for a pre-existing bug from
+PR #139). 0 source code changes on the Go side.
+
+**Per-PR CI time:** 7-12 minutes (dominated by the
+backend `go test -count=1 -tags=integration ./...`
+step at ~4-5 min × 2 runs per PR).
+
+**Why this worked without code regressions on the
+frontend side:**
+
+- Pinia 4 is "technically breaking only" (ESM-only +
+  the `@vue/devtools-api` peer dep). The stores use
+  the Options API for `defineStore('name', () => {...})`,
+  which is unchanged in v4.
+- vue-tsc 3 dropped Vue 2 + `vue-class-component`
+  support; the codebase uses neither.
+- vue-i18n 11 deprecates the Legacy API mode only;
+  the codebase already used the Composition API
+  with `legacy: false` exclusively.
+
+**Bonus bug caught by the batch:** the
+`WebhooksView.vue` prop-name drift from PR #139 was
+latent since August 2025. vue-tsc 2 did not enforce
+the prop names; vue-tsc 3 does. The fix is a no-op
+at runtime (same rendered text), but it was a real
+lint hole that is now closed.
+
+**Footgun avoided by the 4-PR split (vs a single
+mega-PR):** batching all 3 frontend majors into one
+PR would have been a multi-hour debugging exercise
+if anything broke. The 4-PR split kept each bump
+independently revertable and let us catch the
+`WebhooksView` bug in isolation (not bundled with
+the vue-i18n 11 noise).
+
 ## [0.4.0] - 2026-07-26
 
 **Tag:** `v0.4.0` on this commit. v0.4.0 ships two parallel
