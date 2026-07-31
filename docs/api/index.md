@@ -6,11 +6,12 @@ title: API reference
 
 The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
-in the repo root. v0.6.0 ships the full admin surface
-documented in the spec; the front-end uses
-`openapi-typescript` to generate a typed client from
-it. This page is a short overview вЂ” for per-endpoint
-details, see the spec.
+in the repo root. v0.7.0 ships the full admin surface
+documented in the spec (auth, nodes, inbounds, hosts,
+plans, users, panelcfg, audits, backups, webhooks);
+the front-end uses `openapi-typescript` to generate a
+typed client from it. This page is a short overview
+вЂ” for per-endpoint details, see the spec.
 
 ## Conventions
 
@@ -30,7 +31,7 @@ details, see the spec.
   non-breaking changes bump the
   `X-Api-Minor-Version` header.
 
-## Endpoints shipped in v0.6.0
+## Endpoints shipped in v0.7.0
 
 The full list is in `docs/openapi.yaml`. The headline
 groups:
@@ -47,6 +48,7 @@ groups:
 | `sub`         | `GET /sub/{token}` (the user-facing subscription render; auto-detects client format)                       |
 | `audits`      | `GET /audits` + `GET /audits/{id}` (read-only)                                                              |
 | `backups`     | CRUD on `/backups/{id}` + `POST /backups/{id}/restore` (v0.5.0)                                            |
+| `webhooks`    | CRUD on `/webhooks/{id}` + `/webhooks/{id}/deliveries` + `/webhooks/{id}/test` + `/webhooks/dlq[/...]` (v0.7.0) вЂ” the operator-configured outgoing-webhook surface |
 | `meta`        | `GET /health` (anonymous, liveness) + `GET /cores` (provider catalog)                                       |
 
 The detailed per-endpoint schemas (request / response
@@ -64,14 +66,11 @@ The following endpoints are documented in
 
 - `POST /api/v1/webhooks/payment` (the inbound
   payment confirmation webhook from the Cabinet)
-- `POST /api/v1/webhooks/test` (the smoke-test
-  endpoint the operator uses to verify a webhook
-  is reachable)
 - The `/cabinet/*` surface (the end-user cabinet
   UI; lands with `internal/cabinet` in v1.2+)
-- The `internal/webhooks` outbound side (HMAC-signed
-  delivery to operator-configured URLs; lands in
-  v0.7.0)
+- The `internal/notifications` outbound side
+  (Telegram + generic webhook via n8n; lands in
+  v0.8.0)
 
 ## See also
 

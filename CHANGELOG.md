@@ -149,6 +149,217 @@ every `users.plan_id` row references a row here.
   the plan create / edit dialog yet. v0.6.x
   adds the binding management UI.
 
+## [0.7.0] - 2026-07-31
+
+### Added (outgoing-webhook surface, #136, #137, #138, #139)
+
+The `webhook_endpoints` table was in migration 0001
+from the start (a v0.3.0 stub); v0.7.0 promotes
+it to a real outgoing-webhook surface with a
+typed Go package, an HTTP admin handler, an
+OpenAPI spec, and a UI view. The package ships
+HMAC-SHA256 signing, exponential-backoff retry,
+and a dead-letter queue. v0.7.0 does NOT wire
+`Service.Dispatch` from every mutating handler
+(production event flow is a v0.7.x follow-up
+batch); the operator uses the new `POST
+/api/v1/webhooks/{id}/test` endpoint to verify
+their setup end-to-end.
+
+- **`backend/internal/webhooks`** (new, #136) — the
+  Go-side owner of the `webhook_endpoints`,
+  `webhook_deliveries`, and `webhook_dlq` tables.
+  Layout follows the plans / users pattern:
+  `Endpoint` model with a closed-set `EventType`
+  enum (18 event types covering user / plan /
+  node / host / backup / inbound lifecycles),
+  `Delivery` + `DLQEntry` models with JSONB payload
+  snapshots so manual replay sends the exact same
+  body the receiver saw, `Store` interface with
+  three concerns (endpoints, deliveries, DLQ),
+  `MemoryStore` (in-process) + `PgStore` (pgx-
+  backed, selected via `AEGIS_WEBHOOKS_BACKEND=pg`).
+  `Service` owns input validation (URL http/https
+  only, secret 16..256 chars, events in closed
+  enum), the synchronous dispatcher (signs in-
+  memory, records every attempt as a `Delivery`
+  row, moves the final failed attempt to the DLQ),
+  and the manual-retry / replay hooks
+  (`Service.RetryDelivery`, `Service.ReplayDLQEntry`,
+  `Service.SendTestEvent`). HMAC signature helpers
+  in `signature.go` (canonical `sha256=<hex>` form,
+  constant-time compare via `crypto/hmac.Equal`).
+  Exponential-backoff retry in `retry.go` (1s, 5s,
+  25s, 2m15s, 11m15s — `MaxAttempts = 6`).
+  41 unit tests + 5 pg integration tests
+  (gated on `INTEGRATION_DATABASE_URL`).
+- **`backend/internal/webhooks/admin_handler.go`**
+  (new, #137) — `AdminRouter(svc, authMW)` mounts
+  the admin surface behind `RequireScope(ScopeWebhooks)`:
+  `GET /`, `GET /{id}`, `POST /`, `PATCH /{id}`,
+  `DELETE /{id}`, `GET /{id}/deliveries`,
+  `POST /{id}/test`, `GET /dlq`,
+  `GET /dlq/{did}`, `POST /dlq/{did}/replay`,
+  `DELETE /dlq/{did}`. The `secret` field is shown
+  VERBATIM in the immediate Create response (so
+  the operator can copy it to their receiver's
+  HMAC config) and redacted to `***` on every
+  subsequent read. 13 end-to-end tests cover
+  every CRUD + test + replay path.
+- **`docs/openapi.yaml`** (updated, #138) — version
+  bump 0.6.0 → 0.7.0. 11 new paths under
+  `/api/v1/webhooks/*`, 12 new schemas
+  (`WebhookEventType`, `WebhookDeliveryStatus`,
+  `WebhookEndpoint` with create / update / list
+  variants, `WebhookDelivery` with list response,
+  `WebhookDLQEntry` with list response,
+  `WebhookDispatchResult`).
+- **`frontend/src/api/services/webhooks.ts`** (new,
+  #138) — hand-mirrored from the OpenAPI spec. 12
+  functions (listWebhooks, getWebhook, createWebhook,
+  updateWebhook, deleteWebhook, listDeliveries,
+  sendTestEvent, listDLQ, getDLQ, deleteDLQ,
+  replayDLQ) + 2 request DTOs
+  (CreateWebhookRequest, UpdateWebhookRequest) +
+  5 type re-exports. Registered in
+  `services/index.ts`.
+- **`frontend/src/views/WebhooksView.vue`** (new,
+  #139) — list, create, edit, delete, send a
+  synthetic test event, inspect the per-endpoint
+  delivery history, and replay / drop entries in
+  the cross-endpoint DLQ. The one-time HMAC-secret
+  display widget is rendered as a prominent amber
+  card above the table right after Create so the
+  operator copies the secret to their receiver
+  before dismissing. Sidebar nav entry with the
+  `Webhook` lucide icon, between `Backups` and
+  `Profile`. Full `webhooks.*` i18n namespace
+  (en + ru).
+- **Auth scope** — new `auth.ScopeWebhooks`
+  constant, granted to every role (admin /
+  operator / viewer) so the endpoint-health
+  widget is visible from every role, matching the
+  `ScopePlans` precedent.
+- **Config flag** — `AEGIS_WEBHOOKS_BACKEND`
+  (default `memory`) selects the persistence
+  layer; `cmd/aegis/main.go` wires the store and
+  the service, and the `needsPg` OR-chain picks up
+  the new flag.
+
+### Fixed (webhook_endpoints schema gaps, #136)
+
+The v0.3.0 stub of `webhook_endpoints` in
+migration 0001 was missing two things v0.7.0
+needed. Both gaps only surface at pgx integration
+time; the `MemoryStore` enforces both invariants
+in code, the `PgStore` relies on the SQL
+constraints.
+
+- Migration 0015 adds `updated_at TIMESTAMPTZ NOT
+  NULL DEFAULT NOW()` to `webhook_endpoints` so
+  the `Endpoint.UpdatedAt` field has a backing
+  column.
+- Migration 0016 adds a `UNIQUE (url)` constraint
+  on `webhook_endpoints` so duplicate-URL
+  detection in `PgStore.CreateEndpoint` /
+  `UpdateEndpoint` surfaces `SQLSTATE 23505` →
+  `ErrDuplicate`, matching the `MemoryStore`
+  behaviour. v0.7.x move `webhook_endpoints.secret`
+  under the sops envelope (plaintext in the DB
+  today).
+
+### Fixed (pgtype.Interval encode footgun, #136)
+
+The default zero value of `pgtype.Interval` has
+`Valid: false`, which encodes as SQL `NULL` and
+silently breaks the `NOT NULL` constraint on the
+column. The plans package already documented this
+(v0.6.0). The webhooks package now uses the same
+canonical pattern: every `pgtype.Interval` value
+the encode path produces sets `Valid: true` and
+every `pgtype.Text` (the `response_body` /
+`error` columns are nullable) is wrapped in
+`pgtype.Text` on the scan side so `NULL` reads
+back as an empty string. CI integration tests
+gated the regression; the project-wide rule
+"every `pgtype.*` type with a `Valid` field must
+set `Valid: true` on the encode path" is now part
+of the v0.7.x code-review checklist.
+
+### Fixed (Postgres JSONB byte-equality footgun, #136)
+
+Postgres JSONB normalises whitespace on read-back
+(`{"x":1}` → `{"x": 1}`), so a test that does
+`if string(got.Payload) != \`{"x":1"}\`` will
+fail on the round-trip. The integration tests
+now use a `jsonEqual(t, raw, want any)` helper
+that parses both sides into a generic structure
+and compares with `reflect.DeepEqual`. The
+production dispatcher stores canonical bytes in
+a `request_body` column (BYTEA in the DB) for
+replay, so the JSONB normalisation on the
+`payload` column is purely a queryability
+concern — but the test path needs the helper.
+
+### Changed (sqlfluff LT02 lint, #136)
+
+CI's sqlfluff lint flags `ALTER TABLE ... ADD
+CONSTRAINT` if the second line is indented. The
+canonical style across the existing 14 migrations
+is to keep `ALTER TABLE` + the verb
+(`ADD COLUMN` / `DROP COLUMN` / `ADD CONSTRAINT`
+/ `DROP CONSTRAINT`) on a single line. Migrations
+0014 / 0015 / 0016 follow this rule.
+
+### Changed (gitleaks generic-api-key false positive, #136)
+
+Gitleaks's `generic-api-key` rule flags the
+high-entropy test HMAC secrets as possible real
+API keys. The fix is a low-entropy fixture
+pattern (`webhook-fixture-secret-aaaa...` with
+repeated characters) so the entropy check stays
+well below the threshold while still satisfying
+the Service's `MinSecretLen=16` validation. The
+pattern must be applied BEFORE the first commit
+on a new branch — fixup commits don't work
+because gitleaks scans the full PR diff (which
+includes the OLD strings in the "before" context).
+
+### Security (HMAC-SHA256 signing + 5-minute anti-replay)
+
+Every dispatch the panel makes carries the
+canonical HMAC-SHA256 signature in
+`X-Aegis-Signature` (format `sha256=<hex>`) and
+the request timestamp in `X-Aegis-Timestamp`
+(RFC 3339 nano). The receiver MUST verify the
+signature with constant-time compare
+(`crypto/hmac.Equal`) and reject any event
+whose timestamp is more than 5 minutes from the
+receiver's wall clock (the anti-replay window
+documented in `internal/webhooks/signature.go`).
+The v0.7.0 surface ships the verify contract;
+receiver-side implementations are out of scope.
+
+### Deferred to v0.7.x (call-site wiring)
+
+- **Background worker** that picks up failed
+  `Delivery` rows and schedules the next retry.
+  v0.7.0 ships the manual
+  `Service.RetryDelivery` hook the worker will
+  call.
+- **sops envelope** on `webhook_endpoints.secret`
+  (plaintext in the DB today).
+- **Wiring `Service.Dispatch`** into every
+  mutating handler (user / plan / node / host /
+  inbound CRUD). v0.7.0 ships the package + the
+  HTTP surface + the test endpoint; the
+  production event flow lands in the v0.7.x
+  follow-up batch, alongside the v0.6.x audit-log
+  call-site wiring.
+- **Shared zod schema** at
+  `frontend/src/schemas/webhook.ts` (v0.7.0 view
+  uses inline zod via `useZodForm`).
+
 ## [Unreleased]
 
 ### Added (operator guide + security policy + quickstart docs, #126)
