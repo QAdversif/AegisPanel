@@ -167,6 +167,37 @@ type Config struct {
 	// can drop this to 1s.
 	WebhooksRetryWorkerInterval time.Duration `env:"AEGIS_WEBHOOKS_RETRY_WORKER_INTERVAL" envDefault:"5s"`
 
+	// WebhooksSecretAgeRecipients is the
+	// comma-separated list of age public keys
+	// (`age1...`) the panel uses to SEAL new
+	// webhook endpoint secrets. The
+	// `webhook_endpoints.secret_ciphertext`
+	// column (migration 0018) stores the
+	// ciphertext; on read the panel's identity
+	// (below) opens it. Multiple recipients are
+	// supported for key rotation: the operator
+	// can seal new endpoints to a new key
+	// alongside the old one, then rotate the
+	// identity at leisure.
+	//
+	// Required when AEGIS_WEBHOOKS_BACKEND=pg
+	// (the panel refuses to boot in pg mode
+	// without at least one recipient).
+	WebhooksSecretAgeRecipients []string `env:"AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS" envSeparator:","`
+
+	// WebhooksSecretAgeKeyFile is the path to
+	// the panel's age identity file (the
+	// standard `age-keygen` output: one
+	// `AGE-SECRET-KEY-1...` line, optional
+	// `# public key: ...` comment). The file
+	// is mode 0600 in production; the operator
+	// shares the same file with the sops CLI
+	// (PR #119) so the panel and the operator
+	// tooling speak the same key.
+	//
+	// Required when AEGIS_WEBHOOKS_BACKEND=pg.
+	WebhooksSecretAgeKeyFile string `env:"AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE" envDefault:""`
+
 	// PanelcfgBackend selects the persistence layer for the
 	// panel-wide config service. "memory" (default) keeps
 	// the panel_path_config rows in RAM — dev only.
