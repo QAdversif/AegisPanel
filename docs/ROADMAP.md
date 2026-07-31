@@ -5,7 +5,7 @@
 > are listed in `CHANGELOG.md` (per-release log) and `docs/adr/`
 > (architecturally significant decisions).
 
-## Status (2026-07-30)
+## Status (2026-07-31)
 
 | Tag                  | Scope                                                                                                  | Status               |
 | ---                  | ---                                                                                                    | ---                  |
@@ -22,7 +22,10 @@
 | `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#100, on commit `3beff0f` → `db151f2` (rewritten post history-edit) | ✅ shipped |
 | `v0.5.0`             | sops+age secrets, backup/restore (pkg + UI + CLI), pre-PR gate, GitHub-API sing-box SHA-256, container wiring for secrets, operator guide + SECURITY + quickstart | ✅ shipped (#119, #120, #121, #122, #123, #124, #125, #126) |
 | `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ✅ shipped (#131, #132, #133, #134) |
-| `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ⏳                   |
+| `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ✅ shipped (#136, #137, #138, #139) |
+| `v0.7.x`             | Webhook call-site wiring (Service.Dispatch from every mutating handler), sops-envelope on `webhook_endpoints.secret`, background worker for retry, shared zod schema at `frontend/src/schemas/webhook.ts` | ⏳ |
+| `v0.8.0`             | `internal/notifications` (Telegram + generic webhook via n8n)                                            | ⏳                   |
+| `v0.9.0`             | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact)                                  | ⏳                   |
 | `v1.0.0-mvp-soft-launch` | GA tag — minimum surface for the public release                                                       | ⏳                   |
 
 ## Path C: v0.4.0-d consolidation
