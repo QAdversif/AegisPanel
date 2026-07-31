@@ -84,6 +84,12 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.backups', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/webhooks',
+    name: 'webhooks',
+    component: () => import('@/views/WebhooksView.vue'),
+    meta: { titleKey: 'nav.webhooks', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/me',
     name: 'profile',
     component: () => import('@/views/ProfileView.vue'),
