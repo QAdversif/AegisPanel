@@ -13,4 +13,5 @@ export * from './panelcfg'
 export * from './users'
 export * from './audits'
 export * from './backups'
+export * from './webhooks'
 

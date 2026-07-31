@@ -1450,6 +1450,572 @@ export interface paths {
         };
         trace?: never;
     };
+    "/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List webhook endpoints
+         * @description Every operator-configured outgoing-webhook target.
+         *     v0.7.0 does not paginate. The `secret` field is
+         *     redacted to `***` on every read EXCEPT the immediate
+         *     POST / response.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookEndpointListResponse"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a webhook endpoint
+         * @description Create a new outgoing-webhook target. The server
+         *     generates the id and timestamps; the caller supplies
+         *     the operator-visible fields (URL, HMAC secret, event
+         *     subscription, enabled flag). The response includes
+         *     the secret VERBATIM — the operator copies it to
+         *     their receiver's HMAC config. Subsequent GETs redact
+         *     the secret to `***`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookEndpoint"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Endpoint URL already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/dlq": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List DLQ entries
+         * @description Every dead-letter entry across all endpoints. The DLQ
+         *     holds deliveries that exhausted the retry budget
+         *     (1s, 5s, 25s, 2m15s, 11m15s — 6 attempts total).
+         *     Replay via POST /webhooks/dlq/{did}/replay.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookDLQListResponse"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/dlq/{did}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                did: string;
+            };
+            cookie?: never;
+        };
+        /** Get a DLQ entry */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    did: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookDLQEntry"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Drop a DLQ entry
+         * @description Mark the entry as resolved / dropped. Does not
+         *     affect the underlying endpoint or the live delivery
+         *     state.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    did: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/dlq/{did}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                did: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay a DLQ entry
+         * @description Take the DLQ entry off the queue and dispatch a
+         *     fresh attempt. The new delivery is signed and
+         *     timestamped at replay time (the receiver sees a
+         *     "current" `X-Aegis-Timestamp`). The DLQ entry is
+         *     NOT automatically deleted; the operator decides
+         *     when to clear it (typically after the receiver has
+         *     acknowledged the replay).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    did: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookDispatchResult"];
+                    };
+                };
+                /**
+                 * @description Returned when the original endpoint was deleted
+                 *     and the operator did not recreate it (the secret
+                 *     is not stored on the DLQ row).
+                 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get a webhook endpoint */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookEndpoint"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete a webhook endpoint
+         * @description Hard delete. ON DELETE CASCADE removes the delivery
+         *     history. DLQ rows are kept (the FK is logical, not
+         *     physical) — see the DLQEntry doc comment in
+         *     `internal/webhooks`.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update a webhook endpoint
+         * @description Partial update (the same PATCH semantics the v0.2 CRUD
+         *     surfaces use). All fields are optional; the absence
+         *     of a key means "leave unchanged".
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookEndpoint"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/webhooks/{id}/deliveries": {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * List delivery history for an endpoint
+         * @description Every POST attempt the dispatcher made to this
+         *     endpoint, sorted by CreatedAt desc. Each row
+         *     carries the HTTP response code, the response body
+         *     snapshot (capped at 4 KiB), the signature, and the
+         *     duration in milliseconds.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookDeliveryListResponse"];
+                    };
+                };
+                /** @description Endpoint not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a synthetic test event
+         * @description Dispatch a synthetic `webhook.test` event to the
+         *     endpoint. The operator uses this to verify their
+         *     receiver setup end-to-end without having to trigger
+         *     a real panel event.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WebhookDispatchResult"];
+                    };
+                };
+                /** @description Endpoint not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/users": {
         parameters: {
             query?: never;
@@ -2863,6 +3429,185 @@ export interface components {
              *     `/{id}` path returns them in full.
              */
             audits: components["schemas"]["AuditEntry"][];
+        };
+        /**
+         * @description The closed set of event types the dispatcher can
+         *     fan out. Adding a new event type is a v0.7.x follow-up
+         *     (the `webhooks.EventType` enum is the only place that
+         *     has to be updated; the receiver-side signature
+         *     verification is unchanged).
+         * @enum {string}
+         */
+        WebhookEventType: "user.created" | "user.updated" | "user.deleted" | "plan.created" | "plan.updated" | "plan.deleted" | "node.created" | "node.updated" | "node.deleted" | "host.created" | "host.updated" | "host.deleted" | "backup.created" | "backup.completed" | "backup.failed" | "inbound.created" | "inbound.updated" | "inbound.deleted";
+        /**
+         * @description Per-attempt outcome. `success` is a 2xx response,
+         *     `retry` is a non-2xx or transport error that will be
+         *     retried (the operator can manually trigger the next
+         *     attempt via the Service's RetryDelivery hook),
+         *     `failed` is the final attempt that exhausted the
+         *     retry budget (1s, 5s, 25s, 2m15s, 11m15s — 6 attempts
+         *     total). Failed deliveries are moved to the DLQ.
+         * @enum {string}
+         */
+        WebhookDeliveryStatus: "success" | "retry" | "failed";
+        WebhookEndpoint: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uri */
+            url: string;
+            /**
+             * @description HMAC-SHA256 secret. Shown VERBATIM on the POST
+             *     / response (one-time), redacted to `***` on every
+             *     subsequent read. v0.7.x moves the column under
+             *     the sops envelope (plaintext in the DB today).
+             */
+            secret: string;
+            /**
+             * @description The event subscription. Empty array = "all events"
+             *     (the wildcard). A non-empty list narrows the
+             *     subscription to the named event types.
+             */
+            events: components["schemas"]["WebhookEventType"][];
+            /**
+             * @description Disabled endpoints are skipped by the dispatcher
+             *     (the result for a Dispatch call shows the
+             *     endpoint in the per-call report with an empty
+             *     Status).
+             */
+            enabled: boolean;
+            /** Format: date-time */
+            lastDeliveryAt?: string | null;
+            lastStatusCode?: number | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        WebhookEndpointCreateRequest: {
+            /** Format: uri */
+            url: string;
+            secret: string;
+            /** @default [] */
+            events: components["schemas"]["WebhookEventType"][];
+            /** @default true */
+            enabled: boolean;
+        };
+        WebhookEndpointUpdateRequest: {
+            /** Format: uri */
+            url?: string;
+            secret?: string;
+            events?: components["schemas"]["WebhookEventType"][];
+            enabled?: boolean;
+        };
+        WebhookEndpointListResponse: {
+            endpoints: components["schemas"]["WebhookEndpoint"][];
+        };
+        WebhookDelivery: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            endpointId: string;
+            eventType: components["schemas"]["WebhookEventType"];
+            /**
+             * @description The event payload as canonical JSON. JSONB on
+             *     the wire — the canonical form (no whitespace,
+             *     keys sorted alphabetically) is generated by
+             *     the dispatcher before the request is signed
+             *     and sent.
+             */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Format: uri
+             * @description Snapshot of the endpoint URL at dispatch time
+             *     (the operator can edit the endpoint URL after a
+             *     delivery without rewriting the history).
+             */
+            requestUrl: string;
+            /**
+             * Format: byte
+             * @description The exact bytes the panel sent (the canonical
+             *     JSON body). Stored as BYTEA so a manual replay
+             *     sends the identical body the receiver saw on the
+             *     original attempt.
+             */
+            requestBody: string;
+            /**
+             * @description The `X-Aegis-Signature` header value, in the
+             *     canonical `sha256=<hex>` form. Receiver-side
+             *     recompute + constant-time compare is the
+             *     verification contract.
+             */
+            signature: string;
+            /**
+             * Format: date-time
+             * @description Wall-clock time the request was made (the
+             *     `X-Aegis-Timestamp` header value, RFC 3339 nano).
+             */
+            timestamp: string;
+            statusCode?: number | null;
+            /** @description Capped at 4 KiB. Empty for transport errors. */
+            responseBody?: string | null;
+            /**
+             * @description Transport error message (DNS failure, TCP RST,
+             *     TLS handshake error, etc). Empty for HTTP
+             *     responses.
+             */
+            error?: string | null;
+            /**
+             * @description 1-indexed attempt number. 6 = the final attempt
+             *     (the next failure would move the delivery to the
+             *     DLQ).
+             */
+            attempt: number;
+            durationMs?: number | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        WebhookDeliveryListResponse: {
+            deliveries: components["schemas"]["WebhookDelivery"][];
+        };
+        WebhookDLQEntry: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Logical reference to the endpoint. Not a
+             *     physical FK — the endpoint may be deleted without
+             *     affecting the DLQ row.
+             */
+            endpointId: string;
+            /**
+             * Format: uri
+             * @description Snapshot of the URL at enqueue time. Used as
+             *     the fallback for the replay endpoint when the
+             *     endpoint row no longer exists.
+             */
+            endpointUrl: string;
+            eventType: components["schemas"]["WebhookEventType"];
+            payload?: {
+                [key: string]: unknown;
+            };
+            lastError: string;
+            attempts: number;
+            /** Format: date-time */
+            lastAttemptAt: string;
+            /** Format: date-time */
+            enqueuedAt: string;
+        };
+        WebhookDLQListResponse: {
+            dlq: components["schemas"]["WebhookDLQEntry"][];
+        };
+        WebhookDispatchResult: {
+            /** Format: uuid */
+            endpointId: string;
+            /** Format: uuid */
+            deliveryId?: string;
+            status: components["schemas"]["WebhookDeliveryStatus"];
+            statusCode?: number | null;
+            error?: string | null;
+            attempts: number;
         };
     };
     responses: never;
