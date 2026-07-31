@@ -1,10 +1,10 @@
 ## docs: v0.6.0 CHANGELOG + ROADMAP + plans API reference
 
-Closes the v0.6.0 doc surface. The 4 code PRs (#131,
-#132, #133, #134) shipped the Go package, HTTP
-handler, OpenAPI spec, and the admin UI; this PR
-adds the v0.6.0 row to the user-facing docs so the
-release can be tagged.
+Closes the v0.6.0 doc surface. The 4 code PRs
+(PR #131, PR #132, PR #133, PR #134) shipped the
+Go package, HTTP handler, OpenAPI spec, and the
+admin UI; this PR adds the v0.6.0 row to the
+user-facing docs so the release can be tagged.
 
 ### What ships in this PR
 

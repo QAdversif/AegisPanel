@@ -9,7 +9,7 @@ The canonical API contract is the OpenAPI spec at
 in the repo root. v0.6.0 ships the full admin surface
 documented in the spec; the front-end uses
 `openapi-typescript` to generate a typed client from
-it. This page is a short overview — for per-endpoint
+it. This page is a short overview вЂ” for per-endpoint
 details, see the spec.
 
 ## Conventions
@@ -41,7 +41,7 @@ groups:
 | `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow)                                 |
 | `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}`                                                                     |
 | `hosts`       | CRUD on `/hosts/{id}`                                                                                       |
-| `plans`       | CRUD on `/plans/{id}` (v0.6.0) — the operator-facing tariff catalog                                          |
+| `plans`       | CRUD on `/plans/{id}` (v0.6.0) вЂ” the operator-facing tariff catalog                                          |
 | `users`       | CRUD on `/users/{id}` + `POST /users/{id}/rotate-token`                                                     |
 | `panelcfg`    | `GET /panelcfg`, `POST /panelcfg/rotate`, `POST /panelcfg/rotate-to`, `POST /panelcfg/reset`              |
 | `sub`         | `GET /sub/{token}` (the user-facing subscription render; auto-detects client format)                       |
@@ -60,7 +60,7 @@ hand-mirrored service functions live at
 ## Endpoints shipped in a later version
 
 The following endpoints are documented in
-`ARCHITECTURE.md` §13 but not yet wired:
+`ARCHITECTURE.md` В§13 but not yet wired:
 
 - `POST /api/v1/webhooks/payment` (the inbound
   payment confirmation webhook from the Cabinet)
@@ -75,11 +75,10 @@ The following endpoints are documented in
 
 ## See also
 
-- `docs/openapi.yaml` — the full OpenAPI 3.0 spec
-- `docs/ARCHITECTURE.md` — the data model and the
+- `docs/openapi.yaml` вЂ” the full OpenAPI 3.0 spec
+- `docs/ARCHITECTURE.md` вЂ” the data model and the
   request / response design rationale
-- `docs/operator-guide.md` — the operator-side
+- `docs/operator-guide.md` вЂ” the operator-side
   install + daily-operations guide
-- `docs/SECURITY.md` — the threat model and the
+- `docs/SECURITY.md` вЂ” the threat model and the
   auth flow
-
