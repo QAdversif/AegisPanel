@@ -327,11 +327,30 @@ func main() {
 	var webhooksStore webhooks.Store
 	switch cfg.WebhooksBackend {
 	case "pg":
-		webhooksStore = webhooks.NewPgStore(pool)
-		log.Info().Msg("webhooks: using pgx-backed store (PgStore)")
+		// v0.7.x: build the age cipher from
+		// the operator's recipient list and
+		// the panel's identity file. The
+		// recipients seal new endpoints;
+		// the identity opens them. The same
+		// identity file is shared with the
+		// sops CLI used by the operator's
+		// out-of-band secrets infra (PR
+		// #119) and the `age-keygen` tool.
+		cipher, cipherErr := webhooks.NewAgeSecretCipher(
+			cfg.WebhooksSecretAgeRecipients,
+			cfg.WebhooksSecretAgeKeyFile,
+		)
+		if cipherErr != nil {
+			log.Fatal().Err(cipherErr).Msg("webhooks: failed to build age secret cipher")
+		}
+		webhooksStore = webhooks.NewPgStore(pool, cipher)
+		log.Info().
+			Int("recipients", len(cfg.WebhooksSecretAgeRecipients)).
+			Str("key_file", cfg.WebhooksSecretAgeKeyFile).
+			Msg("webhooks: using pgx-backed store (PgStore, age-encrypted secret)")
 	default:
 		webhooksStore = webhooks.NewMemoryStore()
-		log.Info().Msg("webhooks: using in-memory store (MemoryStore, dev only)")
+		log.Warn().Msg("webhooks: using in-memory store (MemoryStore, dev only — secret is plaintext)")
 	}
 	webhooksSvc := webhooks.NewService(webhooksStore)
 
