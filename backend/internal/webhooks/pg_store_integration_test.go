@@ -36,12 +36,12 @@ func newPgStore(t *testing.T) *PgStore {
 	t.Helper()
 	pool := testutil.MustNewPool(t)
 	if _, err := pool.Exec(context.Background(),
-		`TRUNCATE TABLE webhook_dlq, webhook_deliveries, webhook_endpoints CASCADE`); err != nil {
+		`TRUNCATE TABLE webhook_dlq, webhook_deliveries, webhook_pending_retries, webhook_endpoints CASCADE`); err != nil {
 		t.Fatalf("TRUNCATE webhook_*: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
-			`TRUNCATE TABLE webhook_dlq, webhook_deliveries, webhook_endpoints CASCADE`)
+			`TRUNCATE TABLE webhook_dlq, webhook_deliveries, webhook_pending_retries, webhook_endpoints CASCADE`)
 	})
 	return NewPgStore(pool)
 }
@@ -237,5 +237,132 @@ func TestPgStore_DeleteEndpointCascades(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 deliveries after cascade, got %d", len(got))
+	}
+}
+
+// --- pending retries (v0.7.x) ----------------------------------------
+
+// TestPgStore_PendingRetries_RoundTrip covers the
+// enqueue / dequeue / list-due flow against the
+// pgx-backed store. The migration 0017 must have
+// created the `webhook_pending_retries` table;
+// testutil runs every migration on MustNewPool.
+func TestPgStore_PendingRetries_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := newPgStore(t)
+	now := time.Now().UTC()
+	d1 := uuid.New()
+	d2 := uuid.New()
+	d3 := uuid.New()
+	if err := s.EnqueueRetry(ctx, d1, now.Add(1*time.Second)); err != nil {
+		t.Fatalf("EnqueueRetry d1: %v", err)
+	}
+	if err := s.EnqueueRetry(ctx, d2, now.Add(5*time.Second)); err != nil {
+		t.Fatalf("EnqueueRetry d2: %v", err)
+	}
+	if err := s.EnqueueRetry(ctx, d3, now.Add(1*time.Hour)); err != nil {
+		t.Fatalf("EnqueueRetry d3: %v", err)
+	}
+	// At `now+10s`, d1 and d2 are due; d3 is not.
+	due, err := s.ListDueRetries(ctx, now.Add(10*time.Second), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries: %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("expected 2 due rows, got %d", len(due))
+	}
+	// Ordered by next_attempt_at asc: d1 then d2.
+	if due[0] != d1 || due[1] != d2 {
+		t.Errorf("ListDueRetries = [%s, %s], want [%s, %s]", due[0], due[1], d1, d2)
+	}
+	// Dequeue d1 and verify it falls out of the
+	// list.
+	if err := s.DequeueRetry(ctx, d1); err != nil {
+		t.Fatalf("DequeueRetry d1: %v", err)
+	}
+	due, err = s.ListDueRetries(ctx, now.Add(10*time.Second), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries #2: %v", err)
+	}
+	if len(due) != 1 || due[0] != d2 {
+		t.Errorf("after Dequeue: due = %v, want [%s]", due, d2)
+	}
+	// Idempotent: re-dequeueing d1 is a no-op.
+	if err := s.DequeueRetry(ctx, d1); err != nil {
+		t.Errorf("DequeueRetry idempotent: %v", err)
+	}
+}
+
+// TestPgStore_EnqueueRetry_UpdatesOnConflict
+// verifies the ON CONFLICT DO UPDATE semantic:
+// re-enqueueing the same delivery_id updates the
+// scheduled time in place.
+func TestPgStore_EnqueueRetry_UpdatesOnConflict(t *testing.T) {
+	ctx := context.Background()
+	s := newPgStore(t)
+	d := uuid.New()
+	t1 := time.Now().UTC()
+	t2 := t1.Add(10 * time.Second)
+	if err := s.EnqueueRetry(ctx, d, t1); err != nil {
+		t.Fatalf("EnqueueRetry #1: %v", err)
+	}
+	if err := s.EnqueueRetry(ctx, d, t2); err != nil {
+		t.Fatalf("EnqueueRetry #2: %v", err)
+	}
+	// At t1+5s, the original schedule (t1) is
+	// already past — but the upsert replaced it
+	// with t2, which is 10s in the future. So
+	// the row is NOT due at t1+5s.
+	got, err := s.ListDueRetries(ctx, t1.Add(5*time.Second), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 due at t1+5s, got %d", len(got))
+	}
+	// At t2+1s, the row IS due.
+	got, err = s.ListDueRetries(ctx, t2.Add(1*time.Second), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries #2: %v", err)
+	}
+	if len(got) != 1 || got[0] != d {
+		t.Errorf("ListDueRetries at t2+1s = %v, want [%s]", got, d)
+	}
+}
+
+// TestPgStore_EndpointDeleteCascades_PendingRetries
+// verifies the ON DELETE CASCADE on the
+// (delivery_id) FK: removing the underlying
+// delivery row removes the pending retry too.
+// The pg path is the production one; the
+// in-memory store has no cascade (it leaves
+// dangling rows that the worker logs and
+// skips via Service.RetryDelivery returning
+// ErrNotFound).
+func TestPgStore_EndpointDeleteCascades_PendingRetries(t *testing.T) {
+	ctx := context.Background()
+	s := newPgStore(t)
+	e := &Endpoint{ID: uuid.New(), URL: "https://cascade2.example.com/h", Secret: "webhook-fixture-secret-aaaaaaaaaaaaaaaaaaaaaaaa", Enabled: true}
+	if err := s.CreateEndpoint(ctx, e); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	d := &Delivery{ID: uuid.New(), EndpointID: e.ID, EventType: EventUserCreated, Attempt: 1, Payload: []byte(`{}`), RequestBody: []byte(`{}`)}
+	if err := s.CreateDelivery(ctx, d); err != nil {
+		t.Fatalf("CreateDelivery: %v", err)
+	}
+	if err := s.EnqueueRetry(ctx, d.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("EnqueueRetry: %v", err)
+	}
+	if err := s.DeleteEndpoint(ctx, e.ID); err != nil {
+		t.Fatalf("DeleteEndpoint: %v", err)
+	}
+	// The pending-retry row cascade-deleted
+	// with the underlying delivery.
+	got, err := s.ListDueRetries(ctx, time.Now().UTC(), 0)
+	if err != nil {
+		t.Fatalf("ListDueRetries: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 pending retries after cascade, got %d", len(got))
 	}
 }
