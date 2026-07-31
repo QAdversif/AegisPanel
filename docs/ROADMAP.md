@@ -21,7 +21,7 @@
 | `v0.4.0-post`        | Release workflow fixes: GHCR image tag lowercase, `workflow_dispatch` push, UI image tag input, explicit semver tags — no application code change | ✅ shipped (#102, #103, #104, #111) |
 | `v0.4.0`             | Tag for the d-r-series; aggregate of #95–#100, on commit `3beff0f` → `db151f2` (rewritten post history-edit) | ✅ shipped |
 | `v0.5.0`             | sops+age secrets, backup/restore (pkg + UI + CLI), pre-PR gate, GitHub-API sing-box SHA-256, container wiring for secrets, operator guide + SECURITY + quickstart | ✅ shipped (#119, #120, #121, #122, #123, #124, #125, #126) |
-| `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ⏳                   |
+| `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ✅ shipped (#131, #132, #133, #134) |
 | `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ⏳                   |
 | `v1.0.0-mvp-soft-launch` | GA tag — minimum surface for the public release                                                       | ⏳                   |
 
@@ -206,23 +206,63 @@ items that were not in the original scope):**
   was de-scoped in #123. The GitHub API digest is the
   trust model.
 
-## v0.6.0 — `internal/plans`
+## v0.6.0 — `internal/plans` ✅ shipped
 
 The `plans` table is in migration 0001; the package
-exists as a `doc.go` stub (#77). The v0.6.0 work:
+exists as a `doc.go` stub (#77). v0.6.0 shipped the
+full CRUD surface across the Go backend, the
+HTTP layer, the OpenAPI spec, and the admin UI.
 
-- `plans.Store` interface (MemoryStore + PgStore).
-- `plans.Service` with input validation, list / get /
-  create / update / delete.
-- Admin handler at `plans.AdminRouter(plansSvc, auth)`.
-- Route mount: `r.Mount("/plans", plans.AdminRouter(...))`
-  with `auth.RequireScope(auth.ScopePlans)`.
-- Wire format: `plans.Plan` JSON DTO with the same
-  field shape as the table.
-- Integration tests (pgx path) + the existing
-  MemoryStore pattern.
-- Optional UI: the admin frontend (Phase 2) will
-  surface the plans list. Out of scope for the API work.
+Closed by: PR #131 (Go package: Plan model +
+ResetPeriod closed enum + Store interface +
+MemoryStore + PgStore + Service with input
+validation + 23 unit tests + 4 pg integration
+tests), PR #132 (admin HTTP handler + ScopePlans
+auth + AEGIS_PLANS_BACKEND config + router/main
+wiring + 11 e2e handler tests), PR #133 (OpenAPI
+spec + hand-mirrored API client + regenerated
+types), PR #134 (PlansView.vue + sidebar nav +
+i18n en/ru + zod form schema). Tag `v0.6.0`
+after the docs PR lands.
+
+What landed:
+
+- `plans.Store` interface (MemoryStore + PgStore)
+  backed by the `plans` table from migration 0001.
+- `plans.Service` with input validation
+  (Name 1..64 chars, Duration [1 minute, 10 years],
+  ResetPeriod enum, non-negative numbers) and the
+  ID / timestamp generation on Create.
+- Admin handler at `plans.AdminRouter(plansSvc, auth)`
+  behind `auth.RequireScope(auth.ScopePlans)`.
+- Route mount: `r.Mount("/plans", plans.AdminRouter(...))`.
+- Wire format: `plans.Plan` JSON DTO. Duration is
+  int64 nanoseconds on the wire (the Go side
+  stores it as a Postgres INTERVAL via
+  `pgtype.Interval` with `Valid: true`; the UI
+  formats ns back to a "30d" / "1h" string at the
+  rendering layer).
+- Frontend: `PlansView.vue` with the list +
+  create + edit + delete dialogs + global search.
+- Frontend: `plans.*` i18n namespace in en/ru,
+  sidebar nav entry, OpenAPI codegen.
+- 23 unit tests + 4 pg integration tests in the
+  Go package; 11 e2e tests in the handler.
+
+Deferred to v0.6.x:
+
+- `plan_pool` writes (the join table linking
+  plans to host pools). v0.6.0 keeps the
+  read-only view in `internal/subscription`.
+- `plan_pool` UI (no HostPool picker in the plan
+  dialog yet).
+- Audit log writes from the mutating handler
+  (the call-site wiring is a separate batch
+  across all admin handlers).
+- Zod schema at `frontend/src/schemas/plan.ts`
+  (the v0.6.0 view uses inline zod via
+  `useZodForm`; a shared schema file lands when
+  the UI matures).
 
 ## v0.7.0 — `internal/webhooks`
 
