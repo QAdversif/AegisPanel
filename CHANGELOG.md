@@ -290,7 +290,7 @@ of the v0.7.x code-review checklist.
 
 Postgres JSONB normalises whitespace on read-back
 (`{"x":1}` → `{"x": 1}`), so a test that does
-`if string(got.Payload) != \`{"x":1"}\`` will
+`if string(got.Payload) != jsonLiteral` will
 fail on the round-trip. The integration tests
 now use a `jsonEqual(t, raw, want any)` helper
 that parses both sides into a generic structure
