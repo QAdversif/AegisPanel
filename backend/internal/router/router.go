@@ -28,6 +28,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/ratelimit"
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 	"github.com/QAdversif/AegisPanel/internal/users"
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // Build returns the v1 http.Handler for Aegis. The auth subrouter is
@@ -48,6 +49,7 @@ func Build(
 	plansSvc *plans.Service,
 	bootstrapSvc *bootstrap.Service,
 	backupsSvc *backups.Service,
+	webhooksSvc *webhooks.Service,
 	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -127,6 +129,19 @@ func Build(
 		// every role (the UsersView needs it to resolve
 		// a `plan_id` to a name).
 		r.Mount("/plans", plans.AdminRouter(plansSvc, authSvc.Middleware()))
+
+		// Outgoing webhooks — admin surface. List /
+		// get / create / patch / delete endpoints, plus
+		// the per-endpoint delivery history, the
+		// cross-endpoint DLQ, the test-event endpoint,
+		// and the manual DLQ-replay endpoint. The
+		// package lives in `internal/webhooks` (v0.7.0);
+		// every operator role (admin / operator /
+		// viewer) gets ScopeWebhooks so the endpoint
+		// health widget is visible from every role
+		// (the WebhooksView shows the last-delivery
+		// snapshot for every endpoint).
+		r.Mount("/webhooks", webhooks.AdminRouter(webhooksSvc, authSvc.Middleware()))
 
 		// Subscription URL — the public endpoint that
 		// turns a sub_token into a base64 / sing-box /
