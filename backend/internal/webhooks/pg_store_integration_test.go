@@ -529,11 +529,15 @@ func TestPgStore_SecretAge_RoundTrip(t *testing.T) {
 	}
 
 	// 4. Direct DB query: column is BYTEA, does
-	// not contain the plaintext.
-	pool := testutil.MustNewPool(t)
+	// not contain the plaintext. We use the
+	// pool already attached to the PgStore
+	// (rather than calling testutil.MustNewPool
+	// again — that would deadlock on the
+	// advisory lock the first call already
+	// holds for the duration of the test).
 	var raw []byte
 	var colType string
-	if err := pool.QueryRow(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT secret_ciphertext, pg_typeof(secret_ciphertext)::text FROM webhook_endpoints WHERE id = $1`,
 		e.ID,
 	).Scan(&raw, &colType); err != nil {
