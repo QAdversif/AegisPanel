@@ -1,21 +1,23 @@
 openapi: 3.0.3
 info:
   title: Aegis Panel API
-  version: 0.2.0
+  version: 0.6.0
   description: |
     Aegis — self-hosted VPN control panel. Multi-core (sing-box / Xray /
     Hysteria 2), BYO Node, Cascade Topology, MCP-driven, decoy sites,
     port masquerading.
 
-    v0.2.0 surface (this document):
+    v0.6.0 surface (this document):
       - /auth/*  (login, refresh, me, change-password)
       - /nodes/*  (CRUD — admin)
       - /nodes/{nodeId}/inbounds/*  (CRUD — admin)
       - /hosts/*  (CRUD — admin)
+      - /plans/*  (CRUD — admin; v0.6.0)
       - /users/*  (CRUD + rotate-token — admin)
       - /panelcfg/*  (sub_path rotation — admin)
       - /sub/{token}  (public subscription render — anonymous)
       - /audits/*  (audit log read — admin)
+      - /backups/*  (CRUD + restore — admin; v0.5.0)
       - /health  (liveness — anonymous)
       - /cores  (provider catalog — admin)
 
@@ -687,6 +689,165 @@ paths:
       responses:
         '204':
           description: No content
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /plans:
+    get:
+      tags: [plans]
+      summary: List plans
+      description: |
+        Every plan (tariff) the operator has configured.
+        v0.6.0 does not paginate.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [plans]
+      summary: Create a plan
+      description: |
+        Create a new plan. The server generates the id
+        and timestamps; the caller supplies the
+        operator-visible fields (name, traffic limit,
+        duration, device limit, reset period, price).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Plan name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /plans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [plans]
+      summary: Get a plan
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [plans]
+      summary: Update a plan
+      description: |
+        Partial update (the same PATCH semantics the v0.2 CRUD
+        surfaces use). All fields are optional; the absence
+        of a key means "leave unchanged". The `duration_ns`
+        field is in nanoseconds — the front-end converts a
+        human-readable "30 days" string to ns before sending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [plans]
+      summary: Delete a plan
+      description: |
+        Hard delete. The `users.plan_id` column has no FK
+        constraint (migration 0001), so deleting a plan
+        that still has users pointing at it leaves those
+        users with a dangling plan_id; the subscription
+        package's ListPoolsForUser handles dangling plan
+        IDs by returning an empty pool list, so the user
+        silently loses access to the plan's pools.
+        The UI shows a confirm dialog that lists the
+        affected user count before DELETE.
+      responses:
+        '204':
+          description: Deleted
         '404':
           description: Not found
           content:
@@ -1898,6 +2059,131 @@ components:
     UserLifecycleStatus:
       type: string
       enum: [active, grace, disabled, expired, deleted]
+
+    PlanResetPeriod:
+      type: string
+      description: |
+        The cadence at which a user's `trafficUsedBytes`
+        counter resets to zero. The closed set is pinned
+        by the `plans.reset_period` CHECK in migration
+        0001. The Service layer is the authoritative gate.
+      enum: [daily, weekly, monthly, never]
+
+    Plan:
+      type: object
+      required: [id, name, trafficLimitBytes, durationNs, deviceLimit, resetPeriod, priceCents, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        trafficLimitBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Per-user traffic cap applied to any user on
+            this plan. 0 = unlimited.
+        durationNs:
+          type: integer
+          format: int64
+          minimum: 60000000000
+          description: |
+            Validity period of a subscription issued on
+            this plan, in nanoseconds. The Service
+            enforces [1 minute, 10 years] =
+            [60_000_000_000, 315_360_000_000_000] ns.
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+          description: |
+            Max concurrent VPN connections per user.
+            0 = unlimited.
+        resetPeriod:
+          $ref: '#/components/schemas/PlanResetPeriod'
+        priceCents:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            List price in cents. The panel does not
+            model FX; the operator sets the currency
+            via the cabinet UI's locale. 0 = free.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PlanCreateRequest:
+      type: object
+      required: [name, durationNs]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        trafficLimitBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+        durationNs:
+          type: integer
+          format: int64
+          minimum: 60000000000
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+          default: 0
+        resetPeriod:
+          $ref: '#/components/schemas/PlanResetPeriod'
+        priceCents:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+
+    PlanUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        trafficLimitBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        durationNs:
+          type: integer
+          format: int64
+          minimum: 60000000000
+        deviceLimit:
+          type: integer
+          minimum: 0
+          maximum: 64
+        resetPeriod:
+          $ref: '#/components/schemas/PlanResetPeriod'
+        priceCents:
+          type: integer
+          format: int64
+          minimum: 0
+
+    PlanListResponse:
+      type: object
+      required: [plans]
+      properties:
+        plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/Plan'
 
     User:
       type: object

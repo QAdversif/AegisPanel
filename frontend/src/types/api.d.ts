@@ -1177,6 +1177,279 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List plans
+         * @description Every plan (tariff) the operator has configured.
+         *     v0.6.0 does not paginate.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PlanListResponse"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a plan
+         * @description Create a new plan. The server generates the id
+         *     and timestamps; the caller supplies the
+         *     operator-visible fields (name, traffic limit,
+         *     duration, device limit, reset period, price).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PlanCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Plan"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Plan name already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get a plan */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Plan"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete a plan
+         * @description Hard delete. The `users.plan_id` column has no FK
+         *     constraint (migration 0001), so deleting a plan
+         *     that still has users pointing at it leaves those
+         *     users with a dangling plan_id; the subscription
+         *     package's ListPoolsForUser handles dangling plan
+         *     IDs by returning an empty pool list, so the user
+         *     silently loses access to the plan's pools.
+         *     The UI shows a confirm dialog that lists the
+         *     affected user count before DELETE.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update a plan
+         * @description Partial update (the same PATCH semantics the v0.2 CRUD
+         *     surfaces use). All fields are optional; the absence
+         *     of a key means "leave unchanged". The `duration_ns`
+         *     field is in nanoseconds — the front-end converts a
+         *     human-readable "30 days" string to ns before sending.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PlanUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Plan"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/users": {
         parameters: {
             query?: never;
@@ -2373,6 +2646,82 @@ export interface components {
         };
         /** @enum {string} */
         UserLifecycleStatus: "active" | "grace" | "disabled" | "expired" | "deleted";
+        /**
+         * @description The cadence at which a user's `trafficUsedBytes`
+         *     counter resets to zero. The closed set is pinned
+         *     by the `plans.reset_period` CHECK in migration
+         *     0001. The Service layer is the authoritative gate.
+         * @enum {string}
+         */
+        PlanResetPeriod: "daily" | "weekly" | "monthly" | "never";
+        Plan: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description Per-user traffic cap applied to any user on
+             *     this plan. 0 = unlimited.
+             */
+            trafficLimitBytes: number;
+            /**
+             * Format: int64
+             * @description Validity period of a subscription issued on
+             *     this plan, in nanoseconds. The Service
+             *     enforces [1 minute, 10 years] =
+             *     [60_000_000_000, 315_360_000_000_000] ns.
+             */
+            durationNs: number;
+            /**
+             * @description Max concurrent VPN connections per user.
+             *     0 = unlimited.
+             */
+            deviceLimit: number;
+            resetPeriod: components["schemas"]["PlanResetPeriod"];
+            /**
+             * Format: int64
+             * @description List price in cents. The panel does not
+             *     model FX; the operator sets the currency
+             *     via the cabinet UI's locale. 0 = free.
+             */
+            priceCents: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PlanCreateRequest: {
+            name: string;
+            /**
+             * Format: int64
+             * @default 0
+             */
+            trafficLimitBytes: number;
+            /** Format: int64 */
+            durationNs: number;
+            /** @default 0 */
+            deviceLimit: number;
+            resetPeriod?: components["schemas"]["PlanResetPeriod"];
+            /**
+             * Format: int64
+             * @default 0
+             */
+            priceCents: number;
+        };
+        PlanUpdateRequest: {
+            name?: string;
+            /** Format: int64 */
+            trafficLimitBytes?: number;
+            /** Format: int64 */
+            durationNs?: number;
+            deviceLimit?: number;
+            resetPeriod?: components["schemas"]["PlanResetPeriod"];
+            /** Format: int64 */
+            priceCents?: number;
+        };
+        PlanListResponse: {
+            plans: components["schemas"]["Plan"][];
+        };
         User: {
             /** Format: uuid */
             id: string;
