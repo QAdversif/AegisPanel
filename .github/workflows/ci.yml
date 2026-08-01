@@ -176,8 +176,8 @@ jobs:
       # yet, so `npm run test` would error with "no test files
       # found". Skip until the first component test lands; we
       # re-enable the step then.
-      # - name: Unit tests
-      #   run: npm run test
+      - name: Unit tests
+        run: npm run test
 
       - name: Build
         run: npm run build
