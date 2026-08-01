@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // Service is the business-logic layer on top of Store.
@@ -29,9 +30,10 @@ import (
 // Phase 1.1 can swap the Store without touching
 // validation.
 type Service struct {
-	store Store
-	nodes *nodes.Service
-	now   func() time.Time
+	store    Store
+	nodes    *nodes.Service
+	now      func() time.Time
+	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 }
 
 // NewService wires a Service around the given store.
@@ -40,6 +42,13 @@ type Service struct {
 // is via nodes.Service.
 func NewService(store Store, nodesSvc *nodes.Service) *Service {
 	return &Service{store: store, nodes: nodesSvc, now: time.Now}
+}
+
+// WithWebhooks installs the outbound event service.
+// See plans.Service.WithWebhooks for the rationale.
+func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
+	s.webhooks = svc
+	return s
 }
 
 // SetClock swaps the time source. Intended for tests
@@ -160,7 +169,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 		}
 		return nil, fmt.Errorf("create: %w", err)
 	}
-	return s.store.GetByID(ctx, i.ID)
+	out, err := s.store.GetByID(ctx, i.ID)
+	if err != nil {
+		return nil, err
+	}
+	// v0.7.x: see plans.Service.Create.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundCreated, out)
+	return out, nil
 }
 
 // UpdateInput is what HTTP PUT / JSON-patch bodies
@@ -246,7 +261,13 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 		}
 		return nil, fmt.Errorf("update: %w", err)
 	}
-	return s.store.GetByID(ctx, id)
+	out, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// v0.7.x: see plans.Service.Create.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundUpdated, out)
+	return out, nil
 }
 
 // Delete removes an inbound by id. ErrNotFound bubbles
@@ -255,7 +276,16 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	// v0.7.x: the inbound is gone by the time we
+	// dispatch, so the payload carries only
+	// the identifier.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundDeleted, map[string]string{
+		"id": id.String(),
+	})
+	return nil
 }
 
 // --- internal helpers ---------------------------------------------------
