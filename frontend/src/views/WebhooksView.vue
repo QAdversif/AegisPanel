@@ -45,7 +45,6 @@ import {
   Search,
   Webhook,
 } from 'lucide-vue-next'
-import { z } from 'zod'
 
 import {
   createWebhook,
@@ -63,6 +62,7 @@ import {
 } from '@/api/services/webhooks'
 import { toApiError } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
+import { webhookCreateSchema, webhookUpdateSchema } from '@/schemas'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -351,21 +351,8 @@ function onDismissSecret(): void {
 
 // --- create form -----------------------------------------------------
 
-const createSchema = z.object({
-  url: z
-    .string()
-    .min(10)
-    .max(2048)
-    .refine(
-      (v) => v.startsWith('http://') || v.startsWith('https://'),
-      { message: 'url must be http or https' },
-    ),
-  secret: z.string().min(16).max(256),
-  enabled: z.boolean().default(true),
-})
-
 const createForm = useZodForm({
-  schema: createSchema,
+  schema: webhookCreateSchema,
   initialValues: {
     url: '',
     secret: '',
@@ -400,21 +387,8 @@ const createForm = useZodForm({
 
 // --- edit form --------------------------------------------------------
 
-const editSchema = z.object({
-  url: z
-    .string()
-    .min(10)
-    .max(2048)
-    .refine(
-      (v) => v.startsWith('http://') || v.startsWith('https://'),
-      { message: 'url must be http or https' },
-    ),
-  secret: z.string().optional().or(z.literal('')),
-  enabled: z.boolean(),
-})
-
 const editForm = useZodForm({
-  schema: editSchema,
+  schema: webhookUpdateSchema,
   initialValues: {
     url: '',
     secret: '',
