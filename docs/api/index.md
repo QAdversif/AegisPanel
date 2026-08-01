@@ -6,7 +6,7 @@ title: API reference
 
 The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
-in the repo root. v0.7.0 ships the full admin surface
+in the repo root. v0.7.1 ships the full admin surface
 documented in the spec (auth, nodes, inbounds, hosts,
 plans, users, panelcfg, audits, backups, webhooks);
 the front-end uses `openapi-typescript` to generate a
@@ -31,7 +31,7 @@ typed client from it. This page is a short overview
   non-breaking changes bump the
   `X-Api-Minor-Version` header.
 
-## Endpoints shipped in v0.7.0
+## Endpoints shipped in v0.7.1
 
 The full list is in `docs/openapi.yaml`. The headline
 groups:
@@ -48,7 +48,7 @@ groups:
 | `sub`         | `GET /sub/{token}` (the user-facing subscription render; auto-detects client format)                       |
 | `audits`      | `GET /audits` + `GET /audits/{id}` (read-only)                                                              |
 | `backups`     | CRUD on `/backups/{id}` + `POST /backups/{id}/restore` (v0.5.0)                                            |
-| `webhooks`    | CRUD on `/webhooks/{id}` + `/webhooks/{id}/deliveries` + `/webhooks/{id}/test` + `/webhooks/dlq[/...]` (v0.7.0) вЂ” the operator-configured outgoing-webhook surface |
+| `webhooks`    | CRUD on `/webhooks/{id}` + `/webhooks/{id}/deliveries` + `/webhooks/{id}/test` + `/webhooks/dlq[/...]` (v0.7.0 surface; v0.7.1 wires the dispatcher into every mutating handler so the events actually fan out to subscribers) |
 | `meta`        | `GET /health` (anonymous, liveness) + `GET /cores` (provider catalog)                                       |
 
 The detailed per-endpoint schemas (request / response

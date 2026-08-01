@@ -360,6 +360,276 @@ receiver-side implementations are out of scope.
   `frontend/src/schemas/webhook.ts` (v0.7.0 view
   uses inline zod via `useZodForm`).
 
+## [0.7.1] - 2026-08-01
+
+Five-PR v0.7.x follow-up batch. Every item was
+"deferred to v0.7.x" in the v0.7.0 section above;
+v0.7.1 closes all four deferred items, plus adds
+the events multi-select UI that the v0.7.0
+deferred list did not call out (the wire surface
+already supported it; only the UI was holding the
+feature back). The package-level `internal/webhooks`
+API is unchanged from v0.7.0; the additions are
+the production event flow + the secret-at-rest
+hardening + the retry loop.
+
+### Added (webhook call-site wiring, #148)
+
+The v0.7.0 view shipped `Service.Dispatch` as a
+tested, wire-ready event hook but no caller invoked
+it on the production event flow. v0.7.1 wires
+`Dispatch` into every mutating handler in
+`internal/{users,plans,nodes,hosts,inbounds,backups}`,
+so `user.created`, `plan.deleted`, `node.updated`,
+etc. fan out to every endpoint that subscribed to
+that event type. Concretely:
+
+- **`webhooks.MustDispatch`** (new helper in
+  `internal/webhooks/dispatcher.go`) — non-blocking,
+  nil-safe, 5s-bounded-context wrapper. The Service
+  calls it AFTER the row is persisted (not before),
+  so a receiver that acts on `user.created` sees a
+  committed row.
+- **`WithWebhooks(svc)` setter** on every
+  mutating Service (users / plans / nodes / hosts /
+  inbounds / backups) — chosen over a constructor
+  argument so the 167+ existing test fixtures stay
+  untouched (the dispatch field stays `nil` in
+  unit tests, the constructor still takes only the
+  Store).
+- **Wire payloads** are minimal — `Delete` is
+  `map[string]string{"id": "..."}` (no tombstones);
+  `backups.Service` fires `backup.created` on
+  insert and `backup.completed` / `backup.failed`
+  on the terminal state; `users.Service` fires
+  `user.updated` on `RotateSubToken` (the closed
+  enum has no `user.token_rotated`; an `AddEventType`
+  for it is a v0.8 follow-up).
+- **`cmd/aegis/main.go`** wires a single
+  `webhooksSvc` into all six services. 6 service
+  files + `cmd/aegis/main.go` touched, +1120 / -24.
+- **`internal/webhooks/spy.go`** (new test helper) —
+  cross-package test double wired with a no-op
+  HTTP dialer. Records dispatch via the `Delivery`
+  rows the Service writes BEFORE the HTTP exchange,
+  so the test can assert without any actual HTTP.
+  6 `dispatcher_test.go` files (one per service)
+  cover the happy path + the nil-safety contract.
+
+### Added (webhook background retry worker, #146)
+
+The v0.7.0 retry schedule (1s, 5s, 25s, 2m15s,
+11m15s, hard ceiling 24h, `MaxAttempts = 6`) lived
+inside `Service.RetryDelivery`; nobody called it
+on a timer. v0.7.1 lands the worker.
+
+- **`webhook_pending_retries` table** (migration
+  0017) — `delivery_id UUID PRIMARY KEY REFERENCES
+  webhook_deliveries(id) ON DELETE CASCADE,
+  attempt INT, next_attempt_at TIMESTAMPTZ, last_error
+  TEXT, updated_at TIMESTAMPTZ`. The FK cascade
+  means a manual `DELETE` of an endpoint (or a
+  `DELETE FROM webhook_deliveries`) drops the
+  pending retry row alongside the delivery row.
+- **`Store.EnqueueRetry` / `DequeueRetry` /
+  `ListDueRetries`** — the three CRUD methods on
+  both `MemoryStore` (for unit tests) and `PgStore`.
+  `EnqueueRetry` uses `ON CONFLICT (delivery_id)
+  DO UPDATE` so re-enqueueing a row that already
+  has a pending retry overwrites the schedule
+  instead of failing the unique-key check.
+- **`internal/webhooks/worker.go`** (new) — the
+  goroutine: `for { tick := select next due row;
+  ctx, cancel := context.WithTimeout(parent, tick);
+  service.RetryDelivery(ctx, row); cancel(); sleep
+  min(interval, next_due - now) }`. The per-tick
+  context is bounded to the interval so a hung
+  HTTP exchange cannot block the next tick.
+- **`Service.ProcessDueRetries`** (new) — public
+  API the worker calls. Dequeues the OLD row
+  (deletes the pending retry on success) and
+  re-invokes `deliverSync` which re-enqueues a
+  fresh retry row if the new attempt also fails.
+- **Config**:
+  `AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED` (default
+  `true`), `AEGIS_WEBHOOKS_RETRY_WORKER_INTERVAL`
+  (default `5s`). The flag is here so a CI test
+  that needs to control timing can disable the
+  worker without re-architecting the boot path.
+- **13 files** changed, +1484 / -7. **19 new
+  tests** (72 total in the package, was 53).
+  One fixup commit on the PR — the new pg
+  integration tests for `EnqueueRetry` initially
+  inserted random UUIDs without pre-creating a
+  matching `webhook_deliveries` row, so the FK
+  constraint rejected them with SQLSTATE 23503.
+  Fix: a `seedEndpointAndDelivery(t, s, urlSuffix)`
+  helper at the top of `pg_store_integration_test.go`
+  that pre-creates the endpoint + delivery so the
+  FK is satisfied (see "FK constraint catches test
+  bugs early" memory entry).
+
+### Added (webhook age envelope on endpoint secret, #147)
+
+`webhook_endpoints.secret` was stored in plaintext
+in v0.7.0. v0.7.1 moves the column to sops+age at
+rest while keeping the wire-level redaction
+contract (verbatim on Create, `***` on every
+subsequent read).
+
+- **Migration 0018** (destructive; live is still
+  v0.4.0 so no production data to migrate):
+  `ALTER TABLE webhook_endpoints RENAME COLUMN
+  secret TO secret_ciphertext; ALTER COLUMN
+  secret_ciphertext TYPE BYTEA USING
+  secret_ciphertext::BYTEA`.
+- **`SecretCipher` interface** (new in
+  `internal/webhooks/secret.go`) — the seam. The
+  `Store` takes a `cipher SecretCipher` at
+  construction; `NewPgStore(pool, nil)` PANICS so a
+  misconfigured boot is loud. `NewMemoryStore(clock,
+  nil)` does NOT panic (the MemoryStore is the
+  test-only path; tests use `NoopSecretCipher`).
+- **`AgeSecretCipher`** — the production
+  implementation. `filippo.io/age v1.3.1`,
+  X25519 + ChaCha20-Poly1305. Multi-recipient
+  envelope so a key rotation is a config-only
+  change (`AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS`
+  is a CSV of `age1...` public keys).
+- **`NoopSecretCipher`** — the dev / test
+  implementation. Pass-through (encrypt returns
+  the plaintext as bytes, decrypt returns the
+  bytes as a string). The unit tests do not
+  exercise real crypto; the pg integration tests
+  use the Noop cipher so the test data stays
+  readable in `psql` output.
+- **Config**:
+  `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS` (csv of
+  `age1...` recipients) + `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE`
+  (path to the X25519 identity file).
+- **9 files** changed, +1019 / -20. **10 new
+  unit tests** in `secret_test.go` (82 unit tests
+  in the package, was 72). One fixup commit on
+  the PR — the integration tests initially
+  called `testutil.MustNewPool(t)` twice in the
+  same test body. The second call deadlocked on
+  the `pg_advisory_lock(42)` in `testutil/db.go`.
+  Fix: reuse the first pool (`s.pool`) instead of
+  acquiring a second one (see "testutil.MustNewPool
+  deadlock on 2nd call" memory entry).
+
+### Added (webhook events multi-select in UI, #150)
+
+v0.7.0's `WebhooksView` listed the `events`
+column read-only and hard-coded `events: []`
+(the all-events wildcard) on Create. The wire
+shapes already accepted `events: WebhookEventType[]`
+on both POST and PATCH; v0.7.1 surfaces the
+field on both dialogs.
+
+- **`frontend/src/components/WebhookEventsPicker.vue`**
+  (new) — grid of native checkboxes for the
+  18 closed event types, grouped by entity
+  (user / plan / node / host / backup / inbound).
+  2 cols on mobile, 3 on desktop. The header
+  badge shows "N of 18 selected" or the
+  "all" wildcard when the value is `[]`.
+  Contract: `value` / `change` event so it pairs
+  with `useZodForm` via `setFieldValue` without
+  depending on a slot inside `FormField` (which
+  is built around a single-value input control).
+- **`WebhooksView.vue`** — both create and
+  edit dialogs render the picker below the
+  url / secret / enabled fields with a
+  "label and help text" header that matches
+  the other `FormField` rhythm. The edit
+  dialog's `editTarget` watcher hydrates
+  the field with
+  `events: values.events` (the server treats
+  `[]` as "all" so the wire level matches
+  the existing wildcard semantics).
+- **i18n** (en + ru) — `webhooks.eventsPicker.heading`,
+  `selectedCount`, and `groups.{user,plan,node,
+  host,backup,inbound}`.
+- **5 files** changed, +236 / -6 (4 src files +
+  1 new component).
+
+### Refactored (shared zod schema, #149)
+
+The v0.7.0 `WebhooksView` inlined the create and
+edit form schemas inside the view's script block.
+v0.7.1 moves them to
+`frontend/src/schemas/webhook.ts` so the dialogs
+share a single source of truth and so future
+features (e.g. event-type multi-select) extend
+the schema without re-touching the view.
+
+- **`frontend/src/schemas/webhook.ts`** (new) —
+  `webhookEventTypeSchema` (z.enum of the 18
+  closed types), `webhookUrlSchema` (http/https,
+  10..2048), `webhookSecretSchema` (16..256),
+  `webhookCreateSchema` (url, secret, enabled
+  and events), `webhookUpdateSchema`
+  (`.partial().strict()`; secret is
+  `z.union([z.literal(''), webhookSecretSchema])
+  .optional()` so an empty string still means
+  "leave unchanged" in the edit dialog).
+- **`frontend/src/schemas/index.ts`** re-exports
+  the new module alongside `user` / `host` /
+  `inbound` / `node` / `panelcfg`.
+- **`WebhooksView.vue`** drops the `zod` import
+  and the inline `createSchema` / `editSchema`
+  constants.
+- **Side benefit** — the edit form's secret
+  field is now validated with
+  `webhookSecretSchema`'s 16-character minimum.
+  The previous inline schema was
+  `z.string().optional().or(z.literal(''))` with
+  no length check, which was a latent bug —
+  a 1-character secret would have passed
+  frontend validation and round-tripped to the
+  Go backend. The view's submit handler still
+  skips empty strings, so the "leave unchanged"
+  path is preserved.
+- **3 files** changed, +123 / -29 (refactor,
+  no wire-level change).
+
+### Changed (Go+frontend dependency batch + docs sync, #141, #142, #143, #144, #145)
+
+Five sequential PRs (post-v0.7.0) brought every
+dependency that was on its previous major /
+minor track forward.
+
+- **`chore(deps): bump Go minors` (#141)** —
+  `prometheus/client_golang 1.20.5 → 1.24.1`,
+  `caarlos0/env/v11 11.2.2 → 11.4.1`,
+  `zerolog 1.33.0 → 1.35.1`. 3 explicit + 7
+  indirect minor bumps. 0 source code changes.
+- **`chore(deps): bump pinia to 4.0.2 and add
+  @vue/devtools-api` (#142)** — `pinia
+  3.0.4 → 4.0.2`, added `@vue/devtools-api
+  ^8.2.1` (pinia 4 peer dep; was transitive
+  before). Hit the pnpm-store artifact conflict
+  footgun: `node_modules/.pnpm/` from a previous
+  pnpm run made `npm install` skip lockfile
+  regeneration.
+- **`chore(deps): bump vue-tsc to 3.3.8 + fix
+  WebhooksView DataTable prop names` (#143)** —
+  `vue-tsc 2.x → 3.3.8`. The TS strictness
+  upgrade caught a pre-existing prop-name
+  mismatch in `WebhooksView.vue`'s `DataTable`
+  usage (was passing `empty-message` /
+  `loading-message` as data props; the actual
+  prop names are `loading` / `empty-key`).
+  Fixed in the same PR.
+- **`chore(deps): bump vue-i18n to 11.4.8` (#144)**.
+- **`docs: sync to v0.7.0 and the post-v0.7.0
+  4-PR dependency batch` (#145)** — refreshed
+  README / ROADMAP / KNOWN_LIMITATIONS /
+  docs/api/index.md / docs/guide/architecture.md
+  / CONTRIBUTING.md to reflect v0.7.0 and the
+  pre-v0.7.1 dep batch.
+
 ## [Unreleased]
 
 ### Added (operator guide + security policy + quickstart docs, #126)

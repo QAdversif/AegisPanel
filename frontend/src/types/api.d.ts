@@ -3432,10 +3432,12 @@ export interface components {
         };
         /**
          * @description The closed set of event types the dispatcher can
-         *     fan out. Adding a new event type is a v0.7.x follow-up
+         *     fan out. Adding a new event type is a v0.8+ follow-up
          *     (the `webhooks.EventType` enum is the only place that
          *     has to be updated; the receiver-side signature
-         *     verification is unchanged).
+         *     verification is unchanged). v0.7.1 wires the dispatcher
+         *     into every mutating handler so this closed set is
+         *     actually fanned out to operators' receivers.
          * @enum {string}
          */
         WebhookEventType: "user.created" | "user.updated" | "user.deleted" | "plan.created" | "plan.updated" | "plan.deleted" | "node.created" | "node.updated" | "node.deleted" | "host.created" | "host.updated" | "host.deleted" | "backup.created" | "backup.completed" | "backup.failed" | "inbound.created" | "inbound.updated" | "inbound.deleted";
@@ -3458,8 +3460,11 @@ export interface components {
             /**
              * @description HMAC-SHA256 secret. Shown VERBATIM on the POST
              *     / response (one-time), redacted to `***` on every
-             *     subsequent read. v0.7.x moves the column under
-             *     the sops envelope (plaintext in the DB today).
+             *     subsequent read. v0.7.1 stores the column under
+             *     an sops+age envelope (filippo.io/age X25519+ChaCha20-
+             *     Poly1305, multi-recipient for key rotation) on
+             *     disk; the wire-level redaction contract is
+             *     unchanged.
              */
             secret: string;
             /**
