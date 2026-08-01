@@ -23,13 +23,18 @@ import (
 )
 
 // State is the lifecycle of a node. The string values are stored
-// in the database and matched by the `state` column's CHECK
-// constraint, so do not change them without a migration.
+// in the database and matched by the `nodes_state_check`
+// constraint installed by migration `0006_nodes_state_v2.sql`.
+// Do not change a value here without a new migration that
+// re-aligns the CHECK constraint; the regression guard in
+// `pg_store_state_check_test.go` will fail CI otherwise.
 type State string
 
 // State values. The set is closed (see validateState in service.go)
 // — any value outside this list is rejected at the Service
-// boundary.
+// boundary. The same five values are the only ones accepted
+// by the `nodes_state_check` constraint (see migration 0006
+// and the regression test that pins the two together).
 const (
 	// StateNew: registered but not yet bootstrapped.
 	StateNew State = "new"
