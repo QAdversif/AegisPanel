@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.7.0
+# Known Limitations — AegisPanel v0.7.1
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,65 +6,46 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.7.0** (the outgoing
-webhook surface) on top of the v0.5.0 operations-grade feature
-set and the v0.6.0 plans CRUD. The v0.7.0 tag is the next
-candidate release; v0.7.x is the planned follow-up batch (see
-`docs/ROADMAP.md`).
+The current state of the project is **v0.7.1** (the
+`internal/webhooks` v0.7.0 surface + the v0.7.x follow-up
+batch: call-site wiring, sops+age envelope on the endpoint
+secret, background retry worker, events multi-select in the
+UI, and the shared zod schema) on top of the v0.5.0
+operations-grade feature set and the v0.6.0 plans CRUD. The
+next candidate release is v0.8.0 (`internal/notifications`).
 
-## v0.7.0 — currently open
+## v0.7.1 — currently open
 
 ### Operations
 
-#### Webhook call-site wiring — v0.7.x
+#### Audit log call-site wiring — v0.7.x+
 
-`internal/webhooks.Service.Dispatch` is wired end-to-end on the
-HTTP / `POST /webhooks/{id}/test` path (v0.7.0). The production
-event flow — calling `Dispatch` from every mutating handler in
-`internal/{auth,nodes,inbounds,hosts,users,plans,backups}` — is
-NOT in v0.7.0; it lands in the v0.7.x follow-up batch. Until
-then, the only way to verify a webhook end-to-end is the
-`POST /webhooks/{id}/test` endpoint. The v0.7.x batch will add
-the `internal/events` package as the in-process event bus that
-the handlers emit into.
+Every mutation in the admin handler stack should write an
+`audit_log` row. The `Service` struct pattern that PR #148
+used to wire `webhooks.Dispatch` is the same pattern a
+future PR would use to wire `audits.Record` (per-handler
+audit log write). Not in scope for v0.7.1; tracked as a
+separate batch.
 
-#### `sops` envelope on `webhook_endpoints.secret` — v0.7.x
+#### Pre-existing `vue/max-attributes-per-line` template
+warnings — chore
 
-`webhook_endpoints.secret` is stored in plaintext in the
-`webhook_endpoints` table (per v0.7.0). The sops+age flow that
-the `configure_secrets` Ansible role (#119) provides for the
-panel's own boot secrets does not yet wrap this column. v0.7.x
-moves the secret to sops+age at rest via a new migration (or a
-transparent encrypt/decrypt layer on the `Service`); the
-redaction logic on the read path (`***` on every read except the
-verbatim-on-Create response) stays as-is. v0.7.x also extends
-`docs/operator-guide.md` with a "rotating a webhook secret"
-section.
+The v0.7.0 view templates (WebhooksView, PlansView, a
+handful of dialogs) carry pre-existing eslint warnings for
+`vue/max-attributes-per-line` and
+`vue/singleline-html-element-content-newline`. They're
+auto-fixable with `pnpm lint --fix`; not in scope for any
+release PR.
 
-#### Background worker for retry — v0.7.x
+## v0.7.1 — closed in v0.7.1
 
-`webhooks.Service.RetryDelivery` exists (v0.7.0) and is called
-from the synchronous `POST /webhooks/{id}/test` flow, but the
-production retry loop (1s / 5s / 25s / 2m15s / 11m15s, max 6
-attempts) is NOT in a background worker. v0.7.0 ships the
-state-machine; v0.7.x lands the goroutine in `cmd/aegis/main.go`
-that ticks the schedule. The infrastructure is ready
-(`webhooks.NewScheduler(svc, tick)` is the v0.7.x API).
-
-#### Webhook event types: "all" wildcard only — v0.7.x
-
-v0.7.0 ships every endpoint subscribing to the wildcard (every
-event the panel emits). v0.7.x replaces the wildcard with a
-multi-select per endpoint (the UI ships the picker; the backend
-validates the closed `EventType` enum on Create / Update).
-
-#### Shared zod schema at `frontend/src/schemas/webhook.ts` — v0.7.x
-
-The `WebhooksView` form uses inline zod via `useZodForm` (same
-pattern as the v0.6.0 `PlansView`). v0.7.x moves the schema to
-`frontend/src/schemas/webhook.ts` so the create / edit / test
-dialogs share a single source of truth (matches the convention
-that other views will adopt as the UI matures).
+| Item | Closed by |
+| --- | --- |
+| Webhook call-site wiring — `webhooks.MustDispatch` (non-blocking, nil-safe, 5s-bounded) called from every mutating handler in `internal/{users,plans,nodes,hosts,inbounds,backups}` AFTER the row is persisted; `WithWebhooks(svc)` setter pattern preserves the 167+ existing test fixtures; 6 `dispatcher_test.go` files via the new `webhooks.Spy` test double | PR #148 |
+| Background worker for webhook retry — `webhook_pending_retries` table (FK cascade on `webhook_deliveries.id`, `ON CONFLICT DO UPDATE`), `Store.EnqueueRetry/DequeueRetry/ListDueRetries`, `Service.ProcessDueRetries`, `internal/webhooks/worker.go` goroutine with per-tick context bounded to the interval, `AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED` (default true) + `AEGIS_WEBHOOKS_RETRY_WORKER_INTERVAL` (default 5s) | PR #146 |
+| `sops+age` envelope on `webhook_endpoints.secret` — `SecretCipher` interface + `AgeSecretCipher` (filippo.io/age v1.3.1, X25519+ChaCha20-Poly1305, multi-recipient for key rotation) + `NoopSecretCipher` (dev); migration 0018 destructive rename `secret → secret_ciphertext BYTEA`; `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS` (csv `age1...`) + `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE`; `NewPgStore(pool, nil)` panics so a misconfigured boot is loud | PR #147 |
+| Webhook events multi-select in UI — `WebhookEventsPicker.vue` (native checkbox grid, 18 closed event types, grouped by entity, "N of 18 selected" header badge), wired into both the create and edit dialogs; i18n en + ru | PR #150 |
+| Shared zod schema at `frontend/src/schemas/webhook.ts` — `webhookEventTypeSchema` (z.enum of the 18 closed types), `webhookUrlSchema`, `webhookSecretSchema` (16-256 chars, fixed a latent length-bypass bug in the previous inline edit schema), `webhookCreateSchema`, `webhookUpdateSchema` (`.partial().strict()`; secret is `z.union([z.literal(''), webhookSecretSchema]).optional()` so the empty-string "leave unchanged" path is preserved); re-exported from `frontend/src/schemas/index.ts` | PR #149 |
 
 ## v0.7.0 — closed in v0.7.0
 
