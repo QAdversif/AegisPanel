@@ -539,6 +539,18 @@
       "events": "Event subscriptions",
       "eventsHelp": "Empty = subscribe to every event type.",
       "enabled": "Enabled"
+    },
+    "eventsPicker": {
+      "heading": "Pick the events this endpoint should receive",
+      "selectedCount": "{count} of {total} selected",
+      "groups": {
+        "user": "Users",
+        "plan": "Plans",
+        "node": "Nodes",
+        "host": "Hosts",
+        "backup": "Backups",
+        "inbound": "Inbounds"
+      }
     }
   }
 }
