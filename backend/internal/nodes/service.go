@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // Service is the business-logic layer on top of Store. It owns
@@ -17,14 +19,22 @@ import (
 // well-known-states transition. Handlers should call Service
 // rather than Store directly so the rules stay in one place.
 type Service struct {
-	store Store
-	now   func() time.Time
+	store    Store
+	now      func() time.Time
+	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 }
 
 // NewService wires a Service around the given store. The clock
 // is time.Now by default; tests can swap it via SetClock.
 func NewService(store Store) *Service {
 	return &Service{store: store, now: time.Now}
+}
+
+// WithWebhooks installs the outbound event service.
+// See plans.Service.WithWebhooks for the rationale.
+func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
+	s.webhooks = svc
+	return s
 }
 
 // SetClock swaps the time source. Intended for tests only. The
@@ -107,7 +117,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Node, error) {
 		return nil, fmt.Errorf("create: %w", err)
 	}
 	// Re-fetch to return the timestamps the store assigned.
-	return s.store.GetByID(ctx, n.ID)
+	out, err := s.store.GetByID(ctx, n.ID)
+	if err != nil {
+		return nil, err
+	}
+	// v0.7.x: see plans.Service.Create.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventNodeCreated, out)
+	return out, nil
 }
 
 // UpdateInput is what HTTP PUT/JSON-patch bodies unmarshal into.
@@ -169,7 +185,13 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*No
 	if err := s.store.Update(ctx, existing); err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}
-	return s.store.GetByID(ctx, id)
+	out, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// v0.7.x: see plans.Service.Create.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventNodeUpdated, out)
+	return out, nil
 }
 
 // Delete removes a node by id. Idempotent at the store level — a
@@ -178,7 +200,16 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	// v0.7.x: the node is gone by the time we
+	// dispatch, so the payload carries only
+	// the identifier.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventNodeDeleted, map[string]string{
+		"id": id.String(),
+	})
+	return nil
 }
 
 // --- validation helpers --------------------------------------------------

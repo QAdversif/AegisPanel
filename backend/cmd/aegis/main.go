@@ -354,6 +354,27 @@ func main() {
 	}
 	webhooksSvc := webhooks.NewService(webhooksStore)
 
+	// v0.7.x: wire the outbound event surface
+	// into every mutating service that already
+	// exists by this point. The setter
+	// (WithWebhooks) is preferred over a
+	// constructor argument so the existing
+	// unit tests stay untouched. Order does
+	// not matter: the dispatch is invoked
+	// AFTER the row is persisted, so a
+	// receiver that fires on user.created
+	// sees a committed row.
+	//
+	// `backupsSvc` is created later (it needs
+	// the full Config + store + pool), so its
+	// WithWebhooks call is done below, after
+	// the backups New().
+	nodesSvc.WithWebhooks(webhooksSvc)
+	inboundsSvc.WithWebhooks(webhooksSvc)
+	hostsSvc.WithWebhooks(webhooksSvc)
+	usersSvc.WithWebhooks(webhooksSvc)
+	plansSvc.WithWebhooks(webhooksSvc)
+
 	// v0.7.x: background retry worker. Fires the
 	// next attempt for every delivery whose
 	// `next_attempt_at` is in the past, on the
@@ -505,6 +526,13 @@ func main() {
 		Int("max_count", cfg.BackupsMaxCount).
 		Bool("allow_ui_restore", cfg.BackupsAllowUIRestore).
 		Msg("backups: service initialised")
+	// v0.7.x: wire the outbound event surface
+	// into the backups service (created
+	// later than the others because it needs
+	// the full Config + store + pool). See
+	// the earlier WithWebhooks block for the
+	// rationale.
+	backupsSvc.WithWebhooks(webhooksSvc)
 
 	// Optional in-process scheduler. When
 	// AEGIS_BACKUPS_CRON is set (typical
