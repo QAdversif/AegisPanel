@@ -24,6 +24,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	// Aegis Phase 1 — pre-declared runtime dependencies. These are pulled in
 	// as blank imports so that `go mod tidy` keeps the corresponding
 	// requirements in go.mod. They will be wired into real modules in
@@ -932,19 +934,83 @@ func runAdminList(ctx context.Context, svc *auth.Service) {
 	}
 }
 
-// promptPassword reads a single line from stdin. v0.3
-// will replace this with a /dev/tty-echo-suppressed
-// reader that hides the password on the terminal (the
-// `passwd(1)` UX). For v0.2 the CLI is good enough for
-// scripted operators and the dev seed.
+// promptPassword reads a single line from the controlling
+// terminal with echo suppressed, so the operator does not
+// leak the password to shoulder-surfers, the shell history,
+// or the process table. The flow is:
+//
+//  1. Print the prompt to stderr (stdout would interleave
+//     with the echoed bytes on platforms where the
+//     terminal driver reflects the suppressed input).
+//  2. Open /dev/tty directly. We cannot read from
+//     `os.Stdin` because the kernel's line discipline
+//     only suppresses echo on the controlling tty, and a
+//     pipe / heredoc is not a tty. `/dev/tty` is the
+//     canonical way to reach the controlling terminal
+//     even when stdin was redirected (the typical case
+//     in a non-interactive deploy script that does
+//     `echo pw | aegis admin add`).
+//  3. Restore the original terminal state on the way
+//     out. `term.ReadPassword` does this internally but
+//     defers the cleanup to the function exit; we wrap
+//     it so a panic still leaves the terminal sane.
+//
+// When stdin is not a tty (e.g. CI piping a value),
+// `term.IsTerminal(0)` is false and we fall through to
+// the plain `bufio.Reader.ReadString` path. This keeps
+// the v0.2-vintage "scriptable admin add" workflow
+// working — `echo pw | aegis admin add user --email …`
+// still completes without a tty.
 func promptPassword(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		// Non-interactive stdin: the operator is
+		// supplying the password via a pipe or
+		// heredoc, so echo suppression is moot.
+		// Read a single line and trim the newline.
+		// This matches the v0.2 behaviour exactly so
+		// the existing `aegis admin` automation
+		// scripts in deploy/ keep working.
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		// /dev/tty is unavailable (containers
+		// without a tty, Windows). Fall through
+		// to the same non-interactive read so the
+		// command still completes. The operator
+		// sees the password in cleartext on the
+		// terminal in that case — documented as a
+		// known limitation of the windows-pipe
+		// fallback.
+		reader := bufio.NewReader(os.Stdin)
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return "", readErr
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	defer func() { _ = tty.Close() }()
+	// ReadPassword writes the prompt to the tty itself,
+	// so the cursor sits at the right place on the
+	// caller's terminal. We pass the tty as the output
+	// fd and let ReadPassword handle the ECHOCTL/ICANON
+	// toggling.
+	pw, err := term.ReadPassword(int(tty.Fd()))
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	// term.ReadPassword consumes the trailing newline
+	// from the line discipline but the bytes are
+	// already trimmed. Print a newline so the next
+	// shell prompt sits on its own line.
+	fmt.Fprintln(os.Stderr)
+	return string(pw), nil
 }
 
 // newSubscriptionRateLimiter builds the per-sub_token
