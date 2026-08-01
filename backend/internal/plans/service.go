@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // MinNameLen / MaxNameLen are the inclusive bounds
@@ -56,9 +58,10 @@ const MaxDuration = 10 * 365 * 24 * time.Hour
 // Service is the business-logic layer on top of
 // Store.
 type Service struct {
-	store Store
-	now   func() time.Time
-	idGen func() uuid.UUID
+	store    Store
+	now      func() time.Time
+	idGen    func() uuid.UUID
+	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 }
 
 // NewService wires a Service around the given store.
@@ -70,6 +73,26 @@ func NewService(store Store) *Service {
 		now:   time.Now,
 		idGen: uuid.New,
 	}
+}
+
+// WithWebhooks installs the outbound event service.
+// Production (cmd/aegis/main.go) calls this after
+// NewService so the mutating handlers can fan out
+// plan lifecycle events. The setter is preferred
+// over a constructor argument because every test
+// fixture currently calls `NewService(store)`
+// without a webhooks service; with the setter
+// the existing tests stay untouched (the field
+// is nil and webhooks.MustDispatch is a no-op),
+// and only the new dispatch tests wire the
+// surface via this method.
+//
+// `svc` may be nil — equivalent to not calling
+// this method. Production always passes a real
+// service.
+func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
+	s.webhooks = svc
+	return s
 }
 
 // SetClock swaps the time source. Test-only.
@@ -177,6 +200,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Plan, error) {
 	// 4. Return a defensive copy so the caller
 	// cannot mutate the in-memory row.
 	out := *p
+	// v0.7.x: fan out the lifecycle event AFTER
+	// the row is committed. MustDispatch is
+	// non-blocking (logs + drops errors) so a
+	// slow receiver cannot turn this 2xx into
+	// a 5xx and cause a client-side retry that
+	// would re-apply the same insert (and
+	// collide on the UNIQUE constraint).
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanCreated, &out)
 	return &out, nil
 }
 
@@ -257,6 +288,10 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Pl
 	if err != nil {
 		return nil, err
 	}
+	// v0.7.x: see Create for the after-commit
+	// ordering. The new row's post-update
+	// timestamp is in `out`.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanUpdated, out)
 	return out, nil
 }
 
@@ -276,7 +311,20 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	// v0.7.x: the row is gone by the time we
+	// dispatch, so the payload carries only the
+	// identifier. A receiver that wants the
+	// full row state can re-fetch from the panel
+	// (the operator usually has a local cache
+	// for the deletion event; receivers without
+	// cache fall back to a follow-up GET).
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanDeleted, map[string]string{
+		"id": id.String(),
+	})
+	return nil
 }
 
 // --- validation helpers -----------------------------------------------

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // MinUsernameLen / MaxUsernameLen are the inclusive
@@ -61,7 +63,8 @@ type Service struct {
 	store      Store
 	now        func() time.Time
 	idGen      func() uuid.UUID
-	tokenBytes int // bytes of random for sub_token (default 32 → 64 hex)
+	tokenBytes int               // bytes of random for sub_token (default 32 → 64 hex)
+	webhooks   *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 }
 
 // NewService wires a Service around the given store.
@@ -74,6 +77,16 @@ func NewService(store Store) *Service {
 		idGen:      uuid.New,
 		tokenBytes: 32,
 	}
+}
+
+// WithWebhooks installs the outbound event service.
+// See plans.Service.WithWebhooks for the rationale
+// (existing test fixtures stay untouched; the
+// webhooks field is nil for unit tests and
+// MustDispatch silently no-ops).
+func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
+	s.webhooks = svc
+	return s
 }
 
 // SetClock swaps the time source. Test-only.
@@ -236,6 +249,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 	// 5. Return a defensive copy so the caller
 	// cannot mutate the in-memory row.
 	out := *u
+	// v0.7.x: fan out the lifecycle event AFTER
+	// the row is committed. See plans.Service
+	// for the after-commit + non-blocking
+	// rationale.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserCreated, &out)
 	return &out, nil
 }
 
@@ -352,6 +370,11 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 	if err != nil {
 		return nil, err
 	}
+	// v0.7.x: see Create. A PATCH that did not
+	// change any field still counts as a
+	// write (the row's UpdatedAt is bumped) and
+	// still fires the event.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
 	return out, nil
 }
 
@@ -365,7 +388,19 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	// v0.7.x: the row is gone by the time we
+	// dispatch, so the payload carries only
+	// the identifier (the receiver may want
+	// to fetch the full row from the panel
+	// before the deletion was applied, or
+	// rely on a local cache).
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserDeleted, map[string]string{
+		"id": id.String(),
+	})
+	return nil
 }
 
 // DefaultSubTokenRotationGrace is the grace window
@@ -423,6 +458,15 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 	if err != nil {
 		return nil, err
 	}
+	// v0.7.x: RotateSubToken is a sub-update of
+	// the user (the sub_token column changed).
+	// We fire EventUserUpdated with the new
+	// row state — receivers that want to
+	// detect the rotation specifically can
+	// diff the sub_token field. A dedicated
+	// EventUserSubTokenRotated would be
+	// cleaner but is out of scope for v0.7.x.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
 	return out, nil
 }
 

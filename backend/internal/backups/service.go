@@ -33,6 +33,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 // ErrBackupInProgress is returned by Create when
@@ -101,10 +103,11 @@ type Config struct {
 // Service is the public surface for the package.
 // All methods are safe for concurrent use.
 type Service struct {
-	cfg    Config
-	store  Store
-	pgPool *pgxpool.Pool // for the metadata counts and schema version; nil is OK (counts are skipped)
-	clock  func() time.Time
+	cfg      Config
+	store    Store
+	pgPool   *pgxpool.Pool // for the metadata counts and schema version; nil is OK (counts are skipped)
+	clock    func() time.Time
+	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 
 	// dumpFn is the function Create calls to obtain
 	// a ReadCloser over the pg_dump output stream.
@@ -135,6 +138,13 @@ func New(cfg Config, store Store, pool *pgxpool.Pool) *Service {
 	}
 	s := &Service{cfg: cfg, store: store, pgPool: pool, clock: time.Now}
 	s.dumpFn = s.realDump
+	return s
+}
+
+// WithWebhooks installs the outbound event service.
+// See plans.Service.WithWebhooks for the rationale.
+func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
+	s.webhooks = svc
 	return s
 }
 
@@ -190,12 +200,23 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 	if err := s.store.Insert(ctx, row); err != nil {
 		return nil, fmt.Errorf("backups: insert running row: %w", err)
 	}
+	// v0.7.x: the running row is committed,
+	// fire the "created" event so receivers
+	// (slack, pagerduty) can show that a backup
+	// is in flight.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupCreated, row)
 
 	dumpPath, err := s.runDumpToFile(ctx, id)
 	if err != nil {
 		row.Status = StatusFailed
 		row.SetError(err)
 		_ = s.store.Update(ctx, row)
+		// v0.7.x: see the final dispatch below
+		// — we centralise the failed-event
+		// emit at the function exit so the
+		// dispatcher logs every transition
+		// once.
+		s.dispatchBackupTerminal(ctx, row)
 		return row, fmt.Errorf("backups: dump: %w", err)
 	}
 
@@ -207,6 +228,7 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 		row.SetError(err)
 		_ = s.store.Update(ctx, row)
 		_ = os.Remove(dumpPath)
+		s.dispatchBackupTerminal(ctx, row)
 		return row, err
 	}
 	size := st.Size()
@@ -216,6 +238,7 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 		row.SetError(err)
 		_ = s.store.Update(ctx, row)
 		_ = os.Remove(dumpPath)
+		s.dispatchBackupTerminal(ctx, row)
 		return row, err
 	}
 	if err := writeSidecar(dumpPath+".sha256", hash); err != nil {
@@ -223,6 +246,7 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 		row.SetError(err)
 		_ = s.store.Update(ctx, row)
 		_ = os.Remove(dumpPath)
+		s.dispatchBackupTerminal(ctx, row)
 		return row, err
 	}
 
@@ -231,6 +255,17 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 	row.SchemaVersion, row.NodeCount, row.UserCount, row.HostCount = s.populateCounts(ctx)
 	row.Status = StatusOK
 	if err := s.store.Update(ctx, row); err != nil {
+		// The backup file IS on disk and the
+		// counts are populated, but the
+		// final row state could not be
+		// persisted. We treat this as a
+		// failure for the event surface
+		// (the next reconciliation cron will
+		// pick up the partial state).
+		row.Status = StatusFailed
+		row.SetError(err)
+		_ = s.store.Update(ctx, row)
+		s.dispatchBackupTerminal(ctx, row)
 		return row, err
 	}
 
@@ -241,7 +276,32 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 		log.Warn().Err(err).Msg("backups: post-create cleanup failed (non-fatal)")
 	}
 
+	// v0.7.x: success — fire the "completed"
+	// event. Receivers see the final row with
+	// SizeBytes, ChecksumSHA256, and the
+	// metadata counts filled in.
+	s.dispatchBackupTerminal(ctx, row)
 	return row, nil
+}
+
+// dispatchBackupTerminal emits the
+// backup.completed or backup.failed event based
+// on the row's final Status. Called once per
+// Create invocation, after the row's terminal
+// state has been persisted. The webhook field
+// is nil in unit tests; production wiring
+// (cmd/aegis/main.go) installs the real
+// service via WithWebhooks.
+func (s *Service) dispatchBackupTerminal(ctx context.Context, row *Backup) {
+	switch row.Status {
+	case StatusOK:
+		webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupCompleted, row)
+	case StatusFailed:
+		webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupFailed, row)
+	}
+	// StatusRunning is never terminal; the
+	// running row is announced via
+	// EventBackupCreated at insert time.
 }
 
 // Get returns a single row by ID. Pass-through to
