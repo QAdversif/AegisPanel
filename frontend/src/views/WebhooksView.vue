@@ -68,6 +68,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import DataTable from '@/components/DataTable.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import WebhookEventsPicker from '@/components/WebhookEventsPicker.vue'
 import DialogContent from '@/components/ui/DialogContent.vue'
 import DialogHeader from '@/components/ui/DialogHeader.vue'
 import DialogTitle from '@/components/ui/DialogTitle.vue'
@@ -357,13 +358,14 @@ const createForm = useZodForm({
     url: '',
     secret: '',
     enabled: true,
+    events: [],
   },
   onSubmit: async (values) => {
     try {
       const created = await createWebhook({
         url: values.url,
         secret: values.secret,
-        events: [],
+        events: values.events,
         enabled: values.enabled,
       })
       createOpen.value = false
@@ -393,6 +395,7 @@ const editForm = useZodForm({
     url: '',
     secret: '',
     enabled: true,
+    events: [],
   },
   onSubmit: async (values) => {
     if (!editTarget.value) return
@@ -401,9 +404,11 @@ const editForm = useZodForm({
       url?: string
       secret?: string
       enabled?: boolean
+      events?: WebhookEventType[]
     } = {
       url: values.url,
       enabled: values.enabled,
+      events: values.events,
     }
     if (values.secret && values.secret.length > 0) {
       patch.secret = values.secret
@@ -430,6 +435,7 @@ watch(editTarget, (e) => {
       url: e.url,
       secret: '',
       enabled: e.enabled,
+      events: e.events,
     })
   }
 })
@@ -768,6 +774,18 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
             name="enabled"
             :label="t('webhooks.field.enabled')"
           />
+          <div class="space-y-1.5">
+            <p class="text-sm font-medium leading-none">
+              {{ t('webhooks.field.events') }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              {{ t('webhooks.field.eventsHelp') }}
+            </p>
+            <WebhookEventsPicker
+              :value="createForm.values.events"
+              @change="(v: WebhookEventType[]) => createForm.setFieldValue('events', v)"
+            />
+          </div>
           <DialogFooter>
             <DialogClose as-child>
               <Button variant="outline" type="button">
@@ -806,11 +824,18 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
             type="password"
             :description="t('webhooks.field.secretEditHelp')"
           />
-          <FormField
-            name="events"
-            :label="t('webhooks.field.events')"
-            :description="t('webhooks.field.eventsHelp')"
-          />
+          <div class="space-y-1.5">
+            <p class="text-sm font-medium leading-none">
+              {{ t('webhooks.field.events') }}
+            </p>
+            <p class="text-xs text-muted-foreground">
+              {{ t('webhooks.field.eventsHelp') }}
+            </p>
+            <WebhookEventsPicker
+              :value="editForm.values.events ?? []"
+              @change="(v: WebhookEventType[]) => editForm.setFieldValue('events', v)"
+            />
+          </div>
           <FormField
             name="enabled"
             :label="t('webhooks.field.enabled')"
