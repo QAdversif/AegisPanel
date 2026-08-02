@@ -22,6 +22,7 @@
 package audits
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,6 +246,46 @@ func RecordFromRequest(svc *Service, r *http.Request, e Entry) {
 		// other v0.3+ call-sites will too.
 	}
 	_, _ = svc.Record(r.Context(), e)
+}
+
+// RecordFromContext is the Service-layer mirror
+// of RecordFromRequest. The per-entity Service
+// methods (users.Service.Create,
+// plans.Service.Update, inbounds.Service.Delete,
+// …) call this AFTER the row is committed and
+// AFTER the v0.7.x webhooks.MustDispatch fan-out
+// — same after-commit ordering as the webhook
+// call-sites, same best-effort semantics (errors
+// are logged at warn and swallowed inside
+// Service.Record).
+//
+// Only the actor id is filled by this helper
+// (from auth.ClaimsFromContext). IP and
+// UserAgent are HTTP-layer fields; the
+// Service layer does not have an *http.Request
+// and we deliberately do NOT thread the
+// request through context (that would couple
+// every Service method to chi's middleware
+// chain). The v0.8+ roadmap notes the option of
+// adding a chi middleware that stuffs the
+// request into the context for Service-layer
+// observability, but no operator has asked for
+// that yet.
+//
+// nil-safe: a nil svc short-circuits, so the
+// per-Service method can call this without
+// guarding on whether WithAudits was ever
+// called (the unit-test fixtures stay
+// untouched, same as the WithWebhooks pattern
+// from PR #148).
+func RecordFromContext(ctx context.Context, svc *Service, e Entry) {
+	if svc == nil {
+		return
+	}
+	if claims := auth.ClaimsFromContext(ctx); claims != nil {
+		e.ActorID = claims.Subject
+	}
+	_, _ = svc.Record(ctx, e)
 }
 
 // clientIP returns the best-effort client IP for
