@@ -46,6 +46,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -73,14 +74,19 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/subscription"
 	"github.com/QAdversif/AegisPanel/internal/users"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
+
+	"github.com/google/uuid"
 )
 
 // App is the wired panel. The zero value is not
 // usable; obtain one via Build. The struct holds
 // the pg pool, every service handle, the
-// subscription rate limiter, and the http.Server.
-// Close releases the pool and stops the webhook
-// retry worker.
+// subscription rate limiter, the http.Server, and
+// the per-node BatchedApplier map (one per online
+// node; populated only when cfg.BatchedApplierEnabled
+// is true, otherwise an empty map). Close releases
+// the pool, stops the webhook retry worker, and
+// cancels every BatchedApplier goroutine.
 type App struct {
 	Config *config.Config
 	Pool   *pgxpool.Pool
@@ -102,7 +108,18 @@ type App struct {
 	Router     http.Handler
 	Server     *http.Server
 
-	webhooksWorkerCancel context.CancelFunc
+	// BatchedAppliers is keyed by node UUID. The
+	// map is non-nil even when the feature flag is
+	// off — services that call WithBatchApplier
+	// iterate it on every mutation, and an empty
+	// map is a no-op. Mutating handlers
+	// (users.Service, inbounds.Service) hold a
+	// reference via WithBatchApplier and Enqueue
+	// into every value when their state changes.
+	BatchedAppliers map[uuid.UUID]*cores.BatchedApplier
+
+	webhooksWorkerCancel  context.CancelFunc
+	batchedApplierCancels map[uuid.UUID]context.CancelFunc
 }
 
 // Build runs the composition root: open the pg
@@ -155,7 +172,12 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		logger.Info().Msg("db: all stores in memory; skipping pg pool")
 	}
 
-	a := &App{Config: cfg, Pool: pool}
+	a := &App{
+		Config:                cfg,
+		Pool:                  pool,
+		BatchedAppliers:       make(map[uuid.UUID]*cores.BatchedApplier),
+		batchedApplierCancels: make(map[uuid.UUID]context.CancelFunc),
+	}
 
 	// 3. Auth. The dev seed is only allowed in
 	//    non-production; a production boot with
@@ -459,9 +481,69 @@ func mustHashDevPassword() string {
 	return h
 }
 
-// Close stops the webhook retry worker and
-// releases the pg pool. Safe to call on a nil
-// receiver and safe to call multiple times.
+// AddNodeBatchedApplier registers a per-node
+// BatchedApplier on the App. The caller supplies
+// the FlushFn (typically a closure that knows
+// about the sing-box Provider and calls
+// RenderConfig + Apply); this method only handles
+// the registration + goroutine lifecycle.
+//
+// Why this lives on App rather than in
+// cmd/aegis/main.go directly: the per-applier
+// context cancel funcs are stored on App so
+// App.Close() can stop every goroutine uniformly.
+// Exposing them via a method keeps the
+// unexported field an implementation detail of
+// the App (no external code can race the cancel
+// map).
+//
+// The BatchedApplierEnabled flag is NOT consulted
+// here — callers that want to gate on it check
+// `a.Config.BatchedApplierEnabled` before calling.
+// This keeps the gating decision in one place
+// (the wiring helper) instead of in every call
+// site.
+func (a *App) AddNodeBatchedApplier(
+	ctx context.Context,
+	nodeID uuid.UUID,
+	nodeName string,
+	flushFn cores.FlushFn,
+) *cores.BatchedApplier {
+	if a.BatchedAppliers == nil {
+		// Defensive: Build initialises the map,
+		// so this only fires for a hand-rolled
+		// *App{} (e.g. a unit test). Re-init
+		// rather than nil-deref.
+		a.BatchedAppliers = make(map[uuid.UUID]*cores.BatchedApplier)
+	}
+	if a.batchedApplierCancels == nil {
+		a.batchedApplierCancels = make(map[uuid.UUID]context.CancelFunc)
+	}
+	applier := cores.NewBatchedApplier(20*time.Second, 1000, flushFn)
+	a.BatchedAppliers[nodeID] = applier
+	applierCtx, cancel := context.WithCancel(ctx)
+	// Register cancel AFTER the map entry so a
+	// racing Close() never cancels a goroutine
+	// whose applier is not yet visible to
+	// services that fan out via WithBatchApplier.
+	a.batchedApplierCancels[nodeID] = cancel
+	go func() {
+		defer cancel()
+		if err := applier.Run(applierCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error().Err(err).Str("node", nodeName).Msg("app: BatchedApplier.Run exited unexpectedly")
+		}
+	}()
+	log.Info().
+		Str("node", nodeName).
+		Dur("window", applier.Window()).
+		Msg("app: BatchedApplier started")
+	return applier
+}
+
+// Close stops the webhook retry worker, cancels
+// every BatchedApplier goroutine, and releases the
+// pg pool. Safe to call on a nil receiver and
+// safe to call multiple times (idempotent).
 func (a *App) Close() {
 	if a == nil {
 		return
@@ -469,6 +551,17 @@ func (a *App) Close() {
 	if a.webhooksWorkerCancel != nil {
 		a.webhooksWorkerCancel()
 		a.webhooksWorkerCancel = nil
+	}
+	// BatchedApplier goroutines: cancel each per-
+	// applier context so Run() drains and returns.
+	// The BatchedApplier map itself is left for the
+	// next process (the test, in particular, may
+	// still want to inspect it after Close).
+	for id, cancel := range a.batchedApplierCancels {
+		if cancel != nil {
+			cancel()
+		}
+		delete(a.batchedApplierCancels, id)
 	}
 	if a.Pool != nil {
 		a.Pool.Close()
