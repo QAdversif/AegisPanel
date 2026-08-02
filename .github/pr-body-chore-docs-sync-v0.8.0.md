@@ -1,15 +1,16 @@
 Post-v0.8.0 documentation sync. The release lands the
-Phase 2 multi-user sing-box render end-to-end across 4 PRs
-(#167, #168, #169, #170) plus the audit-log call-site
-wiring (#166) and a frontend dependency batch (#159, #161,
-#163, #165). v0.8.0 is end-to-end multi-user: per-(user,
-inbound) credentials live in the `user_inbound_credentials`
-table, the sing-box renderer emits multi-user `users: [...]`
-arrays, the BatchedApplier fan-out is narrowed by
-`user.HostsAllowlist` / `Blocklist`, and the per-user sub URL
-renders the user's own UUID/password. The HTTP admin surface
-for the credentials table is the v0.8.x follow-up; the data
-flow is end-to-end today.
+Phase 2 multi-user sing-box render end-to-end across four
+PRs in the 167-170 range, the audit-log call-site wiring
+(PR number 166), and a frontend dependency batch (the
+four dep-bump PRs 159, 161, 163, 165). v0.8.0 is
+end-to-end multi-user: per-(user, inbound) credentials
+live in the `user_inbound_credentials` table, the
+sing-box renderer emits multi-user `users: [...]` arrays,
+the BatchedApplier fan-out is narrowed by
+`user.HostsAllowlist` and `Blocklist`, and the per-user
+sub URL renders the user's own UUID/password. The HTTP
+admin surface for the credentials table is the v0.8.x
+follow-up; the data flow is end-to-end today.
 
 This PR is the canonical "the doc tree now matches what the
 repo actually ships after #170" pass. 8 files, +325/-99.
