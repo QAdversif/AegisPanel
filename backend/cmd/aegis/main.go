@@ -661,8 +661,13 @@ func singboxWiring(
 		// config and applies it; the agent's
 		// diff (future work) is what determines
 		// whether the file on disk actually
-		// changes.
-		flushFn := builder.NewFlushFn(a.Inbounds, p, nodeID, nodeName)
+		// changes. The credentials source is
+		// a.Credentials (Phase 2 multi-user
+		// data model from PR #167) — a nil
+		// credentials source would fall back
+		// to the Phase 1 single-user path
+		// for every inbound.
+		flushFn := builder.NewFlushFn(a.Inbounds, a.Credentials, p, nodeID, nodeName)
 		a.AddNodeBatchedApplier(ctx, nodeID, nodeName, flushFn)
 	}
 	return nil

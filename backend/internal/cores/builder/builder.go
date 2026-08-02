@@ -16,28 +16,29 @@
 // `builder/` subpackage is the seam: model on the
 // left, panel on the right.
 //
-// # Phase 1 model (v0.4.0-b / v0.5.0)
+// # Phase 2 model (v0.7.x — multi-user sing-box render)
 //
-// The sing-box renderer in this era is single-user
-// per inbound — the protocol-level `users` array
-// inside the rendered config carries exactly one
-// user (the operator's credential, encoded in
-// `inbound.Params["uuid"]` or `["password"]`).
-// Multi-user rendering lands with the inbound-
-// templates work in a later phase. The builder
-// therefore does NOT consult the panel's user
-// table today; the FlushFn that consumes the
-// CoreConfig produces a stable hash until the
-// operator edits the inbound's params or adds new
-// inbounds to the node. The infrastructure
-// (BatchedApplier + Enqueue) is the deliverable; a
-// future "Phase 2" PR re-wires the user table into
-// the per-inbound `users` array.
+// The sing-box renderer in this era is multi-user per
+// inbound — the protocol-level `users` array inside
+// the rendered config carries one entry per
+// per-(user, inbound) credential from the
+// `user_inbound_credentials` table (PR #167 data
+// model, PR #168 renderer signature). The builder is
+// the seam that turns the per-inbound rows into the
+// `cfg.Experimental[ExperimentalInboundCredentialsKey]`
+// map the sing-box renderer reads.
 //
-// The user's HostsAllowlist / HostsBlocklist are
-// likewise persisted but not consulted here — they
-// drive the *subscription* renderer, not the
-// node's running config.
+// For PR 3 of the Phase 2 plan, the builder does NOT
+// filter credentials by user-side `HostsAllowlist` /
+// `Blocklist` — every credential for an inbound lands
+// in the rendered config for the inbound's node. The
+// sing-box sing-box config's per-user routing rules
+// (the subscription renderer's concern) are the
+// canonical place for the user-side filter; the
+// node-side rendered config carries the credential
+// material the agent will accept on the wire. A
+// future PR that adds a host-to-inbound mapping can
+// re-introduce the filter here.
 package builder
 
 import (
@@ -49,6 +50,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 )
 
@@ -63,6 +65,28 @@ type ListInboundsByNode interface {
 	ListByNode(ctx context.Context, nodeID uuid.UUID) ([]*inbounds.Inbound, error)
 }
 
+// ListCredentialsByInbound is the slice of the
+// credentials service the builder needs (Phase 2
+// multi-user render). Returns every per-(user,
+// inbound) credential for the inbound, ordered
+// (the sing-box renderer preserves order in the
+// rendered `users: [...]` array, so a stable
+// sort by user_id is helpful for diff stability).
+//
+// The return type is `[]*credentials.Credential` to
+// match the credentials.Store / credentials.Service
+// API (pointer slice, the standard Go shape for
+// "rows the caller might mutate"). The builder
+// dereferences to a value slice before populating
+// the `inbound_credentials` Experimental entry —
+// the sing-box renderer's type-assertion
+// (`v.([]credentials.Credential)`) requires a
+// value slice, and the conversion cost is one
+// struct copy per row.
+type ListCredentialsByInbound interface {
+	ListByInbound(ctx context.Context, inboundID uuid.UUID) ([]*credentials.Credential, error)
+}
+
 // CoreRenderer is the slice of a cores.CoreProvider
 // the FlushFn needs. Declared as an interface so
 // the builder stays free of any provider-specific
@@ -74,8 +98,25 @@ type CoreRenderer interface {
 	Apply(ctx context.Context, nodeID string, cfg []byte) error
 }
 
+// experimentalInboundCredentialsKey is the key
+// the builder populates in CoreConfig.Experimental
+// to hand the per-(user, inbound) credential list
+// to the sing-box renderer. Hardcoded as a literal
+// to keep the builder free of any provider-specific
+// import: the singbox package imports cores (for
+// CoreConfig), not the other way around. The
+// canonical constant lives in the singbox package
+// (`singbox.ExperimentalInboundCredentialsKey`).
+// If a future provider needs the same key, it can
+// either reuse this literal or fork the builder
+// into a provider-specific shape; the singbox
+// contract is fixed.
+//
+// #nosec G101 -- the constant name contains the substring "credentials" but the value is an Experimental-map key, not a credential
+const experimentalInboundCredentialsKey = "inbound_credentials"
+
 // BuildCoreConfigForNode returns the CoreConfig the
-// sing-box provider (or any other v0.5.0+ provider)
+// sing-box provider (or any other v0.7.x+ provider)
 // needs to render the running config for `nodeID`.
 //
 // The function is the seam where panel-side data
@@ -90,18 +131,32 @@ type CoreRenderer interface {
 // them. Empty result (no enabled inbounds) is a
 // valid render state — the provider emits an
 // outbounds-only config.
+//
+// Phase 2: the `credSrc` argument supplies the
+// per-(user, inbound) credential list for every
+// enabled inbound. Credentials are placed in
+// `cfg.Experimental[experimentalInboundCredentialsKey]`
+// as a `map[string]any` keyed by inbound tag (the
+// shape the sing-box renderer expects per the PR 2
+// contract — see `singbox.extractCredentialsByTag`).
+// Inbounds with no credentials in the source emit
+// an empty `users: [...]` array in the rendered
+// config (the sing-box renderer's Phase 1 fallback
+// path), which is the same behavior as v0.7.2.
 func BuildCoreConfigForNode(
 	ctx context.Context,
-	src ListInboundsByNode,
+	inbSrc ListInboundsByNode,
+	credSrc ListCredentialsByInbound,
 	nodeID uuid.UUID,
 ) (cores.CoreConfig, error) {
-	all, err := src.ListByNode(ctx, nodeID)
+	all, err := inbSrc.ListByNode(ctx, nodeID)
 	if err != nil {
 		return cores.CoreConfig{}, fmt.Errorf("builder: list inbounds for node %s: %w", nodeID, err)
 	}
 
 	specs := make([]cores.InboundSpec, 0, len(all))
 	params := make(map[string]any, len(all))
+	credsByTag := make(map[string]any, len(all))
 	for _, inb := range all {
 		if inb == nil {
 			continue
@@ -135,6 +190,64 @@ func BuildCoreConfigForNode(
 		} else {
 			params[tag] = map[string]any{}
 		}
+		// Phase 2: fetch the per-(user, inbound)
+		// credential list for this inbound. A
+		// missing source, a query error, or an
+		// empty result is non-fatal — the sing-box
+		// renderer falls back to the Phase 1
+		// single-user path from params on an
+		// empty list. The fail-soft behavior
+		// matters for a panel that has not yet
+		// provisioned any credentials for an
+		// inbound (a fresh install where every
+		// credential is empty).
+		if credSrc == nil {
+			continue
+		}
+		creds, err := credSrc.ListByInbound(ctx, inb.ID)
+		if err != nil {
+			// Per-inbound query failure is logged
+			// and treated as "no credentials for
+			// this inbound" — the sing-box
+			// renderer's Phase 1 fallback path
+			// takes over. A fatal error here would
+			// prevent any node from rendering
+			// during a transient pg blip, which is
+			// the wrong failure mode for the
+			// BatchedApplier's 20s flush window.
+			log.Warn().Err(err).
+				Str("node", nodeID.String()).
+				Str("inbound", tag).
+				Msg("builder: list credentials failed; falling back to Phase 1 single-user path")
+			continue
+		}
+		if len(creds) == 0 {
+			continue
+		}
+		// The sing-box renderer's type-assertion
+		// on the top-level map requires
+		// `map[string]any` (not a typed map of
+		// slice values). The per-tag value is
+		// `[]credentials.Credential` (a typed
+		// value slice held in `any`); the
+		// sing-box renderer's
+		// `extractCredentialsByTag` asserts the
+		// typed slice via
+		// `v.([]credentials.Credential)`. The
+		// source returns `[]*Credential` (the
+		// standard pointer-slice shape from the
+		// credentials.Store / Service API); we
+		// dereference here to the value slice the
+		// renderer expects. See the `multiUserCfg`
+		// doc comment in the singbox test file
+		// for the full rationale.
+		valueSlice := make([]credentials.Credential, len(creds))
+		for i, c := range creds {
+			if c != nil {
+				valueSlice[i] = *c
+			}
+		}
+		credsByTag[tag] = valueSlice
 	}
 
 	return cores.CoreConfig{
@@ -151,6 +264,12 @@ func BuildCoreConfigForNode(
 			// provider-specific shape; the singbox contract
 			// is fixed by singbox.ExperimentalInboundParamsKey.
 			"inbound_params": params,
+			// Phase 2: per-(user, inbound) credentials.
+			// The sing-box renderer reads this key in
+			// its `extractCredentialsByTag` helper; see
+			// the singbox package docstring for the
+			// multi-user render contract.
+			experimentalInboundCredentialsKey: credsByTag,
 		},
 	}, nil
 }
@@ -168,18 +287,20 @@ func BuildCoreConfigForNode(
 // failure must not block subsequent flushes).
 //
 // The closure captures the inbounds source +
-// renderer + node identity, so the BatchedApplier
-// can be created once per node and need not be
-// told which node it serves per flush.
+// credentials source + renderer + node identity,
+// so the BatchedApplier can be created once per
+// node and need not be told which node it serves
+// per flush.
 func NewFlushFn(
-	src ListInboundsByNode,
+	inbSrc ListInboundsByNode,
+	credSrc ListCredentialsByInbound,
 	renderer CoreRenderer,
 	nodeID uuid.UUID,
 	nodeName string,
 ) cores.FlushFn {
 	return func(flushCtx context.Context, deltas []cores.Delta) error {
 		start := time.Now()
-		coreCfg, err := BuildCoreConfigForNode(flushCtx, src, nodeID)
+		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, credSrc, nodeID)
 		if err != nil {
 			log.Error().Err(err).Str("node", nodeName).
 				Msg("v0.5.0: BatchedApplier: builder failed; skipping Apply")

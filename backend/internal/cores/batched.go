@@ -146,6 +146,15 @@ func (b *BatchedApplier) Enqueue(d Delta) {
 	b.queue <- d
 }
 
+// QueueLen returns the current depth of the
+// applier's input channel. Useful for tests that
+// drive the fan-out filter without starting the
+// Run loop, and for a future "enqueue pressure"
+// metric. Not used on the hot path.
+func (b *BatchedApplier) QueueLen() int {
+	return len(b.queue)
+}
+
 // Run drives the coalescing loop. Returns when ctx is
 // cancelled, after draining any deltas enqueued just before
 // cancellation. The returned error is ctx.Err().
