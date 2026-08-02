@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 
 	"github.com/QAdversif/AegisPanel/internal/cores"
@@ -76,6 +77,16 @@ type Service struct {
 	idGen      func() uuid.UUID
 	tokenBytes int               // bytes of random for sub_token (default 32 → 64 hex)
 	webhooks   *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	// audits is the v0.7.x deferred call-site:
+	// every mutating method records an audit_log
+	// row after the mutation is committed. nil =
+	// the field is unset (unit tests), and the
+	// RecordFromContext helper is nil-safe (it
+	// short-circuits when svc is nil). The setter
+	// follows the same pattern as WithWebhooks so
+	// the existing 167+ test fixtures stay
+	// untouched.
+	audits *audits.Service
 	// batchedAppliers is the v0.5.0 outbound
 	// render+apply fan-out. nil = feature disabled
 	// (no auto-apply); the field is intentionally
@@ -106,6 +117,18 @@ func NewService(store Store) *Service {
 // MustDispatch silently no-ops).
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
+	return s
+}
+
+// WithAudits installs the audit-log writer. The
+// setter mirrors WithWebhooks: nil-safe at the
+// call-site (RecordFromContext short-circuits when
+// svc is nil), the field stays nil for unit
+// tests, and only the new dispatch tests wire a
+// real `*audits.Service` (via the MemoryStore +
+// spy pattern from PR #148).
+func (s *Service) WithAudits(svc *audits.Service) *Service {
+	s.audits = svc
 	return s
 }
 
@@ -319,6 +342,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 	// for the after-commit + non-blocking
 	// rationale.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserCreated, &out)
+	// v0.7.x deferred: record the audit row. Same
+	// after-commit + best-effort contract as
+	// webhooks.MustDispatch. Before is empty (a
+	// Create has no pre-state); After is the
+	// newly-committed row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "user.create",
+		ResourceType: "user",
+		ResourceID:   out.ID.String(),
+		After:        out,
+	})
 	// v0.5.0: enqueue a DeltaAddUser for every
 	// registered BatchedApplier. The appliers
 	// coalesce by UserID (the cancel/replace
@@ -450,6 +484,20 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 	// write (the row's UpdatedAt is bumped) and
 	// still fires the event.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
+	// v0.7.x deferred: record the audit row. The
+	// pre-patch state is `cur` (fetched at the
+	// top of the method); the post-patch state
+	// is `out` (the fresh fetch after Update).
+	// Both are populated so the operator can
+	// see the diff in the audit log without
+	// joining against any other table.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "user.update",
+		ResourceType: "user",
+		ResourceID:   out.ID.String(),
+		Before:       cur,
+		After:        out,
+	})
 	// v0.5.0: enqueue a DeltaAddUser so the next
 	// FlushFn re-renders the node config. We use
 	// DeltaAddUser (not DeltaSetLimit) because
@@ -491,6 +539,20 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
+	// v0.7.x deferred: fetch the row before
+	// deleting so the audit entry has a Before.
+	// The extra GetByID round-trip is acceptable
+	// here because Delete is the slowest CRUD
+	// verb in the operator UI (an "are you sure"
+	// dialog precedes it 99% of the time). The
+	// fetch also gives us a cleaner error
+	// (ErrNotFound) when the operator mistypes
+	// an id, vs the silent-success the old
+	// behaviour produced.
+	cur, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -502,6 +564,18 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// rely on a local cache).
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserDeleted, map[string]string{
 		"id": id.String(),
+	})
+	// v0.7.x deferred: record the audit row.
+	// Before is the row we just fetched; After
+	// is nil (the row is gone — the v0.2.0
+	// audit entry shape renders After as
+	// `null` in the JSON envelope, which is
+	// the canonical "row was deleted" signal).
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "user.delete",
+		ResourceType: "user",
+		ResourceID:   id.String(),
+		Before:       cur,
 	})
 	// v0.5.0: enqueue a DeltaRemoveUser so the
 	// next FlushFn re-renders the node config
@@ -581,6 +655,21 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 	// EventUserSubTokenRotated would be
 	// cleaner but is out of scope for v0.7.x.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
+	// v0.7.x deferred: record the audit row. The
+	// action is `user.rotate_token` (not the
+	// generic `user.update`) so the operator
+	// can filter the audit log to rotation
+	// events specifically. The pre-rotation row
+	// is the cur snapshot fetched at the top of
+	// the method (before the new sub_token was
+	// minted); the post-rotation row is `out`.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "user.rotate_token",
+		ResourceType: "user",
+		ResourceID:   out.ID.String(),
+		Before:       cur,
+		After:        out,
+	})
 	// v0.5.0: enqueue a DeltaAddUser so the
 	// next FlushFn re-renders the config with
 	// the new sub_token. Phase 1's single-user

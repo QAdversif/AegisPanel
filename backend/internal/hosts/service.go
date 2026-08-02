@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
@@ -38,6 +39,7 @@ type Service struct {
 	inbounds *inbounds.Service
 	now      func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	audits   *audits.Service   // v0.7.x deferred call-site.
 }
 
 // NewService wires a Service around the given store. The
@@ -58,6 +60,13 @@ func NewService(store Store, nodesSvc *nodes.Service, inboundsSvc *inbounds.Serv
 // See plans.Service.WithWebhooks for the rationale.
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
+	return s
+}
+
+// WithAudits installs the audit-log writer. Same
+// nil-safe pattern as WithWebhooks.
+func (s *Service) WithAudits(svc *audits.Service) *Service {
+	s.audits = svc
 	return s
 }
 
@@ -185,6 +194,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Host, error) {
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventHostCreated, out)
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "host.create",
+		ResourceType: "host",
+		ResourceID:   out.ID.String(),
+		After:        out,
+	})
 	return out, nil
 }
 
@@ -295,6 +311,14 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Ho
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventHostUpdated, out)
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "host.update",
+		ResourceType: "host",
+		ResourceID:   out.ID.String(),
+		Before:       existing,
+		After:        out,
+	})
 	return out, nil
 }
 
@@ -304,6 +328,12 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
+	// v0.7.x deferred: fetch the row before
+	// deleting so the audit entry has a Before.
+	cur, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -312,6 +342,13 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// the identifier.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventHostDeleted, map[string]string{
 		"id": id.String(),
+	})
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "host.delete",
+		ResourceType: "host",
+		ResourceID:   id.String(),
+		Before:       cur,
 	})
 	return nil
 }

@@ -354,6 +354,25 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.Audits = audits.NewService(auditsStore)
 
+	// 14b. v0.7.x deferred call-site: wire the
+	//     audit-log writer into every mutating
+	//     service so each Create/Update/Delete
+	//     records an audit_log row after the row
+	//     is committed. Same nil-safe setter
+	//     pattern as WithWebhooks: the field
+	//     stays nil for unit tests, and the
+	//     Service methods always call
+	//     RecordFromContext (which short-circuits
+	//     when s.audits is nil).
+	a.Nodes.WithAudits(a.Audits)
+	a.Inbounds.WithAudits(a.Audits)
+	a.Hosts.WithAudits(a.Audits)
+	a.Users.WithAudits(a.Audits)
+	a.Plans.WithAudits(a.Audits)
+	// Backups is constructed below; the
+	// WithAudits call is in the Backups block
+	// (after a.Backups = backups.New(...)).
+
 	// 15. Bootstrap (BYO Node) service. References
 	//     nodes + audits. No backend switch: the
 	//     bootstrap store is in-process state,
@@ -387,6 +406,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		backupsStore, pool,
 	)
 	a.Backups.WithWebhooks(a.Webhooks)
+	a.Backups.WithAudits(a.Audits)
 	logger.Info().
 		Str("dir", cfg.BackupsDir).
 		Int("retention_days", cfg.BackupsRetentionDays).
