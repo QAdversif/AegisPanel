@@ -2171,13 +2171,22 @@ ignoreip = 1.2.3.4 5.6.7.8
 - `v0.3.0-b` frontend "Add node" dialog + status badge: ⏳ not started.
 - `v0.3.0-c` real `aegis-agent` binary + Ansible `install_agent`: ⏳ not started.
 
-#### MVP-0.4 — Batched Apply (`v0.4.0-mvp-batched`)  `[ ]`
+#### MVP-0.4 — Batched Apply (`v0.4.0-mvp-batched`)  `[done]`
 **Что:** закрываем §7.5 — generic BatchedApplier для core без `DYNAMIC_USERS`.
-- [ ] `internal/cores/batched.go` — generic обёртка, auto-включается если `Capabilities().Has(DYNAMIC_USERS) == false`.
-- [ ] Очередь дельт в Redis (или in-memory для MVP, если Redis недоступен).
-- [ ] Метрики: `core_reload_total{kind,node}`, `core_reload_pending_users{node}`, `core_reload_lost_sessions_total{node}`, `core_user_apply_latency_seconds`.
-- [ ] Тесты: создание/удаление 100 юзеров подряд → ≤ 3 reload ядра за 30 сек.
-- **DoD:** burst нагрузка → метрики заполняются, reload rate < 1/15s, нет потери юзеров.
+- [x] `internal/cores/batched.go` — generic обёртка, auto-включается если `Capabilities().Has(DYNAMIC_USERS) == false` (v0.4.0).
+- [x] Очередь дельт в Redis (или in-memory для MVP, если Redis недоступен) — выбран in-memory путь; v0.4.0 shipит in-memory queue (v0.4.0).
+- [x] Generic FlushFn (Build → Render → Apply) — `internal/cores/builder/builder.go` + `NewFlushFn`; wired через `users.Service.WithBatchApplier` + `inbounds.Service.WithBatchApplier` (PR #157, v0.7.2).
+- [x] End-to-end integration test против реального pg + httptest fake agent — `internal/cores/builder/flushfn_integration_test.go` (PR #158, v0.7.2).
+- [ ] Метрики: `core_reload_total{kind,node}`, `core_reload_pending_users{node}`, `core_reload_lost_sessions_total{node}`, `core_user_apply_latency_seconds` — отложено в Phase 2; observability сейчас покрывается `internal/obs` (JSON-логи) + zerolog.
+- [ ] Тесты: создание/удаление 100 юзеров подряд → ≤ 3 reload ядра за 30 сек — отложено до Phase 2 (нужна per-user renderer).
+- **DoD (частично):** FlushFn реальный, Enqueue fan-out работает, BatchedApplier goroutine lifecycle управляется через `App.Close()`. **Phase 2:** per-user render + метрики + burst-тест.
+
+**Slice status (per v9.4):**
+- `v0.4.0-mvp-batched` infrastructure (generic BatchedApplier + RenderConfig + Apply): ✅ PR #92, #93, #94 (shipped as `v0.4.0-mvp-batched`).
+- Real FlushFn + Enqueue: ✅ PR #157, v0.7.2.
+- End-to-end integration test: ✅ PR #158, v0.7.2.
+- Per-user render: ⏳ Phase 2 (inbound-templates work).
+- Метрики: ⏳ Phase 2.
 
 #### **MVP-1.0 — Soft launch** (`v1.0.0-mvp-soft-launch`)  `[ ]`
 **Что:** production-readiness чеклист, публичный тег.
@@ -2340,6 +2349,55 @@ ignoreip = 1.2.3.4 5.6.7.8
 ---
 
 ## 25. История изменений
+
+- **v9.4 (2026-08-02, post-v0.7.2 sync)** — маркеры
+  `[done]/[wip]/[ ]` в §21 приведены к факту после
+  v0.7.1 + v0.7.2. Tag-и `v0.7.1` (на `85bec3b`) и
+  `v0.7.2` (на `031e740`) созданы и запушены. MVP-0.4
+  (`v0.4.0-mvp-batched`) теперь `✅ shipped` end-to-end:
+  PR #157 + #158 закрыли audit #2 (BatchedApplier
+  no-op stub). PR #156 закрыл audit #1 (God-object
+  `main.go`): `cmd/aegis/main.go` похудел с 728 до 199
+  строк, composition root уехал в `internal/app`.
+  PR #155 закрыл audit #3 (No UI tests): 38 vitest
+  тестов в `frontend/src/schemas/schemas.test.ts`.
+  PR #154 закрыл audit #4 (promptPassword echo
+  suppression): `golang.org/x/term v0.45.0`. PR #153
+  закрыл audit #6 (state enum regression guard):
+  table-driven тест на все 5 членов enum vs CHECK
+  constraint из migration 0006. Audit #5 был
+  нумерационным артефактом (review шёл #1, #2, #3,
+  #4, #6 — без #5). BatchedApplier real FlushFn +
+  Enqueue — `internal/cores/builder` (`BuildCoreConfigForNode`
+  и `NewFlushFn`), `users.Service.WithBatchApplier`
+  и `enqueueUserDelta`, `inbounds.Service.WithBatchApplier`
+  и `enqueueForNode`, `App.BatchedAppliers` и
+  `App.AddNodeBatchedApplier`, `AEGIS_BATCHED_APPLIER_ENABLED`
+  (default true). End-to-end integration test —
+  `internal/cores/builder/flushfn_integration_test.go`
+  с `//go:build integration`, реальный pg через
+  `testutil.MustNewPool`, real PgStore, real
+  `users.Service.Create` → Enqueue → 200ms window →
+  FlushFn → POST `/v1/apply` на httptest fake agent.
+  v0.7.2 чисто внутренний: API surface byte-for-byte
+  identical to v0.7.1, OpenAPI version остался 0.7.0,
+  migration не изменились, `frontend/src/types/api.d.ts`
+  не регенерировался. Сопутствующие PR-ы: #151 (docs
+  sync to v0.7.1), #152 (smoke-local.sh для PR-#151
+  follow-up), #155-#158 (audit batch + BatchedApplier
+  real + e2e test).
+
+- **v9.3 (2026-07-31, post-v0.7.0 sync)** —
+  маркеры `[done]/[wip]/[ ]` в §21 приведены к факту.
+  Tag-и `v0.4.0` (на `3beff0f` → `db151f2` rewritten
+  post history-edit), `v0.4.0-post` (на release
+  workflow fixes для #102, #103, #104, #111),
+  `v0.5.0` (на `d7182a0`), `v0.6.0` (на `42687a6`),
+  и `v0.7.0` (на `9a560e5`) созданы и запушены. См.
+  `v9.3` entry для per-PR detail (v0.5.0 sops+age
+  batch, v0.6.0 plans batch, v0.7.0 webhooks batch,
+  post-v0.7.0 4-PR Go+frontend dependency batch в
+  PRs 141-144).
 
 - **v9.2 (2026-07-23, roadmap sync + post-v0.3.0-a cleanup)** —
   маркеры `[done]/[wip]/[ ]` в §21 приведены к факту. Tag-и

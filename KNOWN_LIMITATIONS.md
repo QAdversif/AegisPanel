@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.7.1
+# Known Limitations — AegisPanel v0.7.2
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,15 +6,15 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.7.1** (the
-`internal/webhooks` v0.7.0 surface + the v0.7.x follow-up
-batch: call-site wiring, sops+age envelope on the endpoint
-secret, background retry worker, events multi-select in the
-UI, and the shared zod schema) on top of the v0.5.0
-operations-grade feature set and the v0.6.0 plans CRUD. The
-next candidate release is v0.8.0 (`internal/notifications`).
+The current state of the project is **v0.7.2** (the
+v0.7.0 + v0.7.1 `internal/webhooks` surface + the v0.7.2
+audit-batch closeout: real BatchedApplier FlushFn +
+Enqueue + end-to-end integration test, plus the
+God-object main.go extraction into `internal/app`).
+The next candidate release is v0.8.0
+(`internal/notifications`).
 
-## v0.7.1 — currently open
+## v0.7.2 — currently open
 
 ### Operations
 
@@ -24,8 +24,35 @@ Every mutation in the admin handler stack should write an
 `audit_log` row. The `Service` struct pattern that PR #148
 used to wire `webhooks.Dispatch` is the same pattern a
 future PR would use to wire `audits.Record` (per-handler
-audit log write). Not in scope for v0.7.1; tracked as a
+audit log write). Not in scope for v0.7.2; tracked as a
 separate batch.
+
+#### Phase 2 multi-user sing-box render — Phase 2
+
+The v0.4.0-mvp-batched BatchedApplier FlushFn
+re-renders the full node config on every flush
+(via `internal/cores/builder/BuildCoreConfigForNode`),
+but the v0.4.0-era sing-box renderer is single-user
+per inbound: the protocol-level `users` array inside
+the rendered config carries the operator's credential
+from `inbound.Params["uuid"]` or `["password"]`. The
+BatchedApplier infrastructure (cancel/replace
+semantics, per-node goroutines, the FlushFn closure)
+is in place; a Phase 2 PR fills in the per-user
+mapping so user CRUD events actually move users
+into and out of the rendered config. v0.7.2 already
+emits the right `cores.Delta` for the future
+renderer to consume (`DeltaAddUser` /
+`DeltaRemoveUser` / `DeltaSetLimit{Bytes: <int64>}`).
+
+#### Inbound-templates work — Phase 2
+
+A future "inbound templates" feature is the natural
+home for the per-user render. Today, every
+`inbounds` row carries its own `Params` blob
+(operator's credential); the templates work is
+the per-tenant credentials layer that lets one
+inbound serve many users.
 
 #### Pre-existing `vue/max-attributes-per-line` template
 warnings — chore
@@ -37,6 +64,14 @@ handful of dialogs) carry pre-existing eslint warnings for
 auto-fixable with `pnpm lint --fix`; not in scope for any
 release PR.
 
+## v0.7.2 — closed in v0.7.2
+
+| Item | Closed by |
+| --- | --- |
+| Audit #1 — God-object main.go (composition root extracted). `cmd/aegis/main.go` is now 199 lines (was 728). The composition root moved to a new `internal/app` package exposing `Build(ctx, cfg) (*App, error)` + `App.Close()`. The pattern matches the wire sweet-spot for ~11 services: a generic `MustBuild[T]` helper with a `StoreBuilder[T]` struct + centralized production-vs-memory check. `router.Build` now takes a `ctx context.Context` first parameter (the `panelcfgSvc.GetActive` read at the rotated sub_path mount was hardcoded `context.Background()`; the boot context applies, so a SIGINT during boot aborts the read). 14 unused imports removed, 2 duplicate helpers removed (`mustHash`, `newSubscriptionRateLimiter`). | PR #156 |
+| Audit #2 — BatchedApplier no-op stub (real FlushFn + Enqueue). The v0.4.0-mvp-batched BatchedApplier shipped with a `log.Info + return nil` FlushFn AND Enqueue was never called outside tests. v0.7.2 wires the v0.5.0 real path end-to-end. New `internal/cores/builder/builder.go` with `BuildCoreConfigForNode` + `NewFlushFn` (per-node closure: `Build → Render → Apply` with structured error logging). `users.Service.WithBatchApplier` + `enqueueUserDelta` fan out to every registered applier. `inbounds.Service.WithBatchApplier` + `enqueueForNode` narrows to the single applier for the inbound's node. `App.BatchedAppliers` map + `App.AddNodeBatchedApplier` (registers the per-node applier, spawns the Run goroutine, owns the cancel funcs). `App.Close()` cancels every BatchedApplier goroutine alongside the existing webhook worker cancel + pg pool close. `AEGIS_BATCHED_APPLIER_ENABLED` (default `true`) gates the per-node wiring loop. | PR #157 |
+| Audit #2 — end-to-end integration test for the BatchedApplier + FlushFn. `internal/cores/builder/flushfn_integration_test.go` behind `//go:build integration`. Self-skips when `INTEGRATION_DATABASE_URL` is unset (local `go test ./...` skips; CI's backend job runs it). The headline test drives a real `users.Service.Create` against a real pg (via `testutil.MustNewPool`); the post-commit enqueue reaches the per-node BatchedApplier; the 200ms window fires; the FlushFn re-renders the sing-box config (reading through the inbounds PgStore); the fake agent receives a POST /v1/apply whose JSON envelope contains exactly the vless inbound we seeded with the UUID we put in `inb.Params`. The test pins the panel→agent wire contract end-to-end. | PR #158 |
+
 ## v0.7.1 — closed in v0.7.1
 
 | Item | Closed by |
@@ -46,7 +81,9 @@ release PR.
 | `sops+age` envelope on `webhook_endpoints.secret` — `SecretCipher` interface + `AgeSecretCipher` (filippo.io/age v1.3.1, X25519+ChaCha20-Poly1305, multi-recipient for key rotation) + `NoopSecretCipher` (dev); migration 0018 destructive rename `secret → secret_ciphertext BYTEA`; `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS` (csv `age1...`) + `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE`; `NewPgStore(pool, nil)` panics so a misconfigured boot is loud | PR #147 |
 | Webhook events multi-select in UI — `WebhookEventsPicker.vue` (native checkbox grid, 18 closed event types, grouped by entity, "N of 18 selected" header badge), wired into both the create and edit dialogs; i18n en + ru | PR #150 |
 | Shared zod schema at `frontend/src/schemas/webhook.ts` — `webhookEventTypeSchema` (z.enum of the 18 closed types), `webhookUrlSchema`, `webhookSecretSchema` (16-256 chars, fixed a latent length-bypass bug in the previous inline edit schema), `webhookCreateSchema`, `webhookUpdateSchema` (`.partial().strict()`; secret is `z.union([z.literal(''), webhookSecretSchema]).optional()` so the empty-string "leave unchanged" path is preserved); re-exported from `frontend/src/schemas/index.ts` | PR #149 |
-
+| Audit #3 — No UI tests (vitest suite for zod schemas). New `frontend/src/schemas/schemas.test.ts` with 38 vitest tests across `primitives.ts` (uuid, isoDateTime, tag), `user.ts` (create + update, `.partial().strict()` + unknown-keys rejection), `webhook.ts` (create + update + closed 18-event enum + url/secret rules + empty-string-secret "leave unchanged" affordance). `npm run test` uncommented in `.github/workflows/ci.yml`. | PR #155 |
+| Audit #4 — `aegis admin` password prompts leaked to terminal. `golang.org/x/term v0.45.0`; `promptPassword` opens `/dev/tty` directly and calls `term.ReadPassword` which toggles `ECHOCTL`/`ICANON` so the kernel suppresses the echoed bytes. Non-tty fallback to legacy `bufio.Reader` preserves the `echo pw \| aegis admin add user --email …` automation in `deploy/ansible/`. On Windows the fallback is a known limitation (the platform line discipline does not honour the same ECHOCTL contract as Unix; documented in the `promptPassword` docstring). | PR #154 |
+| Audit #6 — `nodes.State` enum vs migration 0006 `nodes_state_check` CHECK constraint. The mismatch was a false alarm (migration 0006 added in PR #37 already aligned them), but the only existing test (`TestPgStore_Create_RoundTrip`) only exercised `StateNew`. v0.7.1 added `TestPgStore_Create_AllStatesPassStateCheck` (table-driven: every member of the closed `State` enum flows through `Store.Create`) + the `node.go` docstring names the migration + the test. The enum↔CHECK agreement is now pinned permanently. | PR #153 |
 ## v0.7.0 — closed in v0.7.0
 
 | Item | Closed by |
