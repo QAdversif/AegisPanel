@@ -282,7 +282,27 @@ const columns: ColumnDef<Node, unknown>[] = [
 // Quick scope check for the current user. The Go
 // side enforces this; we hide the create button
 // for read-only users.
-const canWrite = computed(() => auth.me?.scopes.includes('write') ?? auth.me?.scopes.includes('admin') ?? false)
+//
+// v0.8.x fix: the previous form relied on
+// `auth.me?.scopes` to gate the write affordances.
+// That worked when `/api/v1/auth/me` returned the
+// caller's scopes. v0.8.0 introduced a v0.x Me()
+// regression (`lookupByID only supported for
+// MemoryStore in Phase 0`) that made `/me` return
+// 500 on the pg backend, which cascaded into
+// `auth.me === null` and hid the create button
+// from EVERY user. Fall back to "assume write when
+// authenticated" so the UI is usable before the
+// server-side /me fix lands; the server still
+// enforces scopes on every mutating endpoint, so
+// this is safe (a read-only user clicking "Add node"
+// still gets a 403 from the panel).
+const canWrite = computed(() => {
+  if (!auth.isAuthenticated) return false
+  const scopes = auth.me?.scopes ?? []
+  if (scopes.length === 0) return true // fallback when /me is broken
+  return scopes.includes('write') || scopes.includes('admin')
+})
 </script>
 
 <template>
