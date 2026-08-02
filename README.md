@@ -141,47 +141,47 @@ is standardized on `npm ci` against the committed
 
 ## What's where
 
-- **Architecture** — [`ARCHITECTURE.md`](./ARCHITECTURE.md) (Russian, v9.3).
++ **Architecture** — [`ARCHITECTURE.md`](./ARCHITECTURE.md) (Russian, v9.3).
   Source of truth for the design.
-- **Roadmap** — [`docs/ROADMAP.md`](./docs/ROADMAP.md). Milestone ladder
++ **Roadmap** — [`docs/ROADMAP.md`](./docs/ROADMAP.md). Milestone ladder
   with per-PR status.
-- **Operator guide** — [`docs/operator-guide.md`](./docs/operator-guide.md).
++ **Operator guide** — [`docs/operator-guide.md`](./docs/operator-guide.md).
   The end-to-end "from a fresh VPS to a panel that serves real users"
   flow.
-- **Quickstart** — [`docs/guide/quickstart.md`](./docs/guide/quickstart.md).
++ **Quickstart** — [`docs/guide/quickstart.md`](./docs/guide/quickstart.md).
   The five-minute operator path.
-- **Security policy** — [`docs/SECURITY.md`](./docs/SECURITY.md). Threat
++ **Security policy** — [`docs/SECURITY.md`](./docs/SECURITY.md). Threat
   model, disclosure flow, supply-chain trust.
-- **API reference** — [`docs/api/`](./docs/api/index.md). Rendered from
++ **API reference** — [`docs/api/`](./docs/api/index.md). Rendered from
   `docs/openapi.yaml` (currently 0.7.1).
-- **CHANGELOG** — [`CHANGELOG.md`](./CHANGELOG.md). Per-version release
++ **CHANGELOG** — [`CHANGELOG.md`](./CHANGELOG.md). Per-version release
   notes (Keep a Changelog format).
-- **Known limitations** — [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md).
++ **Known limitations** — [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md).
   Open gaps and the milestone that closes each.
-- **Developer guide** — [`docs/developer/`](./docs/developer/index.md).
++ **Developer guide** — [`docs/developer/`](./docs/developer/index.md).
   Module overview, testing, contributing.
 
 ## Contributing
 
-- **Branch naming:** `feat/<scope>/<name>`, `fix/<scope>/<name>`,
++ **Branch naming:** `feat/<scope>/<name>`, `fix/<scope>/<name>`,
   `chore/<scope>/<name>`, `refactor/<scope>/<name>`, `docs/<scope>/<name>`.
   Branch off `main`; `main` is the integration branch (no `develop`).
-- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/).
++ **Commits:** [Conventional Commits](https://www.conventionalcommits.org/).
   Avoid backticks in `-m` strings (PowerShell execution policy). Multi-line
   commits: write the message to a `.git-commit-*.txt` and `git commit
   --file <path>`. Throwaway drafts are gitignored.
-- **PRs:** one PR per work unit. `gh pr create --body-file
++ **PRs:** one PR per work unit. `gh pr create --body-file
   .github/pr-body-<name>.md`. Merges use
   `gh pr merge --admin --squash --delete-branch`.
-- **Pre-PR gate:** run `tools/scripts/pre-pr.sh` (or the installed
++ **Pre-PR gate:** run `tools/scripts/pre-pr.sh` (or the installed
   pre-push hook) before pushing. The gate runs gofmt, golangci-lint
   v2, vue-tsc, eslint, markdownlint-cli2, `go test -short`, and
   `npm run codegen:check`. It catches ~80% of the issues that would
   otherwise bounce in CI.
-- **i18n:** every user-facing string goes through `t('key')`. Run
++ **i18n:** every user-facing string goes through `t('key')`. Run
   `node frontend/tools/scripts/check-raw-text.mjs` locally; the CI gate
   runs the same script.
-- **License header** in every source file:
++ **License header** in every source file:
   `// SPDX-License-Identifier: AGPL-3.0-or-later` (Go / shell / SQL) or
   `<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->` (Vue / TS).
 
