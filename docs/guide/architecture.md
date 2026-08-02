@@ -10,6 +10,47 @@ should be edited in lockstep with the code.
 
 ## Current version
 
+**v9.5 (2026-08-02) — post-v0.8.0 sync.** One
+milestone tag landed since v9.4: `v0.8.0` (the
+**Phase 2 multi-user sing-box render milestone
+end-to-end** — PRs #167, #168, #169, #170 — plus
+the audit-log call-site wiring #166 and a
+frontend dependency batch #159, #161, #163, #165).
+v0.8.0 closes the v0.7.2 KNOWN_LIMITATIONS
+"Phase 2 multi-user sing-box render — Phase 2"
+entry end-to-end. The data model
+(`user_inbound_credentials` table, migration 0019,
+`internal/credentials` Service + Store + 24 unit
+tests), the renderer signature (`renderVLESS/HY2/Trojan`
+takes a per-user credential list, emits
+`users: [...]` arrays of length N; `renderShadowsocks`
+unchanged by protocol design), the builder wiring
+(per-inbound credential fetch and `cfg.Experimental
+["inbound_credentials"]` population with per-inbound
+fail-soft), the `BatchedApplier` fan-out narrow
+(`users.Service.enqueueUserDelta` filters by
+`user.HostsAllowlist` and `Blocklist`, blocklist-wins,
+default-allow migration), and the per-user
+subscription render (per-render `ListByUser` query
+with pre-computed map, `WithCreds(nil)` nil-safe
+setter) are all shipped. v0.8.0 is purely
+infrastructure by API surface: the OpenAPI spec
+stays at `0.7.0`, the generated `frontend/src/types/
+api.d.ts` is unchanged, `npm run codegen:check`
+passes without a regeneration. The HTTP admin
+surface for `user_inbound_credentials` (the
+`/api/v1/credentials/` mount with `ScopeCredentials`
+and OpenAPI and the Credentials tab in the user
+detail page) is a v0.8.x follow-up. v9.5 is a status
+sync: the §21 unified roadmap status table is
+brought in line with what the repo actually ships;
+the `v0.8.0` tag (on the docs-sync commit) is
+created as part of the same release. See the `v9.5`
+entry in `ARCHITECTURE.md` §25 for the per-PR
+detail. The doc body itself is unchanged from v9.4;
+the §21 / §25 status tables and this "Current
+version" note are the only diffs.
+
 **v9.4 (2026-08-02) — post-v0.7.2 sync.** Two
 milestone tags landed since v9.3: `v0.7.1` (the
 v0.7.x follow-up batch — webhook call-site wiring,

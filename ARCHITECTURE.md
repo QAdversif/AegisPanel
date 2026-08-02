@@ -2188,6 +2188,17 @@ ignoreip = 1.2.3.4 5.6.7.8
 - Per-user render: ⏳ Phase 2 (inbound-templates work).
 - Метрики: ⏳ Phase 2.
 
+**Slice status (per v9.5, Phase 2 multi-user sing-box render):**
+- `user_inbound_credentials` table (migration 0019) + `internal/credentials` Service / Store / 24 unit теста: ✅ PR #167, v0.8.0.
+- Multi-user renderer signature (`renderVLESS/HY2/Trojan(spec, params, users)` + `ExperimentalInboundCredentialsKey`): ✅ PR #168, v0.8.0. 5 новых тестов + 28 существующих (Phase 1 path byte-identical to v0.7.2).
+- Builder wiring + BatchedApplier fan-out narrow (`ListCredentialsByInbound` source + `users.Service.enqueueUserDelta` filter по `HostsAllowlist` / `Blocklist`, blocklist-wins): ✅ PR #169, v0.8.0. 4 builder теста + 5 fan-out тестов + new `BatchedApplier.QueueLen()`.
+- Per-user subscription render (per-render `ListByUser` + pre-computed map + `WithCreds(nil)` nil-safe setter + auth-boundary тест): ✅ PR #170, v0.8.0. 4 теста вкл. `TestRenderSingbox_Phase2_OtherUserCredNotLeaked`.
+- HTTP admin surface для `user_inbound_credentials` (AdminRouter + OpenAPI + Credentials tab в user detail): ⏳ v0.8.x.
+- Host → node mapping в Builder-side filter (нужна host-to-inbound индирекция, ещё не смоделирована): ⏳ v0.8.x.
+- Inbound-templates work (per-tenant `Params` defaults + per-user credentials — `Params` blob становится "shared defaults"): ⏳ v0.8.x+.
+- Метрики (`core_reload_total{kind,node}`, `core_reload_pending_users{node}`, `core_user_apply_latency_seconds`): ⏳ Phase 2 backlog.
+- 100-user burst-тест: ⏳ Phase 2 backlog.
+
 #### **MVP-1.0 — Soft launch** (`v1.0.0-mvp-soft-launch`)  `[ ]`
 **Что:** production-readiness чеклист, публичный тег.
 - [ ] Healthchecks на panel + agent (для systemd + docker-compose).
@@ -2349,6 +2360,55 @@ ignoreip = 1.2.3.4 5.6.7.8
 ---
 
 ## 25. История изменений
+
+- **v9.5 (2026-08-02, post-v0.8.0 sync)** — маркеры
+  `[done]/[wip]/[ ]` в §21 приведены к факту после
+  v0.8.0. Tag `v0.8.0` (на docs-sync коммите) создаётся
+  после того, как этот doc-sync PR заедет. v0.8.0 — это
+  **Phase 2 multi-user sing-box render milestone
+  end-to-end**: PR #167 (data model — `user_inbound_credentials`
+  table в migration 0019 + `internal/credentials` Service +
+  Store, 24 unit теста), PR #168 (multi-user renderer
+  signature — `renderVLESS/HY2/Trojan(spec, params, users)`
+  принимает per-(user, inbound) credential list, emits
+  `users: [...]` массив длины N; `renderShadowsocks` без
+  изменений по дизайну протокола), PR #169 (builder
+  wiring + `BatchedApplier` fan-out narrow — Builder
+  fetches credentials per inbound, populates
+  `cfg.Experimental["inbound_credentials"]`; per-inbound
+  query failures fail-soft; `users.Service.enqueueUserDelta`
+  filters `BatchedApplier` map по `user.HostsAllowlist`
+  / `Blocklist` с blocklist-wins-over-allowlist
+  precedence; default-allow migration path для панелей
+  без allowlist), PR #170 (subscription per-user render —
+  per-render `ListByUser` query с pre-computed map для
+  O(1) lookups, `WithCreds(nil)` setter = v0.7.2
+  byte-identical output, auth-boundary test
+  `TestRenderSingbox_Phase2_OtherUserCredNotLeaked`).
+  Сопутствующие PR-ы: #159 (TS/types toolchain bump —
+  `@types/node` 22.12.0 → 26.1.2, `@vue/tsconfig` 0.7.0 →
+  0.8.1, `typescript` 5.6.3 → 5.8.3, `prettier` 3.4.1 →
+  3.9.6, `globals` 17.7.0 → 17.8.0; фикс двух latent type
+  errors в `PlansView.vue` + README.md MD004
+  dash→plus), #161 (CSS/sass toolchain bump —
+  `autoprefixer` 10.4.27 → 10.5.4, `postcss` 8.5.19 →
+  8.5.24, `sass` 1.101.0 → 1.102.0), #163 (axios
+  1.18.1 → 1.19.0 — CVE-2026 GHSA-hmw2-7cc7-3qxx
+  CRLF-injection), #165 (`@vue/tsconfig` 0.8.1 → 0.9.1 +
+  `postcss` 8.5.24 → 8.5.25), #166 (audit_log
+  call-site wiring в каждом mutating service —
+  `audits.RecordFromContext` Service-layer mirror,
+  `WithAudits` setter, pre-fetch для `Delete` audit
+  `Before`; closes v0.7.x KNOWN_LIMITATIONS entry
+  "Audit log call-site wiring"). Migration landscape:
+  `migrations/0001..0019` (was `0001..0018` в v0.7.2).
+  v0.8.0 чисто инфраструктурный по API surface:
+  `docs/openapi.yaml` остаётся на `0.7.0`, фронтенд
+  `frontend/src/types/api.d.ts` не регенерируется,
+  `npm run codegen:check` проходит без изменений. Док
+  body не меняется от v9.4; §21 / §25 status tables +
+  этот "История изменений" entry — единственные
+  diff-ы. Phase 2 multi-user slice status в §21 ниже.
 
 - **v9.4 (2026-08-02, post-v0.7.2 sync)** — маркеры
   `[done]/[wip]/[ ]` в §21 приведены к факту после
