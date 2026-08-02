@@ -6,12 +6,20 @@ title: API reference
 
 The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
-in the repo root. v0.7.1 ships the full admin surface
-documented in the spec (auth, nodes, inbounds, hosts,
-plans, users, panelcfg, audits, backups, webhooks);
-the front-end uses `openapi-typescript` to generate a
-typed client from it. This page is a short overview
-вЂ” for per-endpoint details, see the spec.
+in the repo root. v0.7.2 ships the same admin surface
+as v0.7.1 (auth, nodes, inbounds, hosts, plans, users,
+panelcfg, audits, backups, webhooks) — v0.7.2 is
+purely internal (composition root extracted into
+`internal/app`, real BatchedApplier FlushFn +
+Enqueue wired through user/inbound services,
+end-to-end integration test against a real
+Postgres). The API surface is byte-for-byte
+identical to v0.7.1; the OpenAPI spec still
+carries the v0.7.0 version because no new
+endpoints were added. The front-end uses
+`openapi-typescript` to generate a typed client
+from it. This page is a short overview — for
+per-endpoint details, see the spec.
 
 ## Conventions
 
@@ -31,10 +39,13 @@ typed client from it. This page is a short overview
   non-breaking changes bump the
   `X-Api-Minor-Version` header.
 
-## Endpoints shipped in v0.7.1
+## Endpoints shipped in v0.7.2
 
-The full list is in `docs/openapi.yaml`. The headline
-groups:
+The full list is in `docs/openapi.yaml`. v0.7.2 is the
+same surface as v0.7.0 (the spec is still at
+`0.7.0`; no endpoints were added in v0.7.1 or
+v0.7.2 — both releases were internal / UI / docs
+changes). The headline groups:
 
 | Group         | Endpoints                                                                                                   |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |

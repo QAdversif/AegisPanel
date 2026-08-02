@@ -24,7 +24,8 @@ title: Aegis documentation
 - [Getting started](./guide/getting-started) — running the local
   dev stack on a laptop.
 - [API reference](./api/) — auto-generated from the OpenAPI spec
-  (currently v0.7.0).
+  (still at v0.7.0; v0.7.1 + v0.7.2 did not change the
+  API surface).
 - [Admin user guide](./user-guide/admin/) — operator-facing manual.
 - [Developer guide](./developer/) — module overview, testing,
   contributing.
@@ -34,8 +35,8 @@ title: Aegis documentation
 | Component | Status |
 | --- | --- |
 | Architecture (this doc tree) | ✅ Finalised (v9.3) |
-| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.7.0 |
-| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups) | ✅ v0.7.0 |
+| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.7.2 |
+| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups) | ✅ v0.7.1 |
 | Local dev environment (docker compose) | ✅ v0.5.0 |
 | Core (sing-box provider, GitHub-API SHA-256 install) | ✅ v0.5.0 |
 | sops+age secrets (`configure_secrets` Ansible role) | ✅ v0.5.0 |
@@ -46,11 +47,14 @@ title: Aegis documentation
 | Container wiring for the sops+age secrets file | ✅ v0.5.0 |
 | Cosign sign + verify for panel and agent images | ✅ v0.7.0 |
 | JSON logs in production (`AEGIS_ENV=production`) | ✅ v0.7.0 |
-| Cabinet API (extended plans, hosts, decoys) | 🟡 v0.7.x+ |
-| S3-compatible backup storage | 🟡 v0.7.x+ |
-| Webhook call-site wiring (production event flow) | 🟡 v0.7.x |
-| `sops` envelope on `webhook_endpoints.secret` | 🟡 v0.7.x |
-| Background worker for webhook retry | 🟡 v0.7.x |
+| Webhook call-site wiring (production event flow) | ✅ v0.7.1 |
+| `sops` envelope on `webhook_endpoints.secret` | ✅ v0.7.1 |
+| Background worker for webhook retry | ✅ v0.7.1 |
+| BatchedApplier real FlushFn + Enqueue (panel→agent pipeline) | ✅ v0.7.2 |
+| Composition root (`internal/app.Build`; main.go God-object fix) | ✅ v0.7.2 |
+| End-to-end integration test for the panel→agent pipeline | ✅ v0.7.2 |
+| Cabinet API (extended plans, hosts, decoys) | 🟡 v1.2+ |
+| S3-compatible backup storage | 🟡 v1.2+ |
 | Cascade topology | ⏳ Phase 4+ |
 | MCP integration | ⏳ Phase 4+ |
 | Tailwind v4 migration | ⏳ v1.5 |

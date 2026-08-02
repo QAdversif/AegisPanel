@@ -630,6 +630,243 @@ minor track forward.
   / CONTRIBUTING.md to reflect v0.7.0 and the
   pre-v0.7.1 dep batch.
 
+## [0.7.2] - 2026-08-02
+
+Three-PR audit-batch closeout. v0.7.2 is purely
+internal: no API surface change, no migration
+change, no operator-facing configuration change.
+The release closes the remaining two findings
+from the 2026-08-01 colleague review (audit #1
+and audit #2). The package-level `internal/app`
+and `internal/cores/builder` are new, the
+`cmd/aegis/main.go` shed 556 lines, and the
+end-to-end panel→agent pipeline is now exercised
+by a real-Postgres integration test.
+
+### Added (real BatchedApplier FlushFn + Enqueue, #157)
+
+The v0.4.0-mvp-batched `cores.BatchedApplier`
+shipped with a no-op FlushFn AND Enqueue was
+never called outside tests. v0.7.2 wires the
+v0.5.0 real path end-to-end:
+
+- New `internal/cores/builder/builder.go`:
+  `BuildCoreConfigForNode(ctx, src, nodeID)`
+  turns the panel's inbounds table into a
+  `cores.CoreConfig` (disabled inbounds
+  skipped; nil `Params` maps to an empty map).
+  `NewFlushFn(src, renderer, nodeID, name)`
+  returns the per-node closure the
+  BatchedApplier calls: `Build → Render → Apply`
+  with structured error logging.
+- `users.Service.WithBatchApplier(map)` +
+  `enqueueUserDelta(Delta)` fan out to every
+  registered applier. `Create` → `DeltaAddUser`,
+  `Update` → `DeltaAddUser` OR
+  `DeltaSetLimit{Bytes: TrafficLimitBytes}`
+  (JSON `{"bytes": <int64>}` payload) when
+  `in.TrafficLimitBytes` is the only changed
+  field, `Delete` → `DeltaRemoveUser`,
+  `RotateSubToken` → `DeltaAddUser`.
+- `inbounds.Service.WithBatchApplier(map)` +
+  `enqueueForNode(nodeID, kind)` narrows the
+  fan-out to the single applier for the
+  inbound's node (the inbound already carries
+  the node reference). `Create`/`Update` →
+  `DeltaAddUser{UserID: uuid.Nil}`,
+  `Delete` (with pre-fetch of `prev.NodeID`)
+  → `DeltaRemoveUser{UserID: uuid.Nil}`. The
+  `UserID: uuid.Nil` on inbound deltas is the
+  BatchedApplier's coalescing contract:
+  "inbound change" is not user-scoped, and
+  the appliers' last-write-wins under
+  `uuid.Nil` collapses multiple inbound CRUD
+  events in the same window to one flush.
+- `App.BatchedAppliers map[uuid.UUID]*cores.BatchedApplier`
+  and `App.AddNodeBatchedApplier(ctx, nodeID, name, flushFn)`
+  (registers the per-node applier, spawns the
+  `Run` goroutine, owns the cancel funcs).
+  `App.Close()` cancels every BatchedApplier
+  goroutine alongside the existing webhook
+  worker cancel and pg pool close.
+- `cmd/aegis/main.go` `singboxWiring` now takes
+  `*app.App` and gates on
+  `cfg.BatchedApplierEnabled`. The two
+  `WithBatchApplier` calls run BEFORE the
+  per-node loop so a Create handler that fires
+  during boot enqueues into a fully-built map.
+  The flag-off path returns nil after
+  `Configure()`: no appliers, no goroutines,
+  no fan-out (operator escape hatch for
+  Ansible/Terraform-managed installs).
+- New env var `AEGIS_BATCHED_APPLIER_ENABLED`
+  (default `true`).
+
+Phase 1 caveat (documented in PR body): the
+sing-box renderer is single-user per inbound
+(operator's credential in `inbound.Params`).
+The FlushFn re-renders the same config on
+every flush until the inbound-templates work
+lands. The infrastructure
+(BatchedApplier + Enqueue + FlushFn) is the
+deliverable; a future Phase 2 PR fills in
+the per-user mapping. The agent's diff is
+what determines whether the file on disk
+actually changes.
+
+### Added (end-to-end integration test, #158)
+
+`backend/internal/cores/builder/flushfn_integration_test.go`
+behind `//go:build integration`. Self-skips
+when `INTEGRATION_DATABASE_URL` is unset
+(local `go test ./...` skips; CI's backend
+job runs it). The headline test
+`TestIntegration_EndToEnd_RealPgCreateUserTriggersApply`
+drives a real `users.Service.Create` against
+a real pg (via `testutil.MustNewPool`); the
+post-commit enqueue reaches the per-node
+BatchedApplier; the 200ms window fires; the
+FlushFn re-renders the sing-box config
+(reading through the inbounds PgStore); the
+fake agent receives a POST /v1/apply whose
+JSON envelope contains exactly the vless
+inbound we seeded with the UUID we put in
+`inb.Params`. The test pins the panel→agent
+wire contract end-to-end. The earlier
+`flushfn_smoke_test.go` covers the
+MemoryStore path (no pg); the new test is
+the only place a "the panel wrote to pg and
+the FlushFn picked it up via SELECT"
+regression surfaces.
+
+### Changed (composition root extracted from main.go, #156)
+
+`cmd/aegis/main.go` went from 728 lines to
+199 (the audit #1 "God-object main.go" fix).
+The composition root moved to a new
+`internal/app` package exposing a single
+`Build(ctx, cfg) (*App, error)` plus an
+`App.Close()`. The pattern matches the wire
+sweet-spot (too small for google wire's
+codegen payoff, just right for a generic
+`MustBuild[T]` helper with a
+`StoreBuilder[T]` struct + centralized
+production-vs-memory check). 11 services are
+wired through `MustBuild` (auth, nodes,
+inbounds, hosts, users, plans, subscription,
+panelcfg, audits); two are one-offs (webhooks
+for the age cipher dependency, backups for
+the OSBackend). The `internal/app/app_test.go`
+smoke verifies every service handle is wired
+with all-memory backends and that
+`App.Close()` is idempotent.
+
+`cmd/aegis/main.go` keeps only the cmd-level
+concerns: logger setup, subcommand dispatch
+(`aegis migrate`, `aegis admin`), the singbox
+wiring path, signal handling, and graceful
+shutdown. `router.Build` now takes a
+`ctx context.Context` as the first parameter
+(used for the `panelcfgSvc.GetActive` read at
+the rotated sub_path mount, was hardcoded
+`context.Background()`); the boot context
+applies, so a SIGINT during boot aborts the
+read.
+
+### Closed (audit batch, 2026-08-01 colleague review)
+
+The 2026-08-01 colleague review raised six
+findings. v0.7.1 closed audit #3 (UI tests via
+PR #155), audit #4 (promptPassword echo via
+PR #154), and audit #6 (state enum regression
+guard via PR #153). v0.7.2 closes the remaining
+two:
+
+- **#1 God-object main.go** — closed by #156.
+  `main.go` is now 199 lines (was 728). The
+  composition root, the per-service store
+  selector, and the cross-cutting wiring
+  (webhooks worker, batched appliers) live on
+  `*app.App` with a clean lifecycle in
+  `App.Close()`.
+- **#2 BatchedApplier no-op stub** — closed by
+  #157 + #158. The FlushFn now re-renders
+  the node config and POSTs it to the agent.
+  Enqueue is called from every user/inbound
+  mutation. A real-Postgres integration test
+  pins the end-to-end pipeline.
+- **#5** — was a numbering artifact (the
+  colleagues' review went #1, #2, #3, #4, #6
+  with no #5). No action required.
+
+### Changed (Go+frontend dependency batch, post-v0.7.1)
+
+The PRs in this batch landed on `main`
+*after* the v0.7.1 git tag and are picked
+up by v0.7.2. None are application-code
+changes; all are infrastructure or
+regression-guard fixes:
+
+- `fix(nodes): pin State enum to migration
+  0006 with a regression guard` (#153,
+  closed audit #6) — already in v0.7.1
+  CHANGELOG; cross-referenced here for
+  completeness.
+- `fix(cli): suppress echo on aegis admin
+  password prompts` (#154, closed audit #4)
+  — `golang.org/x/term v0.45.0`; the
+  `promptPassword` helper opens `/dev/tty`
+  directly and calls `term.ReadPassword` so
+  the kernel toggles `ECHOCTL`/`ICANON`. The
+  non-tty path keeps the legacy
+  `bufio.Reader` for the `aegis admin add`
+  automation in `deploy/ansible/`.
+- `test(ui): add vitest suite for zod schemas`
+  (#155, closed audit #3) — 38 vitest tests
+  across `primitives.ts` + `user.ts` +
+  `webhook.ts`; `npm run test` uncommented
+  in `.github/workflows/ci.yml`.
+- `refactor(backend): extract internal/app.Build
+  from main.go` (#156) — the audit #1 fix
+  described above.
+- `feat(cores): real BatchedApplier FlushFn +
+  Enqueue` (#157) — the audit #2 fix
+  described above.
+- `test(cores): end-to-end integration test
+  for BatchedApplier + FlushFn` (#158) —
+  the test that closes audit #2 end-to-end.
+
+### Fixed (gofmt nit, #158)
+
+`backend/internal/cores/builder/flushfn_integration_test.go:267`
+was not aligned to gofmt's preferred column.
+Amended + `gofmt -w` + force-push. The CI's
+golangci-lint + gofmt job is the canonical
+formatter; local `gofmt -w` after every
+test file edit is the right pattern.
+
+### Not changed (v0.7.2 vs v0.7.1)
+
+- **No API surface change.** `docs/openapi.yaml`
+  is still at `0.7.0`. The `/webhooks/*`,
+  `/plans/*`, `/users/*`, `/hosts/*`, and
+  `/nodes/*` shapes are byte-for-byte
+  identical between v0.7.1 and v0.7.2. The
+  frontend `npm run codegen:check` job
+  passes without a regeneration.
+- **No migration change.** `migrations/0001..0018`
+  is byte-for-byte identical between v0.7.1
+  and v0.7.2. The schema-version string in
+  the audit_log row is unchanged.
+- **No operator-facing configuration change.**
+  The only new env var is
+  `AEGIS_BATCHED_APPLIER_ENABLED` (default
+  `true`), and it is opt-out for operators
+  who run an external config manager
+  (Ansible, Terraform) and want to prevent
+  the panel from clobbering the
+  externally-managed config.
+
 ## [Unreleased]
 
 ### Added (operator guide + security policy + quickstart docs, #126)

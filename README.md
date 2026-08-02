@@ -17,15 +17,21 @@
 
 ## Status
 
-**v0.7.1 — webhook follow-up batch — shipped.** v0.7.1 is the
-follow-up to v0.7.0. It closes every "deferred to v0.7.x"
-item: call-site wiring (`Service.Dispatch` from every
-mutating handler), sops+age envelope on
-`webhook_endpoints.secret`, background worker for the
-retry loop, shared zod schema in
-`frontend/src/schemas/webhook.ts`, and the events
-multi-select in the WebhooksView create / edit dialogs.
-The full release ladder:
+**v0.7.2 — audit batch closeout — shipped.** v0.7.2 is
+purely internal: no API surface change, no migration
+change, no operator-facing configuration change. It
+closes the remaining two findings from the 2026-08-01
+colleague review: the God-object `main.go` is extracted
+into a new `internal/app` package (`cmd/aegis/main.go`
+shed 556 lines, the package gained 530), and the
+v0.4.0-mvp-batched `BatchedApplier`'s no-op `FlushFn` is
+replaced with the v0.5.0 real path (`BuildCoreConfigForNode`
++ `RenderConfig` + `Apply`) wired through
+`users.Service.WithBatchApplier` and
+`inbounds.Service.WithBatchApplier` enqueue hooks. A
+new `//go:build integration` test pins the
+panel→agent pipeline against a real Postgres. The
+release ladder:
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
@@ -40,6 +46,7 @@ The full release ladder:
 | `v0.6.0` | **shipped** | `internal/plans` — plan catalog promoted from the v0.3.0 table stub to a full CRUD surface |
 | `v0.7.0` | **shipped** | `internal/webhooks` — outgoing-webhook surface with HMAC signing, retry with exponential backoff, DLQ |
 | `v0.7.1` | **shipped** | Webhook call-site wiring, sops+age envelope on `webhook_endpoints.secret`, background retry worker, events multi-select, shared zod schema, plus the post-v0.7.0 Go+frontend dependency batch (#141–#144) and the docs sync (#145) |
+| `v0.7.2` | **shipped** | Audit batch closeout: God-object `main.go` extracted into `internal/app.Build` (#156); real BatchedApplier FlushFn + Enqueue from user/inbound services (#157); end-to-end integration test against a real Postgres (#158) |
 | `v0.8.0` | planned | `internal/notifications` (Telegram + generic webhook via n8n) |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release |
@@ -55,7 +62,7 @@ list.
 aegis/
 ├── ARCHITECTURE.md         # the design document (v9.3)
 ├── CHANGELOG.md            # per-version release notes (Keep a Changelog)
-├── KNOWN_LIMITATIONS.md    # current gap list (v0.7.1)
+├── KNOWN_LIMITATIONS.md    # current gap list (v0.7.2)
 ├── README.md               # this file
 ├── LICENSE                 # AGPL-3.0
 ├── Makefile                # top-level orchestration

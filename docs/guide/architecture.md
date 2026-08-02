@@ -10,6 +10,32 @@ should be edited in lockstep with the code.
 
 ## Current version
 
+**v9.4 (2026-08-02) — post-v0.7.2 sync.** Two
+milestone tags landed since v9.3: `v0.7.1` (the
+v0.7.x follow-up batch — webhook call-site wiring,
+sops+age envelope on `webhook_endpoints.secret`,
+background worker for the retry loop, shared
+zod schema at `frontend/src/schemas/webhook.ts`,
+events multi-select in the UI; plus the
+post-v0.7.0 4-PR Go+frontend dependency batch
+in PRs 141 through 144 and the docs sync #145;
+the v0.7.0-batch regression-guard follow-ups
+PR #153, #154, #155, #156, #157, #158), and
+`v0.7.2` (the audit batch closeout — God-object
+`main.go` extracted into `internal/app.Build`,
+real BatchedApplier FlushFn + Enqueue from
+user/inbound services, end-to-end integration
+test against a real Postgres — PRs #156, #157,
+and #158). v9.4 is a status sync: the §21 unified
+roadmap status table is brought in line with
+what the repo actually ships; the `v0.7.1` (at
+`85bec3b`) and `v0.7.2` (at `031e740`) tags are
+documented. See the `v9.4` entry in
+`ARCHITECTURE.md` §25 for the per-PR detail.
+The doc body itself is unchanged from v9.3;
+the §21 / §25 status tables and this "Current
+version" note are the only diffs.
+
 **v9.3 (2026-07-31) — post-v0.7.0 sync.** Five
 milestone tags landed since v9.2: `v0.4.0` (the
 d-r-series plus Path C consolidation), `v0.4.0-post`

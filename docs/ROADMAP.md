@@ -5,7 +5,7 @@
 > are listed in `CHANGELOG.md` (per-release log) and `docs/adr/`
 > (architecturally significant decisions).
 
-## Status (2026-07-31)
+## Status (2026-08-02)
 
 | Tag                  | Scope                                                                                                  | Status               |
 | ---                  | ---                                                                                                    | ---                  |
@@ -24,6 +24,7 @@
 | `v0.6.0`             | `internal/plans` (table already exists in migration 0001)                                                | ✅ shipped (#131, #132, #133, #134) |
 | `v0.7.0`             | `internal/webhooks` (table already exists in migration 0001)                                             | ✅ shipped (#136, #137, #138, #139) |
 | `v0.7.1`             | Webhook call-site wiring, sops+age envelope on `webhook_endpoints.secret`, background worker for retry, shared zod schema at `frontend/src/schemas/webhook.ts`, events multi-select in the WebhooksView; plus the post-v0.7.0 Go+frontend dependency batch (#141, #142, #143, #144) and the docs sync (#145) | ✅ shipped (#146, #147, #148, #149, #150) |
+| `v0.7.2`             | Audit batch closeout (closes the 2026-08-01 colleague review): God-object main.go extracted into `internal/app.Build`; real BatchedApplier FlushFn + Enqueue from user/inbound services; end-to-end integration test against a real Postgres; post-v0.7.1 docs sync | ✅ shipped (#156, #157, #158) |
 | `v0.8.0`             | `internal/notifications` (Telegram + generic webhook via n8n)                                            | ⏳                   |
 | `v0.9.0`             | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact)                                  | ⏳                   |
 | `v1.0.0-mvp-soft-launch` | GA tag — minimum surface for the public release                                                       | ⏳                   |
