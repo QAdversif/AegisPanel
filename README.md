@@ -1,37 +1,47 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.7.0** ships the full admin surface end-to-end:
+> services. **v0.8.0** ships the full admin surface end-to-end:
 > sing-box on every node, BYO Node bootstrap with real `aegis-agent`,
 > user / host / plan CRUD, subscription render in sing-box / Clash /
 > base64 / HTML formats, audit log, **backups** (with operator CLI),
-> and **outgoing webhooks** (HMAC-signed + DLQ). The CoreProvider
+> **outgoing webhooks** (HMAC-signed + DLQ), and the
+> **Phase 2 multi-user sing-box render** (per-(user, inbound)
+> credentials, multi-user `users: [...]` arrays, narrowed
+> BatchedApplier fan-out, per-user sub URL). The CoreProvider
 > abstraction lets a second provider (Xray) ship in v2.0+ without
 > UI surgery. AGPL-3.0. Single-tenant.
 >
 > **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend
 > (Vite + shadcn-vue), PostgreSQL, Caddy, fail2ban, sops+age
-> secrets. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the
-> full design and [`docs/adr/0003-mvp-singbox-vertical-slice.md`](./docs/adr/0003-mvp-singbox-vertical-slice.md)
+> secrets. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) (v9.5)
+> for the full design and [`docs/adr/0003-mvp-singbox-vertical-slice.md`](./docs/adr/0003-mvp-singbox-vertical-slice.md)
 > for the MVP strategy.
 
 ## Status
 
-**v0.7.2 — audit batch closeout — shipped.** v0.7.2 is
-purely internal: no API surface change, no migration
-change, no operator-facing configuration change. It
-closes the remaining two findings from the 2026-08-01
-colleague review: the God-object `main.go` is extracted
-into a new `internal/app` package (`cmd/aegis/main.go`
-shed 556 lines, the package gained 530), and the
-v0.4.0-mvp-batched `BatchedApplier`'s no-op `FlushFn` is
-replaced with the v0.5.0 real path (`BuildCoreConfigForNode`
-+ `RenderConfig` + `Apply`) wired through
-`users.Service.WithBatchApplier` and
-`inbounds.Service.WithBatchApplier` enqueue hooks. A
-new `//go:build integration` test pins the
-panel→agent pipeline against a real Postgres. The
-release ladder:
+**v0.8.0 — Phase 2 multi-user sing-box render — shipped.**
+v0.8.0 is the **end-to-end multi-user** milestone: the
+panel can issue per-(user, inbound) credentials via
+`internal/credentials` Service + Store (data layer
++ admin surface in v0.8.x follow-up), the sing-box
+renderer emits multi-user `users: [...]` arrays, the
+BatchedApplier fan-out is narrowed by
+`user.HostsAllowlist` / `Blocklist`, and the per-user
+sub URL renders the user's own UUID/password (sing-box
+and Clash). The 9-PR batch — the four dep bumps
+(`#159`, `#161`, `#163`, `#165`), the audit batch
+(`#166`), and the Phase 2 chain (`#167`, `#168`,
+`#169`, `#170`) — also includes the audit-log
+call-site wiring into every mutating service and a
+frontend dependency batch (TS / CSS / axios /
+vue-tsconfig / postcss). v0.8.0 is purely
+infrastructure by API surface: the OpenAPI spec stays
+at `0.7.0`, `frontend/src/types/api.d.ts` is not
+regenerated, `npm run codegen:check` passes without
+changes. The migration landscape is `0001..0019` (was
+`0001..0018` in v0.7.2; `0019` adds
+`user_inbound_credentials`). The release ladder:
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
@@ -47,8 +57,9 @@ release ladder:
 | `v0.7.0` | **shipped** | `internal/webhooks` — outgoing-webhook surface with HMAC signing, retry with exponential backoff, DLQ |
 | `v0.7.1` | **shipped** | Webhook call-site wiring, sops+age envelope on `webhook_endpoints.secret`, background retry worker, events multi-select, shared zod schema, plus the post-v0.7.0 Go+frontend dependency batch (#141–#144) and the docs sync (#145) |
 | `v0.7.2` | **shipped** | Audit batch closeout: God-object `main.go` extracted into `internal/app.Build` (#156); real BatchedApplier FlushFn + Enqueue from user/inbound services (#157); end-to-end integration test against a real Postgres (#158) |
-| `v0.8.0` | planned | `internal/notifications` (Telegram + generic webhook via n8n) |
-| `v0.9.0` | planned | Smoke test on fresh VM in CI |
+| `v0.8.0` | **shipped** | Phase 2 multi-user sing-box render end-to-end (#167 data model, #168 renderer, #169 builder + BatchedApplier narrow, #170 subscription per-user render); audit-log call-site wiring into every mutating service (#166); frontend dependency batch — TS / CSS / axios / vue-tsconfig / postcss (#159, #161, #163, #165) |
+| `v0.8.x` | planned | HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/` mount + `ScopeCredentials` + OpenAPI + Credentials tab in the user detail page); inbound-templates work (per-tenant `Params` defaults); cosign re-signing on every release; JSON logs in production (`AEGIS_ENV=production` one-liner) |
+| `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release |
 
 See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the milestone ladder,
@@ -60,9 +71,9 @@ list.
 
 ```
 aegis/
-├── ARCHITECTURE.md         # the design document (v9.3)
+├── ARCHITECTURE.md         # the design document (v9.5)
 ├── CHANGELOG.md            # per-version release notes (Keep a Changelog)
-├── KNOWN_LIMITATIONS.md    # current gap list (v0.7.2)
+├── KNOWN_LIMITATIONS.md    # current gap list (v0.8.0)
 ├── README.md               # this file
 ├── LICENSE                 # AGPL-3.0
 ├── Makefile                # top-level orchestration
@@ -74,8 +85,8 @@ aegis/
 │   │   ├── aegis-agent/    # the per-node Go agent (writes sing-box config + reloads)
 │   │   ├── aegis-pg-backup/    # operator-side backup CLI
 │   │   └── aegis-pg-restore/   # operator-side restore CLI (separate binary, safety boundary)
-│   ├── internal/           # 17 packages: audits, auth, backups, bootstrap, config, cores, db, hosts, inbounds, migrations, nodes, obs, panelcfg, plans, ratelimit, router, subscription, users, webhooks
-│   ├── migrations/         # 16 SQL files (0001..0016)
+│   ├── internal/           # 21 packages: app, audits, auth, backups, bootstrap, config, cores, credentials, db, hosts, inbounds, migrations, nodes, obs, panelcfg, plans, ratelimit, router, subscription, users, webhooks (+ 9 doc.go-only placeholders: cabinet, caddy, cascades, decoy, events, mcp, notifications, stats, subscriptions)
+│   ├── migrations/         # 19 SQL files (0001..0019; 0019 adds user_inbound_credentials)
 │   └── testutil/           # shared Postgres test fixtures
 ├── frontend/               # Vue 3 + TS admin UI (shadcn-vue)
 │   ├── src/components/ui/  # 25 base shadcn-vue components
@@ -102,7 +113,7 @@ aegis/
 │   ├── ROADMAP.md          # the milestone ladder
 │   ├── README.md           # docs index
 │   ├── KNOWN_LIMITATIONS.md  # (root) gap list
-│   └── openapi.yaml        # OpenAPI 3.0 spec (codegen source of truth)
+│   └── openapi.yaml        # OpenAPI 3.0 spec (codegen source of truth; v0.7.0 — v0.8.0 same API surface)
 └── tools/scripts/          # pre-pr.sh, install-pre-push.sh, branch-start.sh, smoke-frontend.sh, release.sh, backup.sh, restore.sh
 ```
 
@@ -141,7 +152,7 @@ is standardized on `npm ci` against the committed
 
 ## What's where
 
-+ **Architecture** — [`ARCHITECTURE.md`](./ARCHITECTURE.md) (Russian, v9.3).
++ **Architecture** — [`ARCHITECTURE.md`](./ARCHITECTURE.md) (Russian, v9.5).
   Source of truth for the design.
 + **Roadmap** — [`docs/ROADMAP.md`](./docs/ROADMAP.md). Milestone ladder
   with per-PR status.
@@ -153,7 +164,8 @@ is standardized on `npm ci` against the committed
 + **Security policy** — [`docs/SECURITY.md`](./docs/SECURITY.md). Threat
   model, disclosure flow, supply-chain trust.
 + **API reference** — [`docs/api/`](./docs/api/index.md). Rendered from
-  `docs/openapi.yaml` (currently 0.7.1).
+  `docs/openapi.yaml` (currently 0.7.0; v0.7.1, v0.7.2, v0.8.0 did not
+  change the API surface).
 + **CHANGELOG** — [`CHANGELOG.md`](./CHANGELOG.md). Per-version release
   notes (Keep a Changelog format).
 + **Known limitations** — [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md).

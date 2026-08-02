@@ -6,7 +6,7 @@ title: Aegis documentation
 
 > **Aegis** is a self-hosted, multi-protocol VPN control panel.
 > The project is in pre-alpha: the design is finalised in
-> [ARCHITECTURE.md](../ARCHITECTURE.md) (v9.3), the
+> [ARCHITECTURE.md](../ARCHITECTURE.md) (v9.5), the
 > skeleton is being assembled, and documentation is being
 > written alongside the code.
 
@@ -24,7 +24,7 @@ title: Aegis documentation
 - [Getting started](./guide/getting-started) — running the local
   dev stack on a laptop.
 - [API reference](./api/) — auto-generated from the OpenAPI spec
-  (still at v0.7.0; v0.7.1 + v0.7.2 did not change the
+  (still at v0.7.0; v0.7.1, v0.7.2, v0.8.0 did not change the
   API surface).
 - [Admin user guide](./user-guide/admin/) — operator-facing manual.
 - [Developer guide](./developer/) — module overview, testing,
@@ -34,9 +34,9 @@ title: Aegis documentation
 
 | Component | Status |
 | --- | --- |
-| Architecture (this doc tree) | ✅ Finalised (v9.3) |
-| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.7.2 |
-| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups) | ✅ v0.7.1 |
+| Architecture (this doc tree) | ✅ Finalised (v9.5) |
+| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.0 |
+| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups) | ✅ v0.8.0 |
 | Local dev environment (docker compose) | ✅ v0.5.0 |
 | Core (sing-box provider, GitHub-API SHA-256 install) | ✅ v0.5.0 |
 | sops+age secrets (`configure_secrets` Ansible role) | ✅ v0.5.0 |
@@ -53,6 +53,13 @@ title: Aegis documentation
 | BatchedApplier real FlushFn + Enqueue (panel→agent pipeline) | ✅ v0.7.2 |
 | Composition root (`internal/app.Build`; main.go God-object fix) | ✅ v0.7.2 |
 | End-to-end integration test for the panel→agent pipeline | ✅ v0.7.2 |
+| Audit log call-site wiring (every mutating service audited) | ✅ v0.8.0 |
+| Phase 2 multi-user sing-box render — data model (`internal/credentials` + migration 0019) | ✅ v0.8.0 |
+| Phase 2 multi-user sing-box render — multi-user renderer signature | ✅ v0.8.0 |
+| Phase 2 multi-user sing-box render — builder + BatchedApplier narrow | ✅ v0.8.0 |
+| Phase 2 multi-user sing-box render — per-user subscription render | ✅ v0.8.0 |
+| HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/`) | ⏳ v0.8.x |
+| Inbound-templates work (per-tenant `Params` defaults) | ⏳ v0.8.x+ |
 | Cabinet API (extended plans, hosts, decoys) | 🟡 v1.2+ |
 | S3-compatible backup storage | 🟡 v1.2+ |
 | Cascade topology | ⏳ Phase 4+ |
