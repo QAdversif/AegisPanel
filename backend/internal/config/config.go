@@ -340,6 +340,23 @@ type Config struct {
 	// typically writes "0 2 * * *" (every day
 	// at 02:00 panel-local time).
 	BackupsCron string `env:"AEGIS_BACKUPS_CRON" envDefault:""`
+
+	// BatchedApplierEnabled is the master switch for
+	// the v0.4.0-b / v0.5.0 outbound render-and-apply
+	// path. When true (the default), the panel builds
+	// one BatchedApplier per online node at boot,
+	// the user / inbound mutating handlers Enqueue
+	// deltas, and the FlushFn re-renders the
+	// sing-box config and POSTs it to the agent.
+	// When false, the v0.4.0-a behaviour is
+	// preserved: the panel keeps the inbound CRUD
+	// in its DB but never pushes a config to the
+	// agent. Operators who run the panel side-by-side
+	// with an external config manager (Ansible,
+	// Terraform) set this to false to prevent the
+	// panel from clobbering the externally-managed
+	// config.
+	BatchedApplierEnabled bool `env:"AEGIS_BATCHED_APPLIER_ENABLED" envDefault:"true"`
 }
 
 // Load reads `.env` (if present) and then parses the environment.
