@@ -26,6 +26,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
@@ -62,6 +63,7 @@ type Service struct {
 	now      func() time.Time
 	idGen    func() uuid.UUID
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	audits   *audits.Service   // v0.7.x deferred call-site: every mutating method records an audit_log row after the row is committed.
 }
 
 // NewService wires a Service around the given store.
@@ -92,6 +94,18 @@ func NewService(store Store) *Service {
 // service.
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
+	return s
+}
+
+// WithAudits installs the audit-log writer. Same
+// nil-safe pattern as WithWebhooks: the field
+// stays nil for unit tests, the new dispatch
+// tests wire a real `*audits.Service` via the
+// MemoryStore + spy pattern, and the Service
+// methods always call RecordFromContext (which
+// short-circuits when s.audits is nil).
+func (s *Service) WithAudits(svc *audits.Service) *Service {
+	s.audits = svc
 	return s
 }
 
@@ -208,6 +222,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Plan, error) {
 	// would re-apply the same insert (and
 	// collide on the UNIQUE constraint).
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanCreated, &out)
+	// v0.7.x deferred: record the audit row. The
+	// pre-state is empty (Create has no Before);
+	// the post-state is the newly-committed row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "plan.create",
+		ResourceType: "plan",
+		ResourceID:   out.ID.String(),
+		After:        out,
+	})
 	return &out, nil
 }
 
@@ -292,6 +315,17 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Pl
 	// ordering. The new row's post-update
 	// timestamp is in `out`.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanUpdated, out)
+	// v0.7.x deferred: record the audit row.
+	// Before is the pre-patch state fetched at
+	// the top of the method; After is the
+	// post-patch state.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "plan.update",
+		ResourceType: "plan",
+		ResourceID:   out.ID.String(),
+		Before:       cur,
+		After:        out,
+	})
 	return out, nil
 }
 
@@ -311,6 +345,13 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
 	}
+	// v0.7.x deferred: fetch the row before
+	// deleting so the audit entry has a Before.
+	// Same trade-off as users.Service.Delete.
+	cur, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -323,6 +364,14 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// cache fall back to a follow-up GET).
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventPlanDeleted, map[string]string{
 		"id": id.String(),
+	})
+	// v0.7.x deferred: record the audit row.
+	// After is nil (the row is gone).
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "plan.delete",
+		ResourceType: "plan",
+		ResourceID:   id.String(),
+		Before:       cur,
 	})
 	return nil
 }

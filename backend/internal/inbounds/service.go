@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
@@ -44,6 +45,7 @@ type Service struct {
 	nodes    *nodes.Service
 	now      func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	audits   *audits.Service   // v0.7.x deferred call-site.
 	// batchedAppliers is the v0.5.0 outbound
 	// render+apply fan-out. nil = feature disabled.
 	// See AEGIS_BATCHED_APPLIER_ENABLED.
@@ -74,6 +76,13 @@ func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 // node reference.
 func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Service {
 	s.batchedAppliers = aps
+	return s
+}
+
+// WithAudits installs the audit-log writer. Same
+// nil-safe pattern as WithWebhooks.
+func (s *Service) WithAudits(svc *audits.Service) *Service {
+	s.audits = svc
 	return s
 }
 
@@ -231,6 +240,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundCreated, out)
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "inbound.create",
+		ResourceType: "inbound",
+		ResourceID:   out.ID.String(),
+		After:        out,
+	})
 	// v0.5.0: enqueue a DeltaAddUser for the
 	// inbound's node so the next FlushFn
 	// re-renders the node config with the new
@@ -331,6 +347,14 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundUpdated, out)
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "inbound.update",
+		ResourceType: "inbound",
+		ResourceID:   out.ID.String(),
+		Before:       existing,
+		After:        out,
+	})
 	// v0.5.0: enqueue a DeltaAddUser for the
 	// (possibly new) node. An Update that changes
 	// the inbound's NodeID (rare; the schema
@@ -363,6 +387,13 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// the identifier.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundDeleted, map[string]string{
 		"id": id.String(),
+	})
+	// v0.7.x deferred: record the audit row.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "inbound.delete",
+		ResourceType: "inbound",
+		ResourceID:   id.String(),
+		Before:       prev,
 	})
 	// v0.5.0: enqueue a DeltaRemoveUser for
 	// the inbound's previous node. The appliers'

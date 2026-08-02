@@ -34,6 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
@@ -108,6 +109,7 @@ type Service struct {
 	pgPool   *pgxpool.Pool // for the metadata counts and schema version; nil is OK (counts are skipped)
 	clock    func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	audits   *audits.Service   // v0.7.x deferred call-site.
 
 	// dumpFn is the function Create calls to obtain
 	// a ReadCloser over the pg_dump output stream.
@@ -145,6 +147,32 @@ func New(cfg Config, store Store, pool *pgxpool.Pool) *Service {
 // See plans.Service.WithWebhooks for the rationale.
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
+	return s
+}
+
+// WithAudits installs the audit-log writer. Same
+// nil-safe pattern as WithWebhooks. The audit
+// surface for backups records three events:
+//
+//   - `backup.create` when the running row is
+//     first inserted (the operator-initiated
+//     action; the actor is the HTTP handler's
+//     authenticated principal, or `system`
+//     for the v0.5.0 scheduled cron);
+//   - `backup.complete` / `backup.fail` at the
+//     terminal transition (the system actor;
+//     these are operational events, not
+//     user-initiated);
+//   - `backup.delete` when the operator removes
+//     a row (the actor is the HTTP handler's
+//     authenticated principal).
+//
+// The Create-event record carries the running
+// row state, the terminal-event record carries
+// the final OK/failed row, and the delete-event
+// record carries the pre-delete row.
+func (s *Service) WithAudits(svc *audits.Service) *Service {
+	s.audits = svc
 	return s
 }
 
@@ -205,6 +233,17 @@ func (s *Service) Create(ctx context.Context, trigger Trigger) (*Backup, error) 
 	// (slack, pagerduty) can show that a backup
 	// is in flight.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupCreated, row)
+	// v0.7.x deferred: record the audit row.
+	// The actor is the authenticated principal
+	// (HTTP path) or `system` (the v0.5.0
+	// scheduled cron) — RecordFromContext picks
+	// this up from the JWT claims when present.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "backup.create",
+		ResourceType: "backup",
+		ResourceID:   row.ID,
+		After:        row,
+	})
 
 	dumpPath, err := s.runDumpToFile(ctx, id)
 	if err != nil {
@@ -296,8 +335,33 @@ func (s *Service) dispatchBackupTerminal(ctx context.Context, row *Backup) {
 	switch row.Status {
 	case StatusOK:
 		webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupCompleted, row)
+		// v0.7.x deferred: record the audit
+		// row for the OK transition. The
+		// actor is `system` (the scheduled
+		// cron or the operator's manual
+		// "wait until OK" poll); there is
+		// no human-in-the-loop at the
+		// terminal point.
+		audits.RecordFromContext(ctx, s.audits, audits.Entry{
+			Action:       "backup.complete",
+			ResourceType: "backup",
+			ResourceID:   row.ID,
+			After:        row,
+		})
 	case StatusFailed:
 		webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventBackupFailed, row)
+		// v0.7.x deferred: record the audit
+		// row for the failed transition.
+		// The before-state is the running
+		// row (with no error), the
+		// after-state is the failed row
+		// (with the error set).
+		audits.RecordFromContext(ctx, s.audits, audits.Entry{
+			Action:       "backup.fail",
+			ResourceType: "backup",
+			ResourceID:   row.ID,
+			After:        row,
+		})
 	}
 	// StatusRunning is never terminal; the
 	// running row is announced via
@@ -337,7 +401,21 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := os.Remove(dumpPath + ".sha256"); err != nil && !os.IsNotExist(err) { // #nosec G703 -- canonical sidecar suffix
 		return err
 	}
-	return s.store.Delete(ctx, id)
+	if err := s.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	// v0.7.x deferred: record the audit row.
+	// Before is the row we just removed; After
+	// is nil (the row is gone). The actor is
+	// the HTTP handler's authenticated
+	// principal.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "backup.delete",
+		ResourceType: "backup",
+		ResourceID:   id,
+		Before:       row,
+	})
+	return nil
 }
 
 // Open returns a ReadCloser over the dump file. The
