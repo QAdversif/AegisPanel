@@ -1,0 +1,511 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Package app is the composition root for the
+// Aegis panel. It owns the wiring that used to
+// live in `cmd/aegis/main.go` and exposes a single
+// `Build` function that returns a fully wired
+// `*App`. The cmd/ binary then does signal
+// handling, subcommand dispatch (`aegis migrate`,
+// `aegis admin`), and the http.Server lifecycle
+// around the `App`.
+//
+// # Why a struct, not 11 return values
+//
+// The original wiring had 11 services and a rate
+// limiter returned as positional values. A
+// struct means callers can name what they need
+// (`a.Auth`, `a.Router`, `a.Server`) and tests
+// can mock a single field without faking the rest.
+//
+// # Why a generic `MustBuild[T]`
+//
+// The nine `switch cfg.XBackend { case "pg": ...
+// default: ... }` blocks that lived in main.go
+// were the worst offender in the audit. The
+// helper lives in `stores.go` and is generic so
+// the result is already the right concrete type
+// (no `any` + type-assertion). The constructors
+// in the per-service packages return concrete
+// pointer types (`*nodes.PgStore`, `*nodes.MemoryStore`)
+// so the caller wraps them in a closure that
+// returns the matching interface — Go generics
+// do not allow covariance, only invariance.
+//
+// # What does not live here
+//
+//   - The `migrate` and `admin` subcommands stay
+//     in `cmd/aegis/main.go`. They are maintenance
+//     operations that should not require the full
+//     service graph; only the pg pool is needed.
+//   - The `singboxWiring` helper (per-node
+//     BatchedApplier goroutines tied to the boot
+//     ctx) stays in main.go. Lifting it into a
+//     method on App would force an `io.Closer`
+//     pattern the rest of the services do not need.
+package app
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
+
+	"github.com/QAdversif/AegisPanel/internal/audits"
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/backups"
+	"github.com/QAdversif/AegisPanel/internal/bootstrap"
+	"github.com/QAdversif/AegisPanel/internal/config"
+	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/cores/noop"
+	"github.com/QAdversif/AegisPanel/internal/db"
+	"github.com/QAdversif/AegisPanel/internal/hosts"
+	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/migrations"
+	"github.com/QAdversif/AegisPanel/internal/nodes"
+	"github.com/QAdversif/AegisPanel/internal/obs"
+	"github.com/QAdversif/AegisPanel/internal/panelcfg"
+	"github.com/QAdversif/AegisPanel/internal/plans"
+	"github.com/QAdversif/AegisPanel/internal/ratelimit"
+	"github.com/QAdversif/AegisPanel/internal/router"
+	"github.com/QAdversif/AegisPanel/internal/subscription"
+	"github.com/QAdversif/AegisPanel/internal/users"
+	"github.com/QAdversif/AegisPanel/internal/webhooks"
+)
+
+// App is the wired panel. The zero value is not
+// usable; obtain one via Build. The struct holds
+// the pg pool, every service handle, the
+// subscription rate limiter, and the http.Server.
+// Close releases the pool and stops the webhook
+// retry worker.
+type App struct {
+	Config *config.Config
+	Pool   *pgxpool.Pool
+
+	Auth      *auth.Service
+	Nodes     *nodes.Service
+	Hosts     *hosts.Service
+	Inbounds  *inbounds.Service
+	Users     *users.Service
+	Plans     *plans.Service
+	Subs      *subscription.Service
+	PanelCfg  *panelcfg.Service
+	Audits    *audits.Service
+	Backups   *backups.Service
+	Webhooks  *webhooks.Service
+	Bootstrap *bootstrap.Service
+
+	SubLimiter *ratelimit.Limiter
+	Router     http.Handler
+	Server     *http.Server
+
+	webhooksWorkerCancel context.CancelFunc
+}
+
+// Build runs the composition root: open the pg
+// pool when at least one service is configured
+// for it, apply migrations, build every store
+// and every service, wire the v0.7.x outbound
+// event surface, start the webhook retry worker,
+// and return a fully wired App. The cmd/ binary
+// owns the http.Server lifecycle and the SIGINT
+// handling.
+func Build(ctx context.Context, cfg *config.Config) (*App, error) {
+	logger := log.Logger
+
+	// 1. Wire the noop core provider in dev. In
+	//    production a real provider self-registers
+	//    via its own init() and we leave the
+	//    registry alone.
+	if cfg.Env != "production" {
+		if err := cores.Register(noop.New("noop", "0.0.0-dev")); err != nil {
+			// Duplicate registration (a test that
+			// already inserted noop) is benign.
+			logger.Debug().Err(err).Msg("cores: noop already registered")
+		} else {
+			logger.Info().Msg("cores: registered noop provider (dev mode)")
+		}
+	}
+
+	// 2. Open the pg pool when at least one
+	//    service needs it. If no service is
+	//    configured for pg, skip the connection
+	//    entirely so a dev run with only memory
+	//    stores does not require a live database.
+	pool, err := openPgPoolIfNeeded(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if pool != nil {
+		// Apply migrations on the same pool the
+		// runtime uses. We deliberately do NOT
+		// open a sibling *sql.DB through the pgx
+		// stdlib adapter: that adapter does not
+		// honour multi-statement transactions,
+		// and Aegis migrations rely on
+		// BEGIN; ... COMMIT; in each file.
+		if err := migrations.Up(ctx, pool, "migrations"); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("migrations: failed to apply: %w", err)
+		}
+	} else {
+		logger.Info().Msg("db: all stores in memory; skipping pg pool")
+	}
+
+	a := &App{Config: cfg, Pool: pool}
+
+	// 3. Auth. The dev seed is only allowed in
+	//    non-production; a production boot with
+	//    the memory auth store is refused so a
+	//    known-public credential cannot ship.
+	authSigner := auth.NewSigner(cfg.JWTSecret)
+	authStore := MustBuild(pool, StoreBuilder[auth.Store]{
+		Name:    "auth",
+		Backend: cfg.AuthBackend,
+		PgCtor:  func(p *pgxpool.Pool) auth.Store { return auth.NewPgStore(p) },
+		MemCtor: func() auth.Store {
+			// The dev seed admin. MustBuild's
+			// production check refuses this branch
+			// when Env == "production".
+			return auth.NewMemoryStore().WithUser(&auth.User{
+				ID:           "u-bootstrap",
+				Username:     "admin",
+				Email:        "admin@localhost",
+				PasswordHash: mustHashDevPassword(),
+				Role:         "super-admin",
+				Enabled:      true,
+				Scopes: auth.Scopes{
+					auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite,
+					auth.ScopeNodes, auth.ScopeUsers, auth.ScopeSubscriptions,
+					auth.ScopeHosts, auth.ScopeAudits,
+				},
+				CreatedAt: time.Now().UTC(),
+			})
+		},
+		Env: cfg.Env,
+	})
+	if cfg.AuthBackend != "pg" {
+		logger.Warn().Msg("auth: using in-memory store with the dev seed (username: admin, password: aegis-dev-password). DO NOT use in production.")
+	}
+	a.Auth = auth.NewService(authSigner, authStore)
+
+	// 4. Nodes.
+	nodesStore := MustBuild(pool, StoreBuilder[nodes.Store]{
+		Name:    "nodes",
+		Backend: cfg.NodesBackend,
+		PgCtor:  func(p *pgxpool.Pool) nodes.Store { return nodes.NewPgStore(p) },
+		MemCtor: func() nodes.Store { return nodes.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Nodes = nodes.NewService(nodesStore)
+
+	// 5. Inbounds references nodes.
+	inboundsStore := MustBuild(pool, StoreBuilder[inbounds.Store]{
+		Name:    "inbounds",
+		Backend: cfg.InboundsBackend,
+		PgCtor:  func(p *pgxpool.Pool) inbounds.Store { return inbounds.NewPgStore(p) },
+		MemCtor: func() inbounds.Store { return inbounds.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Inbounds = inbounds.NewService(inboundsStore, a.Nodes)
+
+	// 6. Hosts references nodes + inbounds.
+	hostsStore := MustBuild(pool, StoreBuilder[hosts.Store]{
+		Name:    "hosts",
+		Backend: cfg.HostsBackend,
+		PgCtor:  func(p *pgxpool.Pool) hosts.Store { return hosts.NewPgStore(p) },
+		MemCtor: func() hosts.Store { return hosts.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Hosts = hosts.NewService(hostsStore, a.Nodes, a.Inbounds)
+
+	// 7. Users.
+	usersStore := MustBuild(pool, StoreBuilder[users.Store]{
+		Name:    "users",
+		Backend: cfg.UsersBackend,
+		PgCtor:  func(p *pgxpool.Pool) users.Store { return users.NewPgStore(p) },
+		MemCtor: func() users.Store { return users.NewMemoryStore(nil) },
+		Env:     cfg.Env,
+	})
+	a.Users = users.NewService(usersStore)
+
+	// 8. Plans.
+	plansStore := MustBuild(pool, StoreBuilder[plans.Store]{
+		Name:    "plans",
+		Backend: cfg.PlansBackend,
+		PgCtor:  func(p *pgxpool.Pool) plans.Store { return plans.NewPgStore(p) },
+		MemCtor: func() plans.Store { return plans.NewMemoryStore(nil) },
+		Env:     cfg.Env,
+	})
+	a.Plans = plans.NewService(plansStore)
+
+	// 9. Webhooks. pg backend requires the age
+	//    secret cipher; the memory backend uses
+	//    the NoopSecretCipher. We do not route
+	//    this through MustBuild because the pg
+	//    constructor needs the cipher and the
+	//    memory constructor does not — a one-off
+	//    switch is the smaller code.
+	var webhooksStore webhooks.Store
+	switch cfg.WebhooksBackend {
+	case "pg":
+		cipher, err := webhooks.NewAgeSecretCipher(
+			cfg.WebhooksSecretAgeRecipients,
+			cfg.WebhooksSecretAgeKeyFile,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("webhooks: failed to build age secret cipher: %w", err)
+		}
+		webhooksStore = webhooks.NewPgStore(pool, cipher)
+		logger.Info().
+			Int("recipients", len(cfg.WebhooksSecretAgeRecipients)).
+			Str("key_file", cfg.WebhooksSecretAgeKeyFile).
+			Msg("webhooks: using pgx-backed store (PgStore, age-encrypted secret)")
+	default:
+		webhooksStore = webhooks.NewMemoryStore()
+		logger.Warn().Msg("webhooks: using in-memory store (MemoryStore, dev only — secret is plaintext)")
+	}
+	a.Webhooks = webhooks.NewService(webhooksStore)
+
+	// 10. Wire the v0.7.x outbound event surface
+	//     into every mutating service. The setter
+	//     is preferred over a constructor argument
+	//     so the existing unit tests stay
+	//     untouched. Order does not matter: the
+	//     dispatch is invoked AFTER the row is
+	//     persisted. `Backups` is wired below, after
+	//     the backups New().
+	a.Nodes.WithWebhooks(a.Webhooks)
+	a.Inbounds.WithWebhooks(a.Webhooks)
+	a.Hosts.WithWebhooks(a.Webhooks)
+	a.Users.WithWebhooks(a.Webhooks)
+	a.Plans.WithWebhooks(a.Webhooks)
+
+	// 11. Background retry worker.
+	if cfg.WebhooksRetryWorkerEnabled {
+		workerCtx, cancel := context.WithCancel(ctx)
+		w := webhooks.NewWorker(a.Webhooks, cfg.WebhooksRetryWorkerInterval)
+		go func() {
+			defer cancel()
+			if err := w.Run(workerCtx); err != nil {
+				log.Error().Err(err).Msg("webhooks: retry worker exited")
+			}
+		}()
+		a.webhooksWorkerCancel = cancel
+		logger.Info().
+			Dur("interval", cfg.WebhooksRetryWorkerInterval).
+			Msg("webhooks: retry worker started")
+	} else {
+		logger.Warn().Msg("webhooks: retry worker DISABLED (AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false); retries must be fired manually")
+	}
+
+	// 12. Subscription.
+	subscriptionStore := MustBuild(pool, StoreBuilder[subscription.Store]{
+		Name:    "subscription",
+		Backend: cfg.SubscriptionBackend,
+		PgCtor:  func(p *pgxpool.Pool) subscription.Store { return subscription.NewPgStore(p) },
+		MemCtor: func() subscription.Store { return subscription.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Subs = subscription.NewService(subscriptionStore, a.Hosts, a.Nodes, a.Inbounds)
+
+	// 13. Panel-wide config.
+	panelCfgStore := MustBuild(pool, StoreBuilder[panelcfg.Store]{
+		Name:    "panelcfg",
+		Backend: cfg.PanelcfgBackend,
+		PgCtor:  func(p *pgxpool.Pool) panelcfg.Store { return panelcfg.NewPgStore(p) },
+		MemCtor: func() panelcfg.Store { return panelcfg.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.PanelCfg = panelcfg.NewService(panelCfgStore)
+
+	// 14. Audit log.
+	auditsStore := MustBuild(pool, StoreBuilder[audits.Store]{
+		Name:    "audits",
+		Backend: cfg.AuditsBackend,
+		PgCtor:  func(p *pgxpool.Pool) audits.Store { return audits.NewPgStore(p) },
+		MemCtor: func() audits.Store { return audits.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Audits = audits.NewService(auditsStore)
+
+	// 15. Bootstrap (BYO Node) service. References
+	//     nodes + audits. No backend switch: the
+	//     bootstrap store is in-process state,
+	//     not a separate pg table.
+	a.Bootstrap = bootstrap.NewService(bootstrap.ServiceConfig{
+		Nodes:       &nodes.BootstrapNodeProvider{Svc: a.Nodes},
+		Audits:      a.Audits,
+		AgentBinary: cfg.AgentBinaryPath,
+		KnownHosts:  cfg.AgentKnownHosts,
+		SSHUser:     cfg.AgentSSHUser,
+		SSHPort:     cfg.AgentSSHPort,
+	})
+
+	// 16. Backups. The store is always LocalStore
+	//     in v0.5.0 (a JSON index next to the dump
+	//     files). The pool may be nil when the
+	//     panel runs without pg (dev mode).
+	backupsBackend, err := backups.NewOSBackend(cfg.BackupsDir)
+	if err != nil {
+		return nil, fmt.Errorf("backups: failed to initialise backend: %w (dir=%s)", err, cfg.BackupsDir)
+	}
+	backupsStore := backups.NewLocalStore(backupsBackend)
+	a.Backups = backups.New(
+		backups.Config{
+			PostgresDSN:    cfg.PostgresDSN,
+			BackupsDir:     cfg.BackupsDir,
+			AllowUIRestore: cfg.BackupsAllowUIRestore,
+			RetentionDays:  cfg.BackupsRetentionDays,
+			MaxCount:       cfg.BackupsMaxCount,
+		},
+		backupsStore, pool,
+	)
+	a.Backups.WithWebhooks(a.Webhooks)
+	logger.Info().
+		Str("dir", cfg.BackupsDir).
+		Int("retention_days", cfg.BackupsRetentionDays).
+		Int("max_count", cfg.BackupsMaxCount).
+		Bool("allow_ui_restore", cfg.BackupsAllowUIRestore).
+		Msg("backups: service initialised")
+
+	// 17. Subscription endpoint rate limiter.
+	//     One instance shared across the default
+	//     and the rotated sub_path mount.
+	a.SubLimiter = newSubscriptionRateLimiter(cfg)
+
+	// 18. Best-effort known_hosts setup. Not
+	//     fatal: the installer falls back to a
+	//     per-install TempFile.
+	if err := bootstrap.EnsureKnownHosts(cfg.AgentKnownHosts); err != nil {
+		logger.Warn().Err(err).Str("path", cfg.AgentKnownHosts).
+			Msg("bootstrap: known_hosts setup failed; installer will use a per-call TempFile")
+	}
+
+	// 19. Router. We do not start the server here
+	//     so the cmd/ binary can wrap the handler
+	//     in obs.Middleware before ListenAndServe.
+	a.Router = router.Build(
+		ctx,
+		cfg,
+		a.Auth, a.Nodes, a.Hosts, a.Inbounds,
+		a.Subs, a.Users, a.PanelCfg, a.Audits,
+		a.Plans, a.Bootstrap, a.Backups, a.Webhooks,
+		a.SubLimiter,
+	)
+
+	// 20. http.Server. The cmd/ binary owns
+	//     graceful shutdown.
+	a.Server = &http.Server{
+		Addr:              cfg.HTTPAddr,
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           obs.Middleware(a.Router),
+	}
+
+	return a, nil
+}
+
+// openPgPoolIfNeeded opens the pg pool when at
+// least one AEGIS_*_BACKEND env var is set to
+// "pg". A nil pool is returned (without error)
+// when no backend needs pg, so a memory-only dev
+// run does not require a live database.
+func openPgPoolIfNeeded(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
+	if !needsPg(cfg) {
+		return nil, nil
+	}
+	p, err := db.Open(ctx, cfg.PostgresDSN)
+	if err != nil {
+		return nil, fmt.Errorf("db: failed to open postgres connection pool: %w", err)
+	}
+	return p, nil
+}
+
+// needsPg reports whether any AEGIS_*_BACKEND
+// env var is set to "pg". Hoisted to a helper so
+// callers do not have to know which backends
+// exist before they ask Build whether the pool
+// will exist.
+func needsPg(cfg *config.Config) bool {
+	return cfg.AuthBackend == "pg" ||
+		cfg.HostsBackend == "pg" ||
+		cfg.NodesBackend == "pg" ||
+		cfg.InboundsBackend == "pg" ||
+		cfg.SubscriptionBackend == "pg" ||
+		cfg.UsersBackend == "pg" ||
+		cfg.PlansBackend == "pg" ||
+		cfg.PanelcfgBackend == "pg" ||
+		cfg.AuditsBackend == "pg" ||
+		cfg.WebhooksBackend == "pg"
+}
+
+// mustHashDevPassword is the dev seed admin's
+// argon2id hash. It panics on the (unreachable)
+// hash failure because the dev seed is exactly
+// the path where a hash error is unrecoverable —
+// if we cannot produce a valid hash, the dev
+// environment is broken and a panic is the
+// right outcome. Production boots never reach
+// this code (the memory-backend + production
+// check in `MustBuild` short-circuits first).
+func mustHashDevPassword() string {
+	h, err := auth.HashPassword("aegis-dev-password")
+	if err != nil {
+		panic(fmt.Errorf("seed hash: %w", err))
+	}
+	return h
+}
+
+// Close stops the webhook retry worker and
+// releases the pg pool. Safe to call on a nil
+// receiver and safe to call multiple times.
+func (a *App) Close() {
+	if a == nil {
+		return
+	}
+	if a.webhooksWorkerCancel != nil {
+		a.webhooksWorkerCancel()
+		a.webhooksWorkerCancel = nil
+	}
+	if a.Pool != nil {
+		a.Pool.Close()
+		a.Pool = nil
+	}
+}
+
+// newSubscriptionRateLimiter builds the per-
+// sub_token rate limiter the HTTP layer hands
+// to subscription.RouterWithLimiter. The
+// settings are taken from cfg; a non-positive
+// RPS disables throttling (the v0.1.0
+// behaviour).
+//
+// Defaults (1 rps, 5 burst, 50k keys) are
+// tuned for a single-user-with-multiple-devices
+// usage model: a phone + laptop + tablet +
+// desktop can all wake up at once after a 24h
+// client poll cycle and still fit inside the
+// burst budget.
+func newSubscriptionRateLimiter(cfg *config.Config) *ratelimit.Limiter {
+	if cfg.SubscriptionRateLimitRPS <= 0 {
+		log.Info().Msg("subscription rate limiter disabled (AEGIS_SUBSCRIPTION_RATELIMIT_RPS <= 0)")
+		return nil
+	}
+	l := ratelimit.New(
+		cfg.SubscriptionRateLimitRPS,
+		cfg.SubscriptionRateLimitBurst,
+		10*time.Minute, // idle: a stale token gets a fresh burst on first re-use
+	)
+	if cfg.SubscriptionRateLimitMaxKeys > 0 {
+		l.SetMaxKeys(cfg.SubscriptionRateLimitMaxKeys)
+	}
+	log.Info().
+		Float64("rps", cfg.SubscriptionRateLimitRPS).
+		Float64("burst", cfg.SubscriptionRateLimitBurst).
+		Int("max_keys", cfg.SubscriptionRateLimitMaxKeys).
+		Msg("subscription rate limiter enabled")
+	return l
+}
