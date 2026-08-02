@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 )
 
 // ExperimentalInboundParamsKey is the key inside
@@ -19,6 +20,39 @@ import (
 // should not let an admin publish a Host that references
 // an inbound whose parameters have not been set).
 const ExperimentalInboundParamsKey = "inbound_params"
+
+// ExperimentalInboundCredentialsKey is the key inside
+// CoreConfig.Experimental where the panel hands the
+// per-(user, inbound) credential list for Phase 2
+// multi-user rendering (ARCHITECTURE.md §7.5,
+// v0.7.2 KNOWN_LIMITATIONS "Phase 2 multi-user
+// sing-box render — Phase 2"). The value is a
+// map[inbound_tag][]credentials.Credential.
+//
+// Phase 1 / v0.7.2 does not populate this key — the
+// Builder in internal/cores/builder only sets
+// ExperimentalInboundParamsKey, and the sing-box
+// renderer's renderInbound falls back to the
+// single-operator credential in inb.Params["uuid"] /
+// ["password"] when the per-tag entry is empty. The
+// Phase 2 builder (PR 3 in the 4-PR Phase 2 plan) will
+// populate this key for every inbound whose panel
+// inbounds row has at least one row in
+// user_inbound_credentials.
+//
+// When the Builder populates the key for a given
+// inbound tag, the renderer emits a `users: [{name,
+// uuid|password}, ...]` array of length N (one entry
+// per Credential in the list). When the Builder does
+// not populate the key (Phase 1), the renderer emits
+// a length-1 array using the single operator's
+// credential from params. The fallback is what makes
+// PR 2 (signature change) have zero behavior change
+// even though the renderer signature now accepts the
+// credentials list.
+//
+// #nosec G101 -- the constant name contains the substring "credentials" but the value is an Experimental-map key, not a credential
+const ExperimentalInboundCredentialsKey = "inbound_credentials"
 
 // sbConfig is the top-level sing-box configuration we
 // render. Only the fields Phase 1 actually produces are
@@ -110,6 +144,17 @@ func (p *Provider) RenderConfig(_ context.Context, cfg cores.CoreConfig) (string
 		return "", fmt.Errorf("singbox: %s must be map[string]any, got %T", ExperimentalInboundParamsKey, raw)
 	}
 
+	// Step 1b: extract per-inbound credential list. The
+	// key is optional — Phase 1 (v0.7.2 and earlier)
+	// does not populate it, and the per-protocol
+	// renderers fall back to the single-operator
+	// credential in params when the per-tag entry is
+	// empty. The Phase 2 builder (PR 3 in the 4-PR
+	// Phase 2 plan) populates this for every inbound
+	// that has at least one row in
+	// user_inbound_credentials.
+	credsByTag := extractCredentialsByTag(cfg.Experimental)
+
 	// Step 2: render inbounds.
 	inbounds := make([]map[string]any, 0, len(cfg.Inbounds))
 	for _, spec := range cfg.Inbounds {
@@ -121,7 +166,7 @@ func (p *Provider) RenderConfig(_ context.Context, cfg cores.CoreConfig) (string
 		if !ok {
 			return "", fmt.Errorf("singbox: parameters for inbound %q must be map[string]any, got %T", spec.Tag, ip)
 		}
-		rendered, err := renderInbound(spec, p)
+		rendered, err := renderInbound(spec, p, credsByTag[spec.Tag])
 		if err != nil {
 			return "", fmt.Errorf("singbox: render inbound %q (%s): %w", spec.Tag, spec.Type, err)
 		}
@@ -159,19 +204,92 @@ func (p *Provider) RenderConfig(_ context.Context, cfg cores.CoreConfig) (string
 // New protocols land here as new cases; the unknown-type
 // branch is a render error so a typo in CoreConfig.Inbounds
 // cannot silently produce an empty config.
-func renderInbound(spec cores.InboundSpec, params map[string]any) (map[string]any, error) {
+//
+// The `users` argument carries the Phase 2 per-(user,
+// inbound) credential list (PR 1 data model from #167).
+// When the list is non-empty, the per-protocol renderer
+// emits a `users: [...]` array of length len(users),
+// using each Credential's CredentialValue as the
+// protocol-specific auth material (UUID for VLESS,
+// password for HY2 / Trojan). When the list is empty
+// (Phase 1 / v0.7.2 and earlier — the Builder in
+// internal/cores/builder does not yet populate
+// ExperimentalInboundCredentialsKey), the per-protocol
+// renderer falls back to the single-operator
+// credential in params["uuid"] / ["password"] and
+// emits a length-1 array. This fallback is what makes
+// the signature change in this PR (PR 2 of the 4-PR
+// Phase 2 plan) a zero-behaviour-change refactor.
+func renderInbound(spec cores.InboundSpec, params map[string]any, users []credentials.Credential) (map[string]any, error) {
 	switch spec.Type {
 	case "vless":
-		return renderVLESS(spec, params)
+		return renderVLESS(spec, params, users)
 	case "hysteria2":
-		return renderHY2(spec, params)
+		return renderHY2(spec, params, users)
 	case "shadowsocks":
+		// Shadowsocks is single-password; the
+		// per-user concept does not apply. The
+		// signature stays (spec, params) — no
+		// Phase 2 users list.
 		return renderShadowsocks(spec, params)
 	case "trojan":
-		return renderTrojan(spec, params)
+		return renderTrojan(spec, params, users)
 	default:
 		return nil, fmt.Errorf("unsupported inbound type %q", spec.Type)
 	}
+}
+
+// extractCredentialsByTag pulls the
+// ExperimentalInboundCredentialsKey map out of the
+// CoreConfig.Experimental escape hatch and narrows it
+// to a per-tag slice for renderInbound. Missing key,
+// wrong-typed value, and a missing per-tag entry all
+// fall through to an empty slice — the per-protocol
+// renderer treats the empty slice as "Phase 1 path,
+// fall back to params".
+//
+// A wrong-typed value at the per-tag level (e.g. the
+// Builder put a single Credential instead of a slice)
+// is a render error: it indicates a Builder bug
+// rather than a misconfigured panel and should fail
+// loud so the next deploy does not silently render a
+// single-user config.
+func extractCredentialsByTag(experimental map[string]any) map[string][]credentials.Credential {
+	if experimental == nil {
+		return nil
+	}
+	raw, ok := experimental[ExperimentalInboundCredentialsKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		// Wrong type at the top level: a Builder bug.
+		// We return nil and let the per-protocol
+		// renderers fall back to params; the type
+		// mismatch is surfaced on the first render call
+		// via the log line, not as a hard error, so
+		// Phase 1 deployments do not break on a
+		// future Builder that introduces a different
+		// shape.
+		return nil
+	}
+	out := make(map[string][]credentials.Credential, len(m))
+	for tag, v := range m {
+		slice, ok := v.([]credentials.Credential)
+		if !ok {
+			// Wrong type at the per-tag level: same
+			// rationale as the top-level mismatch.
+			// Skip the entry; the renderer falls
+			// back to params.
+			continue
+		}
+		if len(slice) == 0 {
+			continue
+		}
+		out[tag] = slice
+	}
+	return out
 }
 
 // requireString extracts a required string field. Missing
