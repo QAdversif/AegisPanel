@@ -172,7 +172,10 @@ function parseDurationInput(input: string): bigint | null {
   if (!m) return null
   const num = Number(m[1])
   if (!Number.isFinite(num) || num < 0) return null
-  const unit = m[2].toLowerCase()
+  // Regex has 2 capture groups; m[2] is always a string here.
+  // The non-null assertion is required by noUncheckedIndexedAccess
+  // (enabled by @vue/tsconfig 0.8.x).
+  const unit = m[2]!.toLowerCase()
   const multipliers: Record<string, bigint> = {
     s: NS_PER_SECOND,
     m: NS_PER_MINUTE,
@@ -183,7 +186,10 @@ function parseDurationInput(input: string): bigint | null {
   // Round to nearest ns. Float arithmetic with
   // bigint is awkward; convert via string.
   const wholeNs = BigInt(Math.trunc(num * 1_000_000_000))
-  return (wholeNs * multipliers[unit]) / 1_000_000_000n
+  // `unit` is guaranteed to be a key of `multipliers` (the regex
+  // captures are from [smhdw]); the `!` is required by
+  // noUncheckedIndexedAccess.
+  return (wholeNs * multipliers[unit]!) / 1_000_000_000n
 }
 
 // --- Form schemas -----------------------------------------------------
