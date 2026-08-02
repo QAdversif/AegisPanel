@@ -102,7 +102,21 @@ type clashDoc struct {
 //
 // Empty input returns a valid empty document
 // (`proxies: []`) and a nil error.
-func (s *Service) RenderClash(_ context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+//
+// Phase 2 (v0.7.x): the renderer pre-computes the
+// user's per-(user, inbound) credentials via
+// `s.creds.ListByUser(ctx, u.ID)`. Each per-endpoint
+// builder receives the per-endpoint credential via
+// the `userCred` parameter; when non-empty, the
+// builder uses the user-specific credential as
+// the protocol auth material. When empty, the
+// builder falls back to `params["uuid"]` /
+// `["password"]` (the v0.7.2 single-credential
+// path). See the singbox renderer for the full
+// Phase 1 / Phase 2 contract — the clash renderer
+// is the same pattern.
+func (s *Service) RenderClash(ctx context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+	s.precomputeUserCreds(ctx, u)
 	if len(eps) > 0 {
 		// Apply format variables + wildcard salt
 		// once, before the per-endpoint builder.
@@ -117,7 +131,7 @@ func (s *Service) RenderClash(_ context.Context, u *User, eps []ResolvedEndpoint
 	}
 	doc := clashDoc{Proxies: make([]clashProxy, 0, len(eps))}
 	for _, ep := range eps {
-		proxy, err := renderClashProxy(ep)
+		proxy, err := renderClashProxy(ep, s.userCredFor(ep.Inbound.ID))
 		if err != nil {
 			// A single unrenderable endpoint
 			// must not poison the whole
@@ -133,18 +147,30 @@ func (s *Service) RenderClash(_ context.Context, u *User, eps []ResolvedEndpoint
 // renderClashProxy is the per-protocol proxy builder.
 // Unknown protocols return an error so the caller
 // can skip the endpoint.
-func renderClashProxy(ep ResolvedEndpoint) (clashProxy, error) {
+//
+// `userCred` is the per-(user, inbound) credential
+// value from the Phase 2 multi-user path. When
+// non-empty, the per-protocol builder uses it as
+// the protocol auth material. When empty, the
+// builder falls back to the inbound's `params`.
+// Shadowsocks ignores `userCred` (single-password
+// protocol by design).
+func renderClashProxy(ep ResolvedEndpoint, userCred string) (clashProxy, error) {
 	address, port := effectiveAddress(ep)
 	tag := displayName(ep.Host)
 	switch ep.Inbound.Protocol {
 	case inbounds.ProtocolVLESS:
-		return buildClashVLESS(ep, address, port, tag), nil
+		return buildClashVLESS(ep, address, port, tag, userCred), nil
 	case inbounds.ProtocolHysteria2:
-		return buildClashHysteria2(ep, address, port, tag), nil
+		return buildClashHysteria2(ep, address, port, tag, userCred), nil
 	case inbounds.ProtocolShadowsocks:
+		// Shadowsocks is single-password by
+		// protocol design; the per-user cred is
+		// ignored. The builder still uses
+		// params["password"].
 		return buildClashShadowsocks(ep, address, port, tag), nil
 	case inbounds.ProtocolTrojan:
-		return buildClashTrojan(ep, address, port, tag), nil
+		return buildClashTrojan(ep, address, port, tag, userCred), nil
 	default:
 		return nil, fmt.Errorf("unknown protocol: %s", ep.Inbound.Protocol)
 	}
@@ -154,9 +180,12 @@ func renderClashProxy(ep ResolvedEndpoint) (clashProxy, error) {
 
 // buildClashVLESS produces a Clash VLESS proxy entry.
 //
-// Required inbound params:
+// Required inbound params (Phase 1 / v0.7.2 path
+// when `userCred` is empty):
 //
-//	uuid: string  (UUID for the user)
+//	uuid: string  (UUID for the operator — used when
+//	              the user has not been issued a
+//	              per-(user, inbound) credential)
 //
 // Optional:
 //
@@ -171,8 +200,16 @@ func renderClashProxy(ep ResolvedEndpoint) (clashProxy, error) {
 // The `client-fingerprint` field is the Clash Meta
 // equivalent of sing-box's `utls.fingerprint`. They
 // share the same set of values.
-func buildClashVLESS(ep ResolvedEndpoint, addr string, port int, tag string) clashProxy {
-	uuidStr := paramString(ep.Inbound.Params, "uuid")
+//
+// Phase 2 (v0.7.x multi-user): when `userCred` is
+// non-empty, the builder uses it as the `uuid` field.
+// When empty, the builder falls back to
+// `params["uuid"]`.
+func buildClashVLESS(ep ResolvedEndpoint, addr string, port int, tag, userCred string) clashProxy {
+	uuidStr := userCred
+	if uuidStr == "" {
+		uuidStr = paramString(ep.Inbound.Params, "uuid")
+	}
 	out := clashProxy{
 		"name":   tag,
 		"type":   "vless",
@@ -236,8 +273,11 @@ func buildClashVLESS(ep ResolvedEndpoint, addr string, port int, tag string) cla
 //	sni:         string
 //	alpn:        []string
 //	obfs_type:   string  (salamander obfuscation)
-func buildClashHysteria2(ep ResolvedEndpoint, addr string, port int, tag string) clashProxy {
-	password := paramString(ep.Inbound.Params, "password")
+func buildClashHysteria2(ep ResolvedEndpoint, addr string, port int, tag, userCred string) clashProxy {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	out := clashProxy{
 		"name":     tag,
 		"type":     "hysteria2",
@@ -293,8 +333,11 @@ func buildClashShadowsocks(ep ResolvedEndpoint, addr string, port int, tag strin
 // `tls: true` (the operator can opt out via the
 // params if needed, but the Phase 0 default is the
 // safe one).
-func buildClashTrojan(ep ResolvedEndpoint, addr string, port int, tag string) clashProxy {
-	password := paramString(ep.Inbound.Params, "password")
+func buildClashTrojan(ep ResolvedEndpoint, addr string, port int, tag, userCred string) clashProxy {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	out := clashProxy{
 		"name":     tag,
 		"type":     "trojan",
