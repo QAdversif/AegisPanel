@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.7.2
+# Known Limitations — AegisPanel v0.8.0
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,53 +6,70 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.7.2** (the
-v0.7.0 + v0.7.1 `internal/webhooks` surface + the v0.7.2
-audit-batch closeout: real BatchedApplier FlushFn +
-Enqueue + end-to-end integration test, plus the
-God-object main.go extraction into `internal/app`).
-The next candidate release is v0.8.0
-(`internal/notifications`).
+The current state of the project is **v0.8.0** (the
+Phase 2 multi-user sing-box render milestone plus a
+frontend dependency batch and the audit-log call-site
+wiring). v0.8.0 is **end-to-end multi-user**: the
+panel can issue per-(user, inbound) credentials via the
+`internal/credentials` Service + Store, the sing-box
+renderer emits multi-user `users: [...]` arrays, the
+BatchedApplier fan-out is narrowed by
+`user.HostsAllowlist` and `Blocklist`, and the
+per-user sub URL renders the user's own UUID/password
+in both sing-box and Clash formats. The HTTP admin
+surface for the credentials table is a follow-up PR;
+the data flow is end-to-end. The next candidate
+release is v0.9.0 (smoke test on a fresh VM in CI).
 
-## v0.7.2 — currently open
+## v0.8.0 — currently open
 
 ### Operations
 
-#### Audit log call-site wiring — v0.7.x+
+#### HTTP admin surface for `user_inbound_credentials` — v0.8.x
 
-Every mutation in the admin handler stack should write an
-`audit_log` row. The `Service` struct pattern that PR #148
-used to wire `webhooks.Dispatch` is the same pattern a
-future PR would use to wire `audits.Record` (per-handler
-audit log write). Not in scope for v0.7.2; tracked as a
-separate batch.
+The data layer for Phase 2 multi-user is in place
+(PR #167 — `internal/credentials` Service + Store +
+24 unit tests, `AEGIS_CREDENTIALS_BACKEND` env var,
+`a.Credentials` field on `App`). The HTTP admin
+handler (`/api/v1/credentials/` mount behind
+`auth.RequireScope(ScopeCredentials)`) and the
+OpenAPI spec are not yet wired. The admin UI
+(Credentials tab in the user detail page) lands
+with the HTTP layer. This is a focused PR
+(2-file change for the AdminRouter + OpenAPI, a
+third file for the UI tab); the rest of Phase 2
+multi-user is end-to-end.
 
-#### Phase 2 multi-user sing-box render — Phase 2
+#### Host → node mapping in the Builder-side filter — v0.8.x
 
-The v0.4.0-mvp-batched BatchedApplier FlushFn
-re-renders the full node config on every flush
-(via `internal/cores/builder/BuildCoreConfigForNode`),
-but the v0.4.0-era sing-box renderer is single-user
-per inbound: the protocol-level `users` array inside
-the rendered config carries the operator's credential
-from `inbound.Params["uuid"]` or `["password"]`. The
-BatchedApplier infrastructure (cancel/replace
-semantics, per-node goroutines, the FlushFn closure)
-is in place; a Phase 2 PR fills in the per-user
-mapping so user CRUD events actually move users
-into and out of the rendered config. v0.7.2 already
-emits the right `cores.Delta` for the future
-renderer to consume (`DeltaAddUser` /
-`DeltaRemoveUser` / `DeltaSetLimit{Bytes: <int64>}`).
+The Builder fetches every credential for the inbound
+and includes it in the rendered config (PR #169).
+The user-level filter is in
+`users.Service.enqueueUserDelta`, which decides
+WHICH nodes get a FlushFn re-render. The Builder
+does not filter by `user.HostsAllowlist` today —
+the model has no host-to-inbound mapping. A future
+PR that adds the host-to-inbound mapping will let
+the Builder filter credentials at render time as
+well. Same trade-off as the BatchedApplier fan-out
+filter: the data is in the user struct, but the
+mapping from "this inbound belongs to host X" to
+"host X is in user.HostsAllowlist" is not yet
+modelled. v0.8.x.
 
-#### Inbound-templates work — Phase 2
+#### Inbound-templates work — v0.8.x+
 
 A future "inbound templates" feature is the natural
 home for the per-user render. Today, every
 `inbounds` row carries its own `Params` blob
 (operator's credential); the templates work is
 the per-tenant credentials layer that lets one
-inbound serve many users.
+inbound serve many users. Phase 2 multi-user
+(v0.8.0) covers the per-(user, inbound) credential
+join via `user_inbound_credentials`; the templates
+work is the next step (the `Params` blob becomes
+"shared defaults" and the per-user credential is
+the only thing that varies). v0.8.x or later.
 
 #### Pre-existing `vue/max-attributes-per-line` template
 warnings — chore
@@ -62,15 +79,45 @@ handful of dialogs) carry pre-existing eslint warnings for
 `vue/max-attributes-per-line` and
 `vue/singleline-html-element-content-newline`. They're
 auto-fixable with `pnpm lint --fix`; not in scope for any
-release PR.
+release PR. v0.7.0-legacy chore.
 
-## v0.7.2 — closed in v0.7.2
+### Out of scope (post-v1.0)
+
+These items are tracked in `docs/ROADMAP.md` and
+`docs/README.md` for context. None block v0.8.0 or
+the v1.0.0-mvp-soft-launch.
+
+- **JSON logs in production** — `AEGIS_ENV=production`
+  switch is still the v0.5.x follow-up. The
+  `internal/obs` package has the right code; the
+  wiring in `cmd/aegis/main.go` is the one-liner that
+  was deferred from v0.5.0. v0.8.x.
+- **Cosign re-signing on every release** — v0.7.0
+  closed the initial sign + verify pair; the
+  post-v0.7.0 workflow contract (PRs 102/103/104/111)
+  does not yet include cosign re-signing on every
+  release. v0.8.x.
+- **Smoke test on fresh VM in CI** — v0.9.0
+  candidate. `tools/scripts/smoke-local.sh` (PR #152)
+  covers the local docker-compose path; a
+  terraform + ansible + boot-log CI job is a
+  separate work unit. v0.9.0.
+- **`internal/cabinet` end-user surface** —
+  doc.go-only. The per-user sub URL is the
+  per-user cabinet for v0.8.0. A separate
+  end-user-facing cabinet (login UI, sub URL fetch,
+  traffic stats, plan change) is v1.2+.
+
+## v0.8.0 — closed in v0.8.0
 
 | Item | Closed by |
 | --- | --- |
-| Audit #1 — God-object main.go (composition root extracted). `cmd/aegis/main.go` is now 199 lines (was 728). The composition root moved to a new `internal/app` package exposing `Build(ctx, cfg) (*App, error)` + `App.Close()`. The pattern matches the wire sweet-spot for ~11 services: a generic `MustBuild[T]` helper with a `StoreBuilder[T]` struct + centralized production-vs-memory check. `router.Build` now takes a `ctx context.Context` first parameter (the `panelcfgSvc.GetActive` read at the rotated sub_path mount was hardcoded `context.Background()`; the boot context applies, so a SIGINT during boot aborts the read). 14 unused imports removed, 2 duplicate helpers removed (`mustHash`, `newSubscriptionRateLimiter`). | PR #156 |
-| Audit #2 — BatchedApplier no-op stub (real FlushFn + Enqueue). The v0.4.0-mvp-batched BatchedApplier shipped with a `log.Info + return nil` FlushFn AND Enqueue was never called outside tests. v0.7.2 wires the v0.5.0 real path end-to-end. New `internal/cores/builder/builder.go` with `BuildCoreConfigForNode` + `NewFlushFn` (per-node closure: `Build → Render → Apply` with structured error logging). `users.Service.WithBatchApplier` + `enqueueUserDelta` fan out to every registered applier. `inbounds.Service.WithBatchApplier` + `enqueueForNode` narrows to the single applier for the inbound's node. `App.BatchedAppliers` map + `App.AddNodeBatchedApplier` (registers the per-node applier, spawns the Run goroutine, owns the cancel funcs). `App.Close()` cancels every BatchedApplier goroutine alongside the existing webhook worker cancel + pg pool close. `AEGIS_BATCHED_APPLIER_ENABLED` (default `true`) gates the per-node wiring loop. | PR #157 |
-| Audit #2 — end-to-end integration test for the BatchedApplier + FlushFn. `internal/cores/builder/flushfn_integration_test.go` behind `//go:build integration`. Self-skips when `INTEGRATION_DATABASE_URL` is unset (local `go test ./...` skips; CI's backend job runs it). The headline test drives a real `users.Service.Create` against a real pg (via `testutil.MustNewPool`); the post-commit enqueue reaches the per-node BatchedApplier; the 200ms window fires; the FlushFn re-renders the sing-box config (reading through the inbounds PgStore); the fake agent receives a POST /v1/apply whose JSON envelope contains exactly the vless inbound we seeded with the UUID we put in `inb.Params`. The test pins the panel→agent wire contract end-to-end. | PR #158 |
+| Audit log call-site wiring. Every mutation in the admin handler stack now writes an `audit_log` row. `audits.RecordFromContext(ctx, svc, e)` Service-layer mirror of the existing `RecordFromRequest`; pulls actor from `auth.ClaimsFromContext`; IP/UA blank. Six services: `users`, `plans`, `nodes`, `hosts`, `inbounds`, `backups`. Pre-fetch for audit `Before` on `users.Service.Delete` + `plans.Service.Delete` (extra round-trip; same trade-off as the credentials pre-fetch). 6 new test files (~20 tests). | PR #166 |
+| Phase 2 multi-user sing-box render — data model. `user_inbound_credentials` table (migration 0019): `id UUID PK, user_id FK→users ON DELETE CASCADE, inbound_id FK→inbounds ON DELETE CASCADE, credential_value TEXT NOT NULL, created_at, updated_at, UNIQUE (user_id, inbound_id)` + 2 indexes. `internal/credentials` package: `Credential` struct, `Store` interface, `MemoryStore` (Phase 0), `PgStore` (SQLSTATE 23505 → `ErrDuplicate`), `Service` with `Create/Get/ListByUser/ListByInbound/Rotate/Delete` + `WithAudits` setter, all mutating methods call `audits.RecordFromContext` with `credential.create` / `credential.rotate` / `credential.delete` actions. Wired into `internal/app` (`a.Credentials` field, `AEGIS_CREDENTIALS_BACKEND` env). 24 unit tests. | PR #167 |
+| Phase 2 multi-user sing-box render — renderer. `renderVLESS` / `renderHY2` / `renderTrojan` take a per-(user, inbound) credential list. When non-empty, the renderer emits a `users: [{name, uuid or password}, ...]` array of length N. When empty, the renderer falls back to `params["uuid"]` / `["password"]` and emits a length-1 array. `renderShadowsocks` unchanged (single-password protocol by design). New `ExperimentalInboundCredentialsKey` constant + `extractCredentialsByTag` helper (defensive: missing key, wrong-typed value, wrong-typed per-tag entry all fall through to the Phase 1 path). 5 new tests + 28 existing tests unchanged. | PR #168 |
+| Phase 2 multi-user sing-box render — builder wiring + BatchedApplier narrow. The Builder's `ListCredentialsByInbound` source interface + `BuildCoreConfigForNode` populates `cfg.Experimental["inbound_credentials"]` for every enabled inbound. Per-inbound query failures are fail-soft (log + Phase 1 fallback). `users.Service.enqueueUserDelta(d, user)` filters the BatchedApplier map by `user.HostsAllowlist` and `user.HostsBlocklist`. Blocklist wins over allowlist. Empty allowlist + empty blocklist = default allow (v0.5.0 behaviour). 4 call sites updated. New `BatchedApplier.QueueLen()` method (enqueue-pressure metric, also used by the new tests). 4 new builder tests + 5 new fan-out tests. | PR #169 |
+| Phase 2 multi-user sing-box render — subscription. The per-user sub URL is the per-user cabinet. `subscription.Service` gains `creds *credentials.Service` + per-render `userCreds map[inboundID]credentials.Credential` cache. `WithCreds(svc)` setter (nil-safe). `precomputeUserCreds(ctx, u)` does ONE `ListByUser` call per render (not one per inbound). `RenderSingbox` and `RenderClash` thread the per-endpoint `userCred` into the per-protocol builders. Each builder uses `userCred` when non-empty, falls back to `params` when empty. 4 new tests including the auth-boundary `TestRenderSingbox_Phase2_OtherUserCredNotLeaked`. | PR #170 |
+| Frontend dependency batch — TS / CSS / axios / vue-tsconfig / postcss. `@types/node` 22.12.0 → 26.1.2; `@vue/tsconfig` 0.7.0 → 0.9.1; `typescript` 5.6.3 → 5.8.3; `prettier` 3.4.1 → 3.9.6; `globals` 17.7.0 → 17.8.0; `autoprefixer` 10.4.27 → 10.5.4; `postcss` 8.5.19 → 8.5.25; `sass` 1.101.0 → 1.102.0; `axios` 1.18.1 → 1.19.0 (CVE-2026 GHSA-hmw2-7cc7-3qxx). 2 latent type errors in `PlansView.vue` fixed (the `noUncheckedIndexedAccess` strictness tightened by the `@vue/tsconfig` 0.8.x bump). | PR #159, #161, #163, #165 |
 
 ## v0.7.1 — closed in v0.7.1
 

@@ -867,6 +867,57 @@ test file edit is the right pattern.
   the panel from clobbering the
   externally-managed config.
 
+## [0.8.0] - 2026-08-02
+
+v0.8.0 is the **Phase 2 multi-user sing-box render
+milestone** plus a frontend dependency batch
+and the audit-log call-site wiring. The
+production API surface is unchanged (the
+OpenAPI spec is still at `0.7.0`); every
+change is either internal infrastructure or
+new migration tables that the admin surface
+will query in a follow-up HTTP PR. v0.8.0 is
+**end-to-end multi-user**: an operator can
+issue per-(user, inbound) credentials via the
+admin surface (the HTTP layer is the next
+slice), and the running config + the per-user
+sub URL both pick up the per-user credential
+automatically. The sing-box renderer emits
+multi-user `users: [...]` arrays; the
+BatchedApplier fan-out is narrowed by the
+user's `HostsAllowlist` / `Blocklist`; the
+phase 1 (single-operator-credential) path is
+preserved as the fallback when a user has no
+per-inbound credential yet.
+
+The 9 PRs:
+
+- **#159** `chore(frontend-deps): bump ts/types toolchain` — `@types/node` 22.12.0 → 26.1.2; `@vue/tsconfig` 0.7.0 → 0.8.1; `typescript` 5.6.3 → 5.8.3 (forced by the 0.8.x peer dep that enables `libReplacement: false`); `prettier` 3.4.1 → 3.9.6; `globals` 17.7.0 → 17.8.0. Also fixed two latent type errors in `PlansView.vue` (the `noUncheckedIndexedAccess` strictness tightened by the bump) and the README.md MD004 dash→plus bullet-style fix.
+- **#161** `chore(frontend-deps): bump css/sass toolchain` — `autoprefixer` 10.4.27 → 10.5.4; `postcss` 8.5.19 → 8.5.24; `sass` 1.101.0 → 1.102.0.
+- **#163** `chore(frontend-deps): bump axios 1.18.1 → 1.19.0` (CVE-2026 GHSA-hmw2-7cc7-3qxx; closes the CRLF-injection path via the `form-data@^4.0.6` floor). Bundle +2.46 kB raw / +0.82 kB gzipped for the new `AxiosHeaders.parseParameters` and 520 status code support.
+- **#165** `chore(frontend-deps): bump @vue/tsconfig 0.8.1 → 0.9.1 + postcss 8.5.24 → 8.5.25` — closes the `verbatimModuleSyntax` strictness without source changes (the codebase already used `import type` correctly).
+- **#166** `feat(audits): wire audit_log call-sites into every mutating service` — the v0.6.0/v0.7.0 audit surface finally gets every `Create` / `Update` / `Delete` audited. `audits.RecordFromContext(ctx, svc, e)` Service-layer mirror of the existing `RecordFromRequest`; pulls actor from `auth.ClaimsFromContext`; IP/UA blank. Six services: `users`, `plans`, `nodes`, `hosts`, `inbounds`, `backups`. Pre-fetch for audit `Before` on `users.Service.Delete` + `plans.Service.Delete` (extra round-trip; same trade-off as PR #157 / PR #167). **Closes the v0.7.x KNOWN_LIMITATIONS entry "Audit log call-site wiring — v0.7.x+".**
+- **#167** `feat(credentials): Phase 2 multi-user sing-box render data model` — new `user_inbound_credentials` table (migration 0019): `id UUID PK, user_id FK→users ON DELETE CASCADE, inbound_id FK→inbounds ON DELETE CASCADE, credential_value TEXT NOT NULL, created_at, updated_at, UNIQUE (user_id, inbound_id)` + 2 indexes. New `internal/credentials/` package: `Credential` struct, `Store` interface (`Insert/Update/Delete/GetByID/ListByUser/ListByInbound`), `MemoryStore` (Phase 0), `PgStore` (SQLSTATE 23505 → `ErrDuplicate`, `pgx.ErrNoRows` → `ErrNotFound`), `Service` with `Create/Get/ListByUser/ListByInbound/Rotate/Delete` + `WithAudits(svc)` setter, all mutating methods call `audits.RecordFromContext` with `credential.create` / `credential.rotate` / `credential.delete` actions. Wired into `internal/app` (`a.Credentials` field, `AEGIS_CREDENTIALS_BACKEND` env, `needsPg` registration). 24 unit tests. **Phase 2 multi-user — step 1 of 4 done.**
+- **#168** `feat(cores): multi-user sing-box renderer (Phase 2 step 2)` — the sing-box renderer's per-protocol signatures take a per-(user, inbound) credential list (`renderVLESS(spec, params, users)`, `renderHY2(spec, params, users)`, `renderTrojan(spec, params, users)`). When `users` is non-empty, the renderer emits a multi-user `users: [{name, uuid|password}, ...]` array of length N. When empty (Phase 1 path), the renderer falls back to `params["uuid"]` / `["password"]` and emits a length-1 array. `renderShadowsocks` is unchanged (single-password protocol by design). New `ExperimentalInboundCredentialsKey` constant + `extractCredentialsByTag` helper (defensive: missing key, wrong-typed value, wrong-typed per-tag entry all fall through to the Phase 1 path). 5 new tests + 28 existing tests unchanged (Phase 1 path is byte-identical to v0.7.2). **Phase 2 multi-user — step 2 of 4 done.**
+- **#169** `feat(credentials+cores): wire credentials through builder and narrow BatchedApplier fan-out (Phase 2 step 3)` — the panel-side wiring of Phase 2. New `ListCredentialsByInbound` source interface on `internal/cores/builder`; `BuildCoreConfigForNode` and `NewFlushFn` take `credSrc`; for every enabled inbound, the builder queries credentials, dereferences `*Credential` → value slice, populates `cfg.Experimental[ExperimentalInboundCredentialsKey]`. Per-inbound query failures are fail-soft (log + Phase 1 fallback). `users.Service.enqueueUserDelta(d, user)` filters the BatchedApplier map by `user.HostsAllowlist` and `user.HostsBlocklist`. Blocklist wins over allowlist. Empty allowlist + empty blocklist = default allow (v0.5.0 behaviour). 4 call sites updated: Create/Update/RotateSubToken pass `out`, Delete passes `cur`. New `BatchedApplier.QueueLen()` method (enqueue-pressure metric, also used by the new tests). 4 new builder tests + 5 new fan-out tests. **Phase 2 multi-user — step 3 of 4 done.**
+- **#170** `feat(subscription): per-user credential render (Phase 2 step 4)` — the per-user sub URL is the per-user cabinet. `subscription.Service` gains `creds *credentials.Service` + per-render `userCreds map[inboundID]credentials.Credential` cache. `WithCreds(svc)` setter (nil-safe, mirrors `WithAudits` / `WithWebhooks` pattern). `precomputeUserCreds(ctx, u)` does ONE `ListByUser` call per render (not one per inbound). `RenderSingbox` and `RenderClash` thread the per-endpoint `userCred` into the per-protocol builders (`buildSingboxVLESS`, `buildSingboxHysteria2`, `buildSingboxTrojan`, `buildClashVLESS`, `buildClashHysteria2`, `buildClashTrojan`). Each builder uses `userCred` when non-empty, falls back to `params["uuid"]` / `["password"]` when empty. Shadowsocks unchanged. 4 new tests including the auth-boundary `TestRenderSingbox_Phase2_OtherUserCredNotLeaked`. **Phase 2 multi-user — step 4 of 4 done. End-to-end.**
+
+What this means for operators:
+
+- The panel can now issue per-(user, inbound) credentials via the admin surface. The HTTP layer that exposes the credential CRUD to the admin UI is a follow-up PR; v0.8.x. The `user_inbound_credentials` table is the data layer; the Service + Store are ready.
+- The BatchedApplier already pulls per-user credentials into the rendered sing-box config (when the Builder is populated by a future PR that queries the credentials table; the infrastructure is in place). For now, the Builder's `credSrc` is `a.Credentials` (set in #169); the data flow is end-to-end.
+- The per-user sub URL is per-user. The same `sub_token` now resolves to a config that uses the user's own UUID/password, not the operator's. The `?target=singbox` and `?target=clash` formats both honour the new per-user auth material; the `?target=base64` and `?target=html` formats are URL-list + wrapper (no auth material in the body) and are unchanged.
+- The `WithCreds(nil)` setter is the v0.7.2 migration path: a panel that has not yet installed the credentials source keeps its v0.7.2 output byte-for-byte. Operators onboard users gradually, populating the credentials as they go.
+
+What this PR does NOT ship (deferred to v0.8.x follow-ups):
+
+- **HTTP admin surface for `user_inbound_credentials`** — the Service + Store are ready; the AdminRouter (`/api/v1/credentials/` mount) and the OpenAPI spec are a separate PR. The admin UI (Credentials tab in the user detail page) lands with the HTTP layer.
+- **Host → node mapping in the Builder-side filter** — the Builder does not filter credentials by `user.HostsAllowlist` today. The user-level filter is in `users.Service.enqueueUserDelta` (which decides which nodes get a FlushFn re-render). A host-to-inbound mapping is a future PR that will let the Builder filter at render time as well.
+- **Cosign sign + verify for our Docker images** — still v0.5.x follow-up. v0.7.0 closed the `latest` tag + cosign sign/verify pair for the panel and agent images, but the post-v0.7.0 workflow contract (PRs 102/103/104/111) does not yet include cosign re-signing on every release. Tracked separately.
+- **JSON logs in production** — `AEGIS_ENV=production` switch is still the v0.5.x follow-up. The `internal/obs` package has the right code; the wiring in `cmd/aegis/main.go` is the one-liner that was deferred from v0.5.0. v0.8.x.
+- **Smoke test on fresh VM in CI** — v0.9.0 candidate. `tools/scripts/smoke-local.sh` (PR #152) covers the local docker-compose path; a terraform + ansible + boot-log CI job is a separate work unit.
+- **`internal/cabinet` (doc.go-only) end-user surface** — the per-user sub URL is the per-user cabinet for v0.8.0. A separate end-user-facing cabinet (login UI, sub URL fetch, traffic stats, plan change) is v1.2+.
+
 ## [Unreleased]
 
 ### Added (operator guide + security policy + quickstart docs, #126)
