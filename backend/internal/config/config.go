@@ -214,6 +214,29 @@ type Config struct {
 	// leaves an empty list on every boot.
 	AuditsBackend string `env:"AEGIS_AUDITS_BACKEND" envDefault:"memory"`
 
+	// CredentialsBackend selects the persistence layer
+	// for the per-(user, inbound) credential join
+	// table introduced in v0.7.x for the Phase 2
+	// multi-user sing-box render (ARCHITECTURE.md
+	// §7.5). "memory" (default) keeps rows in RAM —
+	// dev only. "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the new
+	// `user_inbound_credentials` table (migration
+	// 0019). The pg path is the only mode that
+	// survives a restart.
+	//
+	// The table is intentionally unused in this PR —
+	// the sing-box renderer, the builder, and the
+	// BatchedApplier fan-out all stay on the Phase 1
+	// single-credential path (`inbounds.params["uuid"]`
+	// / `["password"]`). The follow-up PRs
+	// (`feat(cores): multi-user sing-box render` and
+	// `feat(builder): narrow fan-out to per-user nodes`)
+	// will start reading this table; until then the
+	// table sits empty and there is no operator-
+	// facing behaviour change.
+	CredentialsBackend string `env:"AEGIS_CREDENTIALS_BACKEND" envDefault:"memory"`
+
 	// Decoy-site storage root (defaults to /var/www/decoy on panel host).
 	DecoyRoot string `env:"AEGIS_DECOY_ROOT" envDefault:"/var/www/decoy"`
 
