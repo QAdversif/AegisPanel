@@ -113,7 +113,27 @@ type singboxDoc struct {
 // Empty input returns a valid empty document
 // (`{"outbounds": []}`) and a nil error. An empty
 // subscription is a valid subscription.
-func (s *Service) RenderSingbox(_ context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+//
+// Phase 2 (v0.7.x): the renderer pre-computes the
+// user's per-(user, inbound) credentials via
+// `s.creds.ListByUser(ctx, u.ID)`. Each per-endpoint
+// builder receives the per-endpoint credential via
+// the `userCred` parameter; when non-empty, the
+// builder uses the user-specific credential as
+// the protocol auth material. When empty, the
+// builder falls back to `params["uuid"]` /
+// `["password"]` (the v0.7.2 single-credential
+// path). The fallback preserves behaviour for a
+// user who has not yet been issued a per-inbound
+// credential — the operator's params-based
+// outbound still works.
+func (s *Service) RenderSingbox(ctx context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
+	// Pre-compute the per-(user, inbound) credential
+	// map. nil `s.creds` is the v0.7.2 path (the
+	// fallback to params in every per-endpoint
+	// builder). A nil `u` is the test-friendly
+	// baseline (no user → no per-user lookup).
+	s.precomputeUserCreds(ctx, u)
 	if len(eps) > 0 {
 		// Apply format variables + wildcard salt
 		// once, before the per-endpoint builder.
@@ -128,7 +148,7 @@ func (s *Service) RenderSingbox(_ context.Context, u *User, eps []ResolvedEndpoi
 	}
 	doc := singboxDoc{Outbounds: make([]singboxOutbound, 0, len(eps))}
 	for _, ep := range eps {
-		out, err := renderSingboxOutbound(ep)
+		out, err := renderSingboxOutbound(ep, s.userCredFor(ep.Inbound.ID))
 		if err != nil {
 			// A single unrenderable endpoint
 			// must not poison the whole
@@ -144,18 +164,30 @@ func (s *Service) RenderSingbox(_ context.Context, u *User, eps []ResolvedEndpoi
 // renderSingboxOutbound is the per-protocol outbound
 // builder. Unknown protocols return an error so the
 // caller can skip the endpoint.
-func renderSingboxOutbound(ep ResolvedEndpoint) (singboxOutbound, error) {
+//
+// `userCred` is the per-(user, inbound) credential
+// value from the Phase 2 multi-user path. When
+// non-empty, the per-protocol builder uses it as
+// the protocol auth material (UUID for VLESS,
+// password for HY2 / Trojan). When empty, the
+// builder falls back to the inbound's `params`
+// (the v0.7.2 single-credential path).
+func renderSingboxOutbound(ep ResolvedEndpoint, userCred string) (singboxOutbound, error) {
 	address, port := effectiveAddress(ep)
 	tag := displayName(ep.Host)
 	switch ep.Inbound.Protocol {
 	case inbounds.ProtocolVLESS:
-		return buildSingboxVLESS(ep, address, port, tag), nil
+		return buildSingboxVLESS(ep, address, port, tag, userCred), nil
 	case inbounds.ProtocolHysteria2:
-		return buildSingboxHysteria2(ep, address, port, tag), nil
+		return buildSingboxHysteria2(ep, address, port, tag, userCred), nil
 	case inbounds.ProtocolShadowsocks:
+		// Shadowsocks is single-password by
+		// protocol design; the per-user cred is
+		// ignored. The builder still uses
+		// params["password"].
 		return buildSingboxShadowsocks(ep, address, port, tag), nil
 	case inbounds.ProtocolTrojan:
-		return buildSingboxTrojan(ep, address, port, tag), nil
+		return buildSingboxTrojan(ep, address, port, tag, userCred), nil
 	default:
 		return nil, fmt.Errorf("unknown protocol: %s", ep.Inbound.Protocol)
 	}
@@ -165,9 +197,12 @@ func renderSingboxOutbound(ep ResolvedEndpoint) (singboxOutbound, error) {
 
 // buildSingboxVLESS produces a sing-box VLESS outbound.
 //
-// Required inbound params:
+// Required inbound params (Phase 1 / v0.7.2 path
+// when `userCred` is empty):
 //
-//	uuid: string  (UUID for the user)
+//	uuid: string  (UUID for the operator — used when
+//	              the user has not been issued a
+//	              per-(user, inbound) credential)
 //
 // Optional:
 //
@@ -183,8 +218,17 @@ func renderSingboxOutbound(ep ResolvedEndpoint) (singboxOutbound, error) {
 //	                     full transport object lands
 //	                     with the Phase 1 transport
 //	                     work)
-func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag string) singboxOutbound {
-	uuidStr := paramString(ep.Inbound.Params, "uuid")
+//
+// Phase 2 (v0.7.x multi-user): when `userCred` is
+// non-empty, the builder uses it as the `uuid` field
+// (the per-user UUID from user_inbound_credentials).
+// When empty, the builder falls back to
+// `params["uuid"]` (the operator's single UUID).
+func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag, userCred string) singboxOutbound {
+	uuidStr := userCred
+	if uuidStr == "" {
+		uuidStr = paramString(ep.Inbound.Params, "uuid")
+	}
 	out := singboxOutbound{
 		"type":        "vless",
 		"tag":         tag,
@@ -219,7 +263,8 @@ func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag string) s
 // buildSingboxHysteria2 produces a sing-box Hysteria 2
 // outbound.
 //
-// Required inbound params:
+// Required inbound params (Phase 1 / v0.7.2 path
+// when `userCred` is empty):
 //
 //	password: string
 //
@@ -228,8 +273,17 @@ func buildSingboxVLESS(ep ResolvedEndpoint, addr string, port int, tag string) s
 //	sni:         string
 //	alpn:        []string
 //	obfs:        map[string]any  (salamander obfuscation)
-func buildSingboxHysteria2(ep ResolvedEndpoint, addr string, port int, tag string) singboxOutbound {
-	password := paramString(ep.Inbound.Params, "password")
+//
+// Phase 2 (v0.7.x multi-user): when `userCred` is
+// non-empty, the builder uses it as the `password`
+// field (the per-user password from
+// user_inbound_credentials). When empty, the
+// builder falls back to `params["password"]`.
+func buildSingboxHysteria2(ep ResolvedEndpoint, addr string, port int, tag, userCred string) singboxOutbound {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	out := singboxOutbound{
 		"type":        "hysteria2",
 		"tag":         tag,
@@ -269,8 +323,17 @@ func buildSingboxShadowsocks(ep ResolvedEndpoint, addr string, port int, tag str
 
 // buildSingboxTrojan produces a sing-box Trojan
 // outbound.
-func buildSingboxTrojan(ep ResolvedEndpoint, addr string, port int, tag string) singboxOutbound {
-	password := paramString(ep.Inbound.Params, "password")
+//
+// Phase 2 (v0.7.x multi-user): when `userCred` is
+// non-empty, the builder uses it as the `password`
+// field. When empty, falls back to
+// `params["password"]`. See the VLESS builder
+// docstring for the full Phase 1 / Phase 2 split.
+func buildSingboxTrojan(ep ResolvedEndpoint, addr string, port int, tag, userCred string) singboxOutbound {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	out := singboxOutbound{
 		"type":        "trojan",
 		"tag":         tag,

@@ -345,6 +345,16 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		Env:     cfg.Env,
 	})
 	a.Subs = subscription.NewService(subscriptionStore, a.Hosts, a.Nodes, a.Inbounds)
+	// v0.7.x deferred: Phase 2 multi-user render.
+	// The subscription service's per-(user, inbound)
+	// credential lookup needs a credentials source;
+	// without one the renderer falls back to the
+	// v0.7.2 params-based single-credential path
+	// (see internal/subscription/service.go
+	// WithCreds docstring). Wired AFTER Credentials
+	// is built (the order in this function is the
+	// same order as the step numbers).
+	a.Subs.WithCreds(a.Credentials)
 
 	// 13. Panel-wide config.
 	panelCfgStore := MustBuild(pool, StoreBuilder[panelcfg.Store]{
