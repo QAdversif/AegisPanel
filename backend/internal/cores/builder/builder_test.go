@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 )
 
@@ -42,9 +43,36 @@ func (f *fakeInboundsSource) ListByNode(_ context.Context, _ uuid.UUID) ([]*inbo
 	return f.inbounds, nil
 }
 
+// fakeCredentialsSource satisfies
+// ListCredentialsByInbound for the tests. The
+// `creds` map is keyed by inbound ID; `err` is
+// what ListByInbound returns so the per-inbound
+// error path can be exercised. An empty entry
+// (empty slice) is a valid "no credentials" state
+// — the builder skips the per-tag entry, and the
+// sing-box renderer falls back to the Phase 1
+// single-user path.
+//
+// The return type is `[]*credentials.Credential`
+// to match the credentials.Store / Service API.
+type fakeCredentialsSource struct {
+	creds map[uuid.UUID][]*credentials.Credential
+	err   error
+	calls int
+}
+
+func (f *fakeCredentialsSource) ListByInbound(_ context.Context, id uuid.UUID) ([]*credentials.Credential, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.creds[id], nil
+}
+
 func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 	src := &fakeInboundsSource{}
-	got, err := BuildCoreConfigForNode(context.Background(), src, uuid.New())
+	creds := &fakeCredentialsSource{}
+	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,6 +88,9 @@ func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 	if _, ok := got.Experimental["inbound_params"]; !ok {
 		t.Errorf("Experimental[inbound_params] missing")
 	}
+	if _, ok := got.Experimental["inbound_credentials"]; !ok {
+		t.Errorf("Experimental[inbound_credentials] missing")
+	}
 	if src.calls != 1 {
 		t.Errorf("ListByNode calls = %d, want 1", src.calls)
 	}
@@ -67,7 +98,8 @@ func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 
 func TestBuildCoreConfigForNode_SourceError(t *testing.T) {
 	src := &fakeInboundsSource{err: errors.New("pg: connection refused")}
-	_, err := BuildCoreConfigForNode(context.Background(), src, uuid.New())
+	creds := &fakeCredentialsSource{}
+	_, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -133,7 +165,7 @@ func TestBuildCoreConfigForNode_Mapping(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, &fakeCredentialsSource{}, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +222,7 @@ func TestBuildCoreConfigForNode_NilParams(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, &fakeCredentialsSource{}, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,6 +239,169 @@ func TestBuildCoreConfigForNode_NilParams(t *testing.T) {
 	}
 	if len(raw) != 0 {
 		t.Errorf("params[broken-in] = %v, want empty map", raw)
+	}
+}
+
+// TestBuildCoreConfigForNode_WithCredentials is the
+// Phase 2 multi-user headline test: a node with one
+// enabled VLESS inbound + two credentials per inbound
+// (two users) populates the inbound_credentials
+// Experimental key with the per-tag typed slice, in
+// the `map[string]any` shape the sing-box renderer
+// expects per the PR 2 contract.
+func TestBuildCoreConfigForNode_WithCredentials(t *testing.T) {
+	nodeID := uuid.New()
+	vlessInbound := &inbounds.Inbound{
+		ID:         uuid.New(),
+		NodeID:     nodeID,
+		Name:       "vless-in",
+		Protocol:   inbounds.ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 443,
+		Enabled:    true,
+		Params: map[string]any{
+			"port": 443,
+			"uuid": "00000000-0000-0000-0000-000000000001",
+		},
+	}
+	u1 := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	u2 := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
+	creds := &fakeCredentialsSource{
+		creds: map[uuid.UUID][]*credentials.Credential{
+			vlessInbound.ID: {
+				{ID: uuid.New(), UserID: u1, InboundID: vlessInbound.ID, CredentialValue: u1.String()},
+				{ID: uuid.New(), UserID: u2, InboundID: vlessInbound.ID, CredentialValue: u2.String()},
+			},
+		},
+	}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, creds, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	raw, ok := got.Experimental["inbound_credentials"]
+	if !ok {
+		t.Fatal("Experimental[inbound_credentials] missing")
+	}
+	credsByTag, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("Experimental[inbound_credentials] type = %T, want map[string]any", raw)
+	}
+	entry, ok := credsByTag["vless-in"]
+	if !ok {
+		t.Fatal("credsByTag[vless-in] missing; Phase 2 path did not populate the per-tag entry")
+	}
+	slice, ok := entry.([]credentials.Credential)
+	if !ok {
+		t.Fatalf("credsByTag[vless-in] type = %T, want []credentials.Credential", entry)
+	}
+	if len(slice) != 2 {
+		t.Errorf("credsByTag[vless-in] len = %d, want 2", len(slice))
+	}
+	if creds.calls != 1 {
+		t.Errorf("ListByInbound calls = %d, want 1 (one per enabled inbound)", creds.calls)
+	}
+}
+
+// TestBuildCoreConfigForNode_NilCredentialsSource is a
+// defensive path: the builder does not nil-deref
+// when the credentials source is nil. An inbound
+// without a credential source emits no entry in
+// credsByTag (the sing-box renderer's Phase 1
+// fallback path takes over).
+func TestBuildCoreConfigForNode_NilCredentialsSource(t *testing.T) {
+	src := &fakeInboundsSource{
+		inbounds: []*inbounds.Inbound{
+			{
+				ID:         uuid.New(),
+				NodeID:     uuid.New(),
+				Name:       "vless-in",
+				Protocol:   inbounds.ProtocolVLESS,
+				Listen:     "::",
+				ListenPort: 443,
+				Enabled:    true,
+				Params:     map[string]any{"port": 443, "uuid": "u"},
+			},
+		},
+	}
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, uuid.New())
+	if err != nil {
+		t.Fatalf("nil credSrc must not fail the build: %v", err)
+	}
+	credsByTag, ok := got.Experimental["inbound_credentials"].(map[string]any)
+	if !ok {
+		t.Fatalf("credsByTag type = %T", got.Experimental["inbound_credentials"])
+	}
+	if _, has := credsByTag["vless-in"]; has {
+		t.Errorf("credsByTag[vless-in] present; nil credSrc must skip the entry")
+	}
+}
+
+// TestBuildCoreConfigForNode_CredentialsError is a
+// defensive path: a per-inbound query failure is
+// logged and treated as "no credentials for this
+// inbound" — the sing-box renderer's Phase 1
+// fallback path takes over. A fatal error here
+// would prevent any node from rendering during a
+// transient pg blip.
+func TestBuildCoreConfigForNode_CredentialsError(t *testing.T) {
+	vlessInbound := &inbounds.Inbound{
+		ID:         uuid.New(),
+		NodeID:     uuid.New(),
+		Name:       "vless-in",
+		Protocol:   inbounds.ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 443,
+		Enabled:    true,
+		Params:     map[string]any{"port": 443, "uuid": "u"},
+	}
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
+	creds := &fakeCredentialsSource{err: errors.New("pg: transient blip")}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	if err != nil {
+		t.Fatalf("per-inbound credSrc error must not fail the build: %v", err)
+	}
+	credsByTag, ok := got.Experimental["inbound_credentials"].(map[string]any)
+	if !ok {
+		t.Fatalf("credsByTag type = %T", got.Experimental["inbound_credentials"])
+	}
+	if _, has := credsByTag["vless-in"]; has {
+		t.Errorf("credsByTag[vless-in] present despite per-inbound error; the entry must be skipped")
+	}
+}
+
+// TestBuildCoreConfigForNode_EmptyCredentialsIsFallback
+// pins the Phase 1 fallback: an inbound with no
+// credentials (empty slice from ListByInbound)
+// emits no entry in credsByTag, the sing-box
+// renderer falls back to params-based single-user.
+func TestBuildCoreConfigForNode_EmptyCredentialsIsFallback(t *testing.T) {
+	vlessInbound := &inbounds.Inbound{
+		ID:         uuid.New(),
+		NodeID:     uuid.New(),
+		Name:       "vless-in",
+		Protocol:   inbounds.ProtocolVLESS,
+		Listen:     "::",
+		ListenPort: 443,
+		Enabled:    true,
+		Params:     map[string]any{"port": 443, "uuid": "u"},
+	}
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
+	creds := &fakeCredentialsSource{
+		creds: map[uuid.UUID][]*credentials.Credential{
+			vlessInbound.ID: {}, // explicitly empty
+		},
+	}
+	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	if _, has := credsByTag["vless-in"]; has {
+		t.Errorf("credsByTag[vless-in] present; an empty slice must be skipped (Phase 1 fallback)")
 	}
 }
 

@@ -217,7 +217,7 @@ func TestIntegration_EndToEnd_RealPgCreateUserTriggersApply(t *testing.T) {
 	applier := cores.NewBatchedApplier(
 		200*time.Millisecond,
 		100,
-		NewFlushFn(inbSvc, provider, nodeID, "integration-node"),
+		NewFlushFn(inbSvc, nil, provider, nodeID, "integration-node"),
 	)
 	appliers[nodeID] = applier
 	usersSvc.WithBatchApplier(appliers)
