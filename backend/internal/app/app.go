@@ -61,6 +61,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -103,6 +104,17 @@ type App struct {
 	Backups   *backups.Service
 	Webhooks  *webhooks.Service
 	Bootstrap *bootstrap.Service
+
+	// Credentials is the Phase 2 multi-user
+	// sing-box render data model: the
+	// per-(user, inbound) credential join. The
+	// service is wired in v0.7.x but the
+	// read paths (the renderer, the builder)
+	// stay on the Phase 1 single-credential
+	// path until the follow-up PRs land. See
+	// internal/credentials/credentials.go for
+	// the full rationale.
+	Credentials *credentials.Service
 
 	SubLimiter *ratelimit.Limiter
 	Router     http.Handler
@@ -373,6 +385,25 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	// WithAudits call is in the Backups block
 	// (after a.Backups = backups.New(...)).
 
+	// 14c. Credentials (Phase 2 multi-user render
+	//      data model). The service is built and
+	//      wired into the audit log the same way
+	//      as the other v0.7.x services. The table
+	//      sits empty in this PR — no HTTP handler,
+	//      no read path. The follow-up PRs
+	//      (`feat(cores): multi-user sing-box render`
+	//      and `feat(builder): narrow fan-out to
+	//      per-user nodes`) will start reading it.
+	credentialsStore := MustBuild(pool, StoreBuilder[credentials.Store]{
+		Name:    "credentials",
+		Backend: cfg.CredentialsBackend,
+		PgCtor:  func(p *pgxpool.Pool) credentials.Store { return credentials.NewPgStore(p) },
+		MemCtor: func() credentials.Store { return credentials.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.Credentials = credentials.NewService(credentialsStore)
+	a.Credentials.WithAudits(a.Audits)
+
 	// 15. Bootstrap (BYO Node) service. References
 	//     nodes + audits. No backend switch: the
 	//     bootstrap store is in-process state,
@@ -481,7 +512,8 @@ func needsPg(cfg *config.Config) bool {
 		cfg.PlansBackend == "pg" ||
 		cfg.PanelcfgBackend == "pg" ||
 		cfg.AuditsBackend == "pg" ||
-		cfg.WebhooksBackend == "pg"
+		cfg.WebhooksBackend == "pg" ||
+		cfg.CredentialsBackend == "pg"
 }
 
 // mustHashDevPassword is the dev seed admin's
