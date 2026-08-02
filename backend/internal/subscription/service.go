@@ -58,6 +58,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
@@ -110,7 +111,22 @@ type Service struct {
 	hosts    *hosts.Service
 	nodes    *nodes.Service
 	inbounds *inbounds.Service
-	now      func() time.Time
+	// creds is the Phase 2 multi-user render
+	// dependency. nil is the v0.7.2 default — the
+	// renderer falls back to per-inbound `params`
+	// (the operator's single credential). A real
+	// *credentials.Service lets the renderer use
+	// the per-(user, inbound) credential from the
+	// user_inbound_credentials table (PR #167 +
+	// PR #168 + this PR). Set via WithCreds.
+	creds *credentials.Service
+	// userCreds is the per-render cache populated
+	// by pre-render helpers (see precomputeUserCreds).
+	// The per-endpoint builders read it via
+	// userCredFor. nil means "no per-render
+	// lookup" (Phase 1 fallback path).
+	userCreds map[uuid.UUID]credentials.Credential
+	now       func() time.Time
 }
 
 // NewService wires a Service. The store + the three
@@ -147,6 +163,74 @@ func (s *Service) SetClock(now func() time.Time) {
 	if ms, ok := s.store.(*MemoryStore); ok {
 		ms.SetClock(now)
 	}
+}
+
+// WithCreds installs the per-(user, inbound)
+// credential source (Phase 2 multi-user render).
+// A nil source is safe — the renderer falls back
+// to the v0.7.2 params-based single-credential
+// path. The setter mirrors WithAudits (PR #166)
+// and WithWebhooks (PR #148): nil-safe at call
+// site, no constructor-arg churn.
+func (s *Service) WithCreds(svc *credentials.Service) *Service {
+	s.creds = svc
+	return s
+}
+
+// precomputeUserCreds populates `s.userCreds` with
+// every (user, inbound) credential the user has in
+// the per-inbound Phase 2 table. Called once per
+// render (singbox, clash, etc.) so the per-endpoint
+// builders can do an O(1) lookup without a DB hit
+// each. A nil `s.creds` (Phase 1 path) leaves the
+// cache empty — the per-endpoint builders fall
+// back to `params["uuid"]` / `["password"]`. A
+// per-render query failure (e.g. transient pg
+// blip) is logged and treated as "no per-user
+// credentials" — the same fail-soft policy as
+// the Builder's per-inbound query (PR #169).
+func (s *Service) precomputeUserCreds(ctx context.Context, u *User) {
+	s.userCreds = nil
+	if s.creds == nil || u == nil {
+		return
+	}
+	creds, err := s.creds.ListByUser(ctx, u.ID)
+	if err != nil {
+		// Fail-soft: log + leave cache empty. The
+		// per-endpoint builders fall back to
+		// params, which is the v0.7.2 behaviour.
+		// A render that fails because pg is
+		// down would prevent every user from
+		// fetching their sub URL — wrong
+		// failure mode for a transient blip.
+		return
+	}
+	if len(creds) == 0 {
+		return
+	}
+	s.userCreds = make(map[uuid.UUID]credentials.Credential, len(creds))
+	for _, c := range creds {
+		if c == nil {
+			continue
+		}
+		s.userCreds[c.InboundID] = *c
+	}
+}
+
+// userCredFor returns the per-(user, inbound)
+// credential value for `inboundID`, or "" when
+// no per-user credential exists. The per-endpoint
+// builders use this with a "use the user cred if
+// non-empty, else fall back to params" pattern —
+// a clean Phase 1 / Phase 2 split where the
+// builder does not need to know which path was
+// taken.
+func (s *Service) userCredFor(inboundID uuid.UUID) string {
+	c, ok := s.userCreds[inboundID]
+	if !ok {
+		return ""
+	}
+	return c.CredentialValue
 }
 
 // --- render-side resolvers (unchanged) -------------------------------
