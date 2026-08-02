@@ -36,7 +36,14 @@ import (
 // auth.Service.Middleware() and surface the verified Claims on the
 // request context for downstream handlers. Other module routers
 // (nodes, …) are mounted here too — see comments inline.
+//
+// `ctx` is the boot context from `app.Build`. The only
+// construction-time I/O is the panelcfg read for the
+// rotated sub_path mount; using the boot context means
+// a SIGINT during boot aborts the read instead of
+// blocking on a stale connection.
 func Build(
+	ctx context.Context,
 	cfg *config.Config,
 	authSvc *auth.Service,
 	nodesSvc *nodes.Service,
@@ -211,7 +218,7 @@ func Build(
 	// a no-op (it would mount at `/sub/sub/<token>`,
 	// which is wrong; the router skips the mount
 	// when the path is empty).
-	if active, err := panelCfgSvc.GetActive(context.Background()); err == nil && active.SubPath != "" {
+	if active, err := panelCfgSvc.GetActive(ctx); err == nil && active.SubPath != "" {
 		r.Mount("/"+active.SubPath+"/sub", subscription.RouterWithLimiter(subscriptionSvc, usersSvc, subLimiter))
 	} else if err != nil {
 		log.Warn().Err(err).Msg("router: panelcfg read failed; rotated sub_path mount skipped")

@@ -39,31 +39,25 @@ import (
 	_ "github.com/redis/go-redis/v9"           // Phase 1 — Redis client
 	_ "github.com/swaggo/swag"                 // Phase 1 — OpenAPI generator
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
-	"github.com/QAdversif/AegisPanel/internal/audits"
+	// Composition root + the v0.7.2 audit fix: `internal/app`
+	// owns every service wiring (stores, migrations, retry
+	// worker, v0.7.x outbound event surface, router, server).
+	// main.go keeps only the cmd-level concerns: logger
+	// setup, subcommand dispatch (migrate / admin), singbox
+	// per-node BatchedApplier wiring, signal handling, and
+	// graceful shutdown.
+	"github.com/QAdversif/AegisPanel/internal/app"
 	"github.com/QAdversif/AegisPanel/internal/auth"
-	"github.com/QAdversif/AegisPanel/internal/backups"
-	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
-	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	"github.com/QAdversif/AegisPanel/internal/cores/singbox"   // v0.4.0: needed for *Provider type assertion + Configure
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
 	"github.com/QAdversif/AegisPanel/internal/db"
-	"github.com/QAdversif/AegisPanel/internal/hosts"
-	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
-	"github.com/QAdversif/AegisPanel/internal/panelcfg"
-	"github.com/QAdversif/AegisPanel/internal/plans"
-	"github.com/QAdversif/AegisPanel/internal/ratelimit"
-	"github.com/QAdversif/AegisPanel/internal/router"
-	"github.com/QAdversif/AegisPanel/internal/subscription"
-	"github.com/QAdversif/AegisPanel/internal/users"
-	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
 func main() {
@@ -73,33 +67,31 @@ func main() {
 	// for the rationale.
 	obs.ConfigureLogger()
 
-	// `aegis migrate …` is a maintenance subcommand that
-	// runs before the rest of the boot sequence. It does not
-	// touch the rest of config (env, observability, …) on
-	// purpose: a migrations command should not require a
-	// fully-initialised runtime to run.
-	if len(os.Args) >= 2 && os.Args[1] == "migrate" {
-		runMigrate(os.Args[2:])
-		return
+	// `aegis migrate …` and `aegis admin …` are maintenance
+	// subcommands that run before the rest of the boot
+	// sequence. They do not touch the rest of config (env,
+	// observability, …) on purpose: a maintenance command
+	// should not require a fully-initialised runtime to
+	// run. The dispatch lives in main.go (not in app)
+	// because each subcommand only needs the pg pool, not
+	// the full service graph that app.Build returns.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "migrate":
+			runMigrate(os.Args[2:])
+			return
+		case "admin":
+			runAdmin(os.Args[2:])
+			return
+		}
 	}
 
-	// `aegis admin …` is a second maintenance subcommand
-	// for managing the panel principals. It needs the
-	// auth.Store (so it can hash + persist) but does not
-	// need the HTTP server or observability. Same
-	// rationale as `migrate`: a maintenance command
-	// should not require a fully-booted panel.
-	if len(os.Args) >= 2 && os.Args[1] == "admin" {
-		runAdmin(os.Args[2:])
-		return
-	}
-
-	// Top-level context for boot-time operations. Cancelled when
-	// the process receives SIGINT / SIGTERM (see signal.NotifyContext
-	// below). The cancel is registered as a defer *after* the early
-	// log.Fatal() call sites so that exitAfterDefer (gocritic) does
-	// not flag the boot sequence — log.Fatal calls os.Exit, which
-	// skips defers anyway, so it is safe to register later.
+	// Top-level context for boot-time operations. Cancelled
+	// when the process receives SIGINT / SIGTERM. The cancel
+	// is registered as a defer *after* the early log.Fatal
+	// call sites so that exitAfterDefer (gocritic) does not
+	// flag the boot sequence — log.Fatal calls os.Exit,
+	// which skips defers anyway.
 	ctx, cancelBoot := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	// 1. Load configuration from environment + .env file.
@@ -121,24 +113,10 @@ func main() {
 		}
 	}()
 
-	// All boot-time resources are now live — safe to register the
-	// signal-context cancel so graceful shutdown actually runs.
+	// All boot-time resources are now live — safe to
+	// register the signal-context cancel so graceful
+	// shutdown actually runs.
 	defer cancelBoot()
-
-	// In dev builds, register the noop core provider so the
-	// UI can talk to /api/v1/cores before any real provider
-	// (sing-box, xray, …) has been wired in. In production we
-	// expect a real provider to have self-registered via its
-	// own init() — adding noop there would shadow it.
-	if cfg.Env != "production" {
-		if err := cores.Register(noop.New("noop", "0.0.0-dev")); err != nil {
-			// Duplicate registration (e.g. a test that already
-			// inserted noop) is benign — log and move on.
-			log.Debug().Err(err).Msg("cores: noop already registered")
-		} else {
-			log.Info().Msg("cores: registered noop provider (dev mode)")
-		}
-	}
 
 	log.Info().
 		Str("version", "0.0.0-dev").
@@ -146,481 +124,53 @@ func main() {
 		Str("env", cfg.Env).
 		Msg("aegis panel starting")
 
-	// 3. Open the PostgreSQL pool. Every service that uses
-	//    AEGIS_*_BACKEND=pg shares the same pool; the
-	//    MemoryStore backends never touch it. Opening is
-	//    lazy: if no service is configured for pg, we skip
-	//    the connection entirely. A misconfigured DSN (or
-	//    an unreachable server) fails the boot here, not on
-	//    the first query, thanks to the Ping inside db.Open.
-	var (
-		pool    *pgxpool.Pool
-		needsPg = cfg.AuthBackend == "pg" ||
-			cfg.HostsBackend == "pg" ||
-			cfg.NodesBackend == "pg" ||
-			cfg.InboundsBackend == "pg" ||
-			cfg.SubscriptionBackend == "pg" ||
-			cfg.UsersBackend == "pg" ||
-			cfg.PlansBackend == "pg" ||
-			cfg.PanelcfgBackend == "pg" ||
-			cfg.AuditsBackend == "pg" ||
-			cfg.WebhooksBackend == "pg"
-	)
-	if needsPg {
-		p, err := db.Open(ctx, cfg.PostgresDSN)
-		if err != nil {
-			log.Fatal().Err(err).Msg("db: failed to open postgres connection pool")
-		}
-		pool = p
-		defer pool.Close()
-		// Apply migrations on the same pool the runtime
-		// uses. We deliberately do NOT open a sibling
-		// *sql.DB through the pgx stdlib adapter: that
-		// adapter does not honour multi-statement
-		// transactions, and Aegis migrations rely on
-		// BEGIN; ... COMMIT; in each file.
-		if err := migrations.Up(ctx, pool, "migrations"); err != nil {
-			log.Fatal().Err(err).Msg("migrations: failed to apply")
-		}
-	}
-
-	// 4. Build the auth service. The backing store is
-	//    selected at startup:
-	//      AEGIS_AUTH_BACKEND=memory  -> MemoryStore (Phase 0 default)
-	//      AEGIS_AUTH_BACKEND=pg      -> PgStore backed by the shared pool
-	authSigner := auth.NewSigner(cfg.JWTSecret)
-	var authStore auth.Store
-	switch cfg.AuthBackend {
-	case "pg":
-		authStore = auth.NewPgStore(pool)
-		log.Info().Msg("auth: using pgx-backed store (PgStore)")
-	default:
-		// Dev seed admin. Phase 0 only — production
-		// uses the pg backend with a real operator
-		// minted via `aegis admin add <username>`.
-		// Refuse to boot in production with the dev
-		// password: a real install must not run with
-		// a known-public credential.
-		if cfg.Env == "production" {
-			log.Fatal().Msg("auth: cannot start in production with the dev-only MemoryStore; set AEGIS_AUTH_BACKEND=pg and run `aegis admin add` to seed the first operator")
-		}
-		authStore = auth.NewMemoryStore().WithUser(&auth.User{
-			ID:           "u-bootstrap",
-			Username:     "admin",
-			Email:        "admin@localhost",
-			PasswordHash: mustHash("aegis-dev-password"),
-			Role:         "super-admin",
-			Enabled:      true,
-			Scopes:       auth.Scopes{auth.ScopeAdmin, auth.ScopeRead, auth.ScopeWrite, auth.ScopeNodes, auth.ScopeUsers, auth.ScopeSubscriptions, auth.ScopeHosts, auth.ScopeAudits},
-			CreatedAt:    time.Now().UTC(),
-		})
-		log.Warn().Msg("auth: using in-memory store with the dev seed (username: admin, password: aegis-dev-password). DO NOT use in production.")
-	}
-	authSvc := auth.NewService(authSigner, authStore)
-
-	// 5. Nodes service persistence layer:
-	//    AEGIS_NODES_BACKEND=memory (default) uses the
-	//    Phase 0 MemoryStore; =pg uses PgStore backed by
-	//    the shared pool and the `nodes` / `node_tags`
-	//    tables (migrations 0001 + 0005).
-	var nodesStore nodes.Store
-	switch cfg.NodesBackend {
-	case "pg":
-		nodesStore = nodes.NewPgStore(pool)
-		log.Info().Msg("nodes: using pgx-backed store (PgStore)")
-	default:
-		nodesStore = nodes.NewMemoryStore()
-		log.Info().Msg("nodes: using in-memory store (MemoryStore, dev only)")
-	}
-	nodesSvc := nodes.NewService(nodesStore)
-
-	// 6. Inbounds service also references nodes (every
-	//    inbound belongs to a node). The backend is
-	//    selected the same way as the nodes / hosts
-	//    services: AEGIS_INBOUNDS_BACKEND=memory (default)
-	//    uses the Phase 0 MemoryStore; =pg uses PgStore
-	//    backed by the shared pool and the `inbounds`
-	//    table (migration 0003).
-	var inboundsStore inbounds.Store
-	switch cfg.InboundsBackend {
-	case "pg":
-		inboundsStore = inbounds.NewPgStore(pool)
-		log.Info().Msg("inbounds: using pgx-backed store (PgStore)")
-	default:
-		inboundsStore = inbounds.NewMemoryStore()
-		log.Info().Msg("inbounds: using in-memory store (MemoryStore, dev only)")
-	}
-	inboundsSvc := inbounds.NewService(inboundsStore, nodesSvc)
-
-	// 7. Hosts service references nodes AND inbounds (every
-	//    endpoint is a (Node, Inbound) pair), so it is
-	//    constructed after both. AEGIS_HOSTS_BACKEND=pg
-	//    uses PgStore backed by the shared pool and the
-	//    `hosts` / `host_endpoints` tables (migration
-	//    0004).
-	var hostsStore hosts.Store
-	switch cfg.HostsBackend {
-	case "pg":
-		hostsStore = hosts.NewPgStore(pool)
-		log.Info().Msg("hosts: using pgx-backed store (PgStore)")
-	default:
-		hostsStore = hosts.NewMemoryStore()
-		log.Info().Msg("hosts: using in-memory store (MemoryStore, dev only)")
-	}
-	hostsSvc := hosts.NewService(hostsStore, nodesSvc, inboundsSvc)
-
-	// 8. Users service + store. As of d-refactor.2
-	//    the user-CRUD surface (the d.1 work) is
-	//    constructed independently of the
-	//    subscription package; the subscription
-	//    Service takes a *users.Service +
-	//    users.Store reference for the four
-	//    user-CRUD thin wrappers it still exposes
-	//    (d-refactor.3 drops them).
-	//
-	//    Backend is selected at startup:
-	//      AEGIS_USERS_BACKEND=memory (default) uses
-	//      the Phase 0 MemoryStore; =pg uses PgStore
-	//      backed by the shared pool and the `users`
-	//      table (migrations 0001 + 0011).
-	var usersStore users.Store
-	switch cfg.UsersBackend {
-	case "pg":
-		usersStore = users.NewPgStore(pool)
-		log.Info().Msg("users: using pgx-backed store (PgStore)")
-	default:
-		usersStore = users.NewMemoryStore(nil)
-		log.Info().Msg("users: using in-memory store (MemoryStore, dev only)")
-	}
-	usersSvc := users.NewService(usersStore)
-
-	// 9. Plans service. v0.6.0 owner of the
-	//    `plans` table CRUD (the subscription
-	//    package continues to read it for the
-	//    render path; v0.6.x will consolidate).
-	//
-	//    Backend is selected at startup:
-	//      AEGIS_PLANS_BACKEND=memory (default)
-	//      uses the Phase 0 MemoryStore; =pg uses
-	//      PgStore backed by the shared pool and
-	//      the `plans` table (migration 0001).
-	var plansStore plans.Store
-	switch cfg.PlansBackend {
-	case "pg":
-		plansStore = plans.NewPgStore(pool)
-		log.Info().Msg("plans: using pgx-backed store (PgStore)")
-	default:
-		plansStore = plans.NewMemoryStore(nil)
-		log.Info().Msg("plans: using in-memory store (MemoryStore, dev only)")
-	}
-	plansSvc := plans.NewService(plansStore)
-
-	// 9b. Webhooks service (v0.7.0).
-	//     Backend is selected at startup:
-	//       AEGIS_WEBHOOKS_BACKEND=memory (default)
-	//       uses the Phase 0 MemoryStore; =pg uses
-	//       PgStore backed by the `webhook_endpoints`
-	//       table (migration 0001, with `updated_at`
-	//       added in migration 0015 and a UNIQUE
-	//       constraint on `url` added in migration
-	//       0016), the `webhook_deliveries` table
-	//       (migration 0014), and the `webhook_dlq`
-	//       table (migration 0014).
-	var webhooksStore webhooks.Store
-	switch cfg.WebhooksBackend {
-	case "pg":
-		// v0.7.x: build the age cipher from
-		// the operator's recipient list and
-		// the panel's identity file. The
-		// recipients seal new endpoints;
-		// the identity opens them. The same
-		// identity file is shared with the
-		// sops CLI used by the operator's
-		// out-of-band secrets infra (PR
-		// #119) and the `age-keygen` tool.
-		cipher, cipherErr := webhooks.NewAgeSecretCipher(
-			cfg.WebhooksSecretAgeRecipients,
-			cfg.WebhooksSecretAgeKeyFile,
-		)
-		if cipherErr != nil {
-			log.Fatal().Err(cipherErr).Msg("webhooks: failed to build age secret cipher")
-		}
-		webhooksStore = webhooks.NewPgStore(pool, cipher)
-		log.Info().
-			Int("recipients", len(cfg.WebhooksSecretAgeRecipients)).
-			Str("key_file", cfg.WebhooksSecretAgeKeyFile).
-			Msg("webhooks: using pgx-backed store (PgStore, age-encrypted secret)")
-	default:
-		webhooksStore = webhooks.NewMemoryStore()
-		log.Warn().Msg("webhooks: using in-memory store (MemoryStore, dev only — secret is plaintext)")
-	}
-	webhooksSvc := webhooks.NewService(webhooksStore)
-
-	// v0.7.x: wire the outbound event surface
-	// into every mutating service that already
-	// exists by this point. The setter
-	// (WithWebhooks) is preferred over a
-	// constructor argument so the existing
-	// unit tests stay untouched. Order does
-	// not matter: the dispatch is invoked
-	// AFTER the row is persisted, so a
-	// receiver that fires on user.created
-	// sees a committed row.
-	//
-	// `backupsSvc` is created later (it needs
-	// the full Config + store + pool), so its
-	// WithWebhooks call is done below, after
-	// the backups New().
-	nodesSvc.WithWebhooks(webhooksSvc)
-	inboundsSvc.WithWebhooks(webhooksSvc)
-	hostsSvc.WithWebhooks(webhooksSvc)
-	usersSvc.WithWebhooks(webhooksSvc)
-	plansSvc.WithWebhooks(webhooksSvc)
-
-	// v0.7.x: background retry worker. Fires the
-	// next attempt for every delivery whose
-	// `next_attempt_at` is in the past, on the
-	// schedule the dispatcher computed
-	// (1s, 5s, 25s, 2m15s, 11m15s). Disabled in
-	// tests / read-only replicas via
-	// AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false.
-	if cfg.WebhooksRetryWorkerEnabled {
-		w := webhooks.NewWorker(webhooksSvc, cfg.WebhooksRetryWorkerInterval)
-		workerCtx, workerCancel := context.WithCancel(ctx)
-		go func() {
-			defer workerCancel()
-			if err := w.Run(workerCtx); err != nil {
-				log.Error().Err(err).Msg("webhooks: retry worker exited")
-			}
-		}()
-		log.Info().
-			Dur("interval", cfg.WebhooksRetryWorkerInterval).
-			Msg("webhooks: retry worker started")
-	} else {
-		log.Warn().Msg("webhooks: retry worker DISABLED (AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED=false); retries must be fired manually")
-	}
-
-	// 10. Subscription service. After d-refactor.2 the
-	//    subscription package only owns the plan /
-	//    pool / member join tables and the render
-	//    orchestrator (Service.ResolveHostsForUser /
-	//    ResolveEndpointsForUser / Render*). The
-	//    user-CRUD surface is delegated to the users
-	//    package via the thin wrappers on Service.
-	//
-	//    Backend is selected at startup:
-	//      AEGIS_SUBSCRIPTION_BACKEND=memory (default) uses
-	//      the Phase 0 MemoryStore; =pg uses PgStore backed
-	//      by the shared pool and the `plans`,
-	//      `plan_pool`, `host_pools`, `host_pool_members`
-	//      tables (migrations 0001).
-	var subscriptionStore subscription.Store
-	switch cfg.SubscriptionBackend {
-	case "pg":
-		subscriptionStore = subscription.NewPgStore(pool)
-		log.Info().Msg("subscription: using pgx-backed store (PgStore)")
-	default:
-		subscriptionStore = subscription.NewMemoryStore()
-		log.Info().Msg("subscription: using in-memory store (MemoryStore, dev only)")
-	}
-	subscriptionSvc := subscription.NewService(subscriptionStore, hostsSvc, nodesSvc, inboundsSvc)
-
-	// Panel-wide config (the rotating URL prefix).
-	// Backend is selected at startup:
-	//   AEGIS_PANELCFG_BACKEND=memory (default) uses the
-	//   Phase 0 MemoryStore; =pg uses PgStore backed by
-	//   the shared pool and the `panel_path_config`
-	//   table (migration 0010).
-	var panelCfgStore panelcfg.Store
-	switch cfg.PanelcfgBackend {
-	case "pg":
-		panelCfgStore = panelcfg.NewPgStore(pool)
-		log.Info().Msg("panelcfg: using pgx-backed store (PgStore)")
-	default:
-		panelCfgStore = panelcfg.NewMemoryStore()
-		log.Info().Msg("panelcfg: using in-memory store (MemoryStore, dev only)")
-	}
-	panelCfgSvc := panelcfg.NewService(panelCfgStore)
-
-	// Audit log service. The v0.2.0 surface is
-	// read-only (the GET /api/v1/audits and
-	// GET /api/v1/audits/{id} endpoints); the
-	// write path (Service.Record) is exported for
-	// the v0.3+ wiring that will be added to the
-	// nodes / hosts / inbounds / users / panelcfg
-	// mutating handlers.
-	//
-	// Backend is selected at startup:
-	//   AEGIS_AUDITS_BACKEND=memory (default) uses
-	//   the Phase 0 MemoryStore; =pg uses PgStore
-	//   backed by the existing `audit_log` table
-	//   from migration 0001.
-	var auditsStore audits.Store
-	switch cfg.AuditsBackend {
-	case "pg":
-		auditsStore = audits.NewPgStore(pool)
-		log.Info().Msg("audits: using pgx-backed store (PgStore)")
-	default:
-		auditsStore = audits.NewMemoryStore()
-		log.Info().Msg("audits: using in-memory store (MemoryStore, dev only)")
-	}
-	auditsSvc := audits.NewService(auditsStore)
-
-	// Bootstrap (BYO Node) service. Wired in
-	// v0.3.0: the panel previously built the
-	// package and the routes but passed `nil` to
-	// the router, which made `POST /api/v1/nodes/{id}/provision`
-	// a 404 in production. The wiring is the only
-	// delta from v0.3.0-a; the package itself
-	// (and the 24 tests) shipped in PR #67.
-	//
-	// The NodeProvider adapter is a thin row
-	// projection: bootstrap needs only (id, name,
-	// state, address, agent_bearer), the nodes.Service.Get
-	// returns a full *Node, and we map. Keeping
-	// the adapter in the nodes package (not here)
-	// would force main.go to know the bootstrap
-	// internals; the inline adapter is the
-	// v0.3.0-c compromise until v0.4.0 splits it
-	// into a dedicated `internal/bootstrap/adapter.go`.
-	nodesAdapter := &nodes.BootstrapNodeProvider{Svc: nodesSvc}
-	bootstrapSvc := bootstrap.NewService(bootstrap.ServiceConfig{
-		Nodes:       nodesAdapter,
-		Audits:      auditsSvc,
-		AgentBinary: cfg.AgentBinaryPath,
-		KnownHosts:  cfg.AgentKnownHosts,
-		SSHUser:     cfg.AgentSSHUser,
-		SSHPort:     cfg.AgentSSHPort,
-	})
-
-	// v0.5.0 backups service. The store is
-	// always LocalStore in v0.5.0: a JSON index
-	// file next to the dump files. The store is
-	// deliberately orthogonal to Postgres so a
-	// restore is exactly the case where the panel
-	// DB is unavailable. The pool argument is
-	// passed for the per-backup metadata counts
-	// (node/user/host counts) — it may be nil
-	// when the panel runs without pg (dev mode),
-	// in which case counts are zero.
-	//
-	// The pg_dump and pg_restore binaries are
-	// expected at AEGIS_BACKUPS_PG_DUMP / _PG_RESTORE
-	// (with the standard /usr/bin/* default).
-	// The install_panel role update (follow-up to
-	// #119) installs postgresql-client on the
-	// panel host.
-	backupsBackend, err := backups.NewOSBackend(cfg.BackupsDir)
+	// 3. Composition root. Build() opens the pg pool
+	//    when one is needed, applies migrations,
+	//    builds every store and every service, wires
+	//    the v0.7.x outbound event surface, starts
+	//    the webhook retry worker, and returns a
+	//    fully wired *App. The cmd/ binary owns the
+	//    http.Server lifecycle and the SIGINT handling.
+	a, err := app.Build(ctx, cfg)
 	if err != nil {
-		log.Fatal().Err(err).Str("dir", cfg.BackupsDir).Msg("backups: failed to initialise backend")
+		log.Fatal().Err(err).Msg("app: composition root failed")
 	}
-	backupsStore := backups.NewLocalStore(backupsBackend)
-	backupsSvc := backups.New(backups.Config{
-		PostgresDSN:    cfg.PostgresDSN,
-		BackupsDir:     cfg.BackupsDir,
-		AllowUIRestore: cfg.BackupsAllowUIRestore,
-		RetentionDays:  cfg.BackupsRetentionDays,
-		MaxCount:       cfg.BackupsMaxCount,
-	}, backupsStore, pool)
-	log.Info().
-		Str("dir", cfg.BackupsDir).
-		Int("retention_days", cfg.BackupsRetentionDays).
-		Int("max_count", cfg.BackupsMaxCount).
-		Bool("allow_ui_restore", cfg.BackupsAllowUIRestore).
-		Msg("backups: service initialised")
-	// v0.7.x: wire the outbound event surface
-	// into the backups service (created
-	// later than the others because it needs
-	// the full Config + store + pool). See
-	// the earlier WithWebhooks block for the
-	// rationale.
-	backupsSvc.WithWebhooks(webhooksSvc)
+	defer a.Close()
 
-	// Optional in-process scheduler. When
-	// AEGIS_BACKUPS_CRON is set (typical
-	// production: "0 2 * * *"), a goroutine
-	// ticks every minute and triggers a
-	// scheduled backup on cron match. Empty
-	// disables the scheduler (manual-only mode,
-	// the v0.5.0 default for dev).
-	if cfg.BackupsCron != "" {
-		schedCtx, schedCancel := context.WithCancel(ctx)
-		go func() {
-			defer schedCancel()
-			if err := backupsSvc.Run(schedCtx, cfg.BackupsCron); err != nil {
-				log.Error().Err(err).Str("cron", cfg.BackupsCron).Msg("backups: scheduler exited with error")
-			}
-		}()
-	}
-
-	// v0.4.0-mvp-batched: wire the sing-box
-	// provider's HTTP transport (panel -> agent)
-	// and the per-node BatchedApplier queue.
+	// 4. v0.4.0-mvp-batched: wire the sing-box
+	//    provider's HTTP transport (panel -> agent)
+	//    and the per-node BatchedApplier queue.
 	//
-	// Configure() injects a NodeResolver adapter
-	// (delegates to nodes.Service.GetByID) and
-	// the shared *http.Client. Once Configure
-	// returns, singbox.Apply is fully wired —
-	// the v0.3.0 stub returning
-	// ErrApplyNotImplemented is replaced by an
-	// actual POST /v1/apply to the node's agent.
+	//    `singboxWiring` injects a NodeResolver adapter
+	//    (delegates to nodes.Service.GetByID) and
+	//    the shared *http.Client. The helper stays in
+	//    main.go because it owns goroutines tied to
+	//    the boot ctx; lifting it into a method on
+	//    App would force an io.Closer pattern the
+	//    rest of the services do not need.
 	if sbp, sbErr := cores.Get("sing-box"); sbErr != nil {
 		log.Warn().Err(sbErr).Msg("cores: sing-box provider not registered; Apply will return ErrApplyNotConfigured")
 	} else if sbProvider, ok := sbp.(*singbox.Provider); ok {
-		// Per-node BatchedApplier map. The map
-		// is built lazily in v0.4.0+ as nodes
-		// transition to `online`; for v0.4.0-a
-		// we register a flush no-op so the
-		// infrastructure is in place. The
-		// user-management layer that calls
-		// BatchedApplier.Enqueue is the next
-		// slice (v0.4.0-d or rolled into b).
-		if err := singboxWiring(ctx, sbProvider, nodesSvc); err != nil {
+		if err := singboxWiring(ctx, sbProvider, a.Nodes); err != nil {
 			log.Fatal().Err(err).Msg("v0.4.0: singbox wiring failed")
 		}
 	} else {
 		log.Warn().Msg("cores: registered sing-box provider is not *singbox.Provider — Apply transport disabled")
 	}
-	if err := bootstrap.EnsureKnownHosts(cfg.AgentKnownHosts); err != nil {
-		// Not fatal: the installer falls back to
-		// a per-install TempFile if the panel's
-		// known_hosts is unwritable. Log and
-		// continue so the rest of the panel can
-		// start; the operator sees the warning in
-		// the boot log.
-		log.Warn().Err(err).Str("path", cfg.AgentKnownHosts).
-			Msg("bootstrap: known_hosts setup failed; installer will use a per-call TempFile")
-	}
 
-	// Subscription endpoint rate limiter. One
-	// instance shared across the default and the
-	// rotated sub_path mount - a stolen sub_token
-	// is therefore rate-limited regardless of which
-	// URL the caller uses. v0.3 swaps the in-memory
-	// map for Redis + TTL (the panel is small enough
-	// today that the in-memory cap of 50k keys is
-	// not a real concern). The limiter is created
-	// before the HTTP server so the first request
-	// already has a budget allocated.
-	subLimiter := newSubscriptionRateLimiter(cfg)
-
-	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		ReadHeaderTimeout: 10 * time.Second,
-		Handler:           obs.Middleware(router.Build(cfg, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, bootstrapSvc, backupsSvc, webhooksSvc, subLimiter)),
-	}
-
-	// 8. Run the server in a goroutine so we can listen for signals.
+	// 5. Run the HTTP server in a goroutine so we
+	//    can listen for signals.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Info().Str("addr", cfg.HTTPAddr).Msg("HTTP server listening")
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 		close(serverErr)
 	}()
 
-	// 9. Wait for SIGINT / SIGTERM or a fatal server error.
+	// 6. Wait for SIGINT / SIGTERM or a fatal server
+	//    error.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	select {
@@ -632,24 +182,14 @@ func main() {
 		}
 	}
 
-	// 10. Graceful shutdown with a hard deadline.
+	// 7. Graceful shutdown with a hard deadline.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := a.Server.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("graceful shutdown failed")
 	}
 
 	log.Info().Msg("aegis panel stopped")
-}
-
-// mustHash is a tiny panic-on-error wrapper around argon2id for the
-// Phase 0 dev seed. Phase 1+ reads hashes from the database.
-func mustHash(plaintext string) string {
-	h, err := auth.HashPassword(plaintext)
-	if err != nil {
-		panic(fmt.Errorf("seed hash: %w", err))
-	}
-	return h
 }
 
 // runMigrate implements the `aegis migrate` subcommand. The
@@ -1011,38 +551,6 @@ func promptPassword(prompt string) (string, error) {
 	// shell prompt sits on its own line.
 	fmt.Fprintln(os.Stderr)
 	return string(pw), nil
-}
-
-// newSubscriptionRateLimiter builds the per-sub_token
-// rate limiter the HTTP layer hands to
-// subscription.RouterWithLimiter. The settings are
-// taken from cfg; a non-positive RPS disables
-// throttling (the v0.1.0 behaviour).
-//
-// Defaults (1 rps, 5 burst, 50k keys) are tuned for a
-// single-user-with-multiple-devices usage model: a
-// phone + laptop + tablet + desktop can all wake up
-// at once after a 24h client poll cycle and still fit
-// inside the burst budget.
-func newSubscriptionRateLimiter(cfg *config.Config) *ratelimit.Limiter {
-	if cfg.SubscriptionRateLimitRPS <= 0 {
-		log.Info().Msg("subscription rate limiter disabled (AEGIS_SUBSCRIPTION_RATELIMIT_RPS <= 0)")
-		return nil
-	}
-	l := ratelimit.New(
-		cfg.SubscriptionRateLimitRPS,
-		cfg.SubscriptionRateLimitBurst,
-		10*time.Minute, // idle: a stale token gets a fresh burst on first re-use
-	)
-	if cfg.SubscriptionRateLimitMaxKeys > 0 {
-		l.SetMaxKeys(cfg.SubscriptionRateLimitMaxKeys)
-	}
-	log.Info().
-		Float64("rps", cfg.SubscriptionRateLimitRPS).
-		Float64("burst", cfg.SubscriptionRateLimitBurst).
-		Int("max_keys", cfg.SubscriptionRateLimitMaxKeys).
-		Msg("subscription rate limiter enabled")
-	return l
 }
 
 func adminUsage() {
