@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
@@ -23,7 +24,16 @@ import (
 //   - cross-entity validation (every inbound's
 //     NodeID must resolve to a known node);
 //   - ID / timestamp generation on Create;
-//   - the default Listen normalisation.
+//   - the default Listen normalisation;
+//   - v0.5.0 BatchedApplier fan-out: every mutating
+//     method (Create/Update/Delete) enqueues a
+//     cores.Delta into the BatchedApplier for the
+//     inbound's node. Unlike users.Service, which
+//     fans out to ALL node appliers (the user's
+//     targets are not known at the user level),
+//     inbounds.Service narrows to the single
+//     applier for inb.NodeID because the inbound
+//     already carries the node reference.
 //
 // Handlers call Service rather than Store directly so
 // the rules stay in one place and the pgx migration in
@@ -34,6 +44,10 @@ type Service struct {
 	nodes    *nodes.Service
 	now      func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	// batchedAppliers is the v0.5.0 outbound
+	// render+apply fan-out. nil = feature disabled.
+	// See AEGIS_BATCHED_APPLIER_ENABLED.
+	batchedAppliers map[uuid.UUID]*cores.BatchedApplier
 }
 
 // NewService wires a Service around the given store.
@@ -49,6 +63,48 @@ func NewService(store Store, nodesSvc *nodes.Service) *Service {
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
 	return s
+}
+
+// WithBatchApplier installs the per-node
+// BatchedApplier map. See users.Service.WithBatchApplier
+// for the broader rationale. Unlike users (which
+// fans out to every node), inbounds narrows the
+// fan-out to the single applier for the inbound's
+// node because the inbound already carries the
+// node reference.
+func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Service {
+	s.batchedAppliers = aps
+	return s
+}
+
+// enqueueForNode fans out a Delta to the BatchedApplier
+// for the given node (the inbound's NodeID). The
+// delta's UserID is uuid.Nil because an inbound
+// change is a "the whole config changed" event, not
+// a per-user one. The BatchedApplier's coalescing
+// logic (cores.BatchedApplier.absorb) keeps the
+// last-write-wins under uuid.Nil so multiple
+// inbound CRUD events in the same window collapse
+// to a single FlushFn call.
+func (s *Service) enqueueForNode(nodeID uuid.UUID, kind cores.DeltaKind) {
+	if len(s.batchedAppliers) == 0 || nodeID == uuid.Nil {
+		return
+	}
+	ap, ok := s.batchedAppliers[nodeID]
+	if !ok || ap == nil {
+		// No applier for this node — either the
+		// node is offline (no applier was
+		// created) or the feature is disabled
+		// for this node. Silent skip: the
+		// apply will fire on the next online
+		// transition (future PR) or via
+		// external config push.
+		return
+	}
+	ap.Enqueue(cores.Delta{
+		Kind:   kind,
+		UserID: uuid.Nil, // inbound change, not user-scoped
+	})
 }
 
 // SetClock swaps the time source. Intended for tests
@@ -175,6 +231,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundCreated, out)
+	// v0.5.0: enqueue a DeltaAddUser for the
+	// inbound's node so the next FlushFn
+	// re-renders the node config with the new
+	// inbound. The delta's UserID is uuid.Nil
+	// (inbound change, not user-scoped); the
+	// BatchedApplier's coalescing keeps
+	// last-write-wins under uuid.Nil.
+	s.enqueueForNode(out.NodeID, cores.DeltaAddUser)
 	return out, nil
 }
 
@@ -267,6 +331,14 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 	}
 	// v0.7.x: see plans.Service.Create.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundUpdated, out)
+	// v0.5.0: enqueue a DeltaAddUser for the
+	// (possibly new) node. An Update that changes
+	// the inbound's NodeID (rare; the schema
+	// rejects it today but a future move-inbound
+	// flow might) would re-render the wrong
+	// node; the current schema does not allow
+	// it, so the simplification is safe.
+	s.enqueueForNode(out.NodeID, cores.DeltaAddUser)
 	return out, nil
 }
 
@@ -275,6 +347,13 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
+	}
+	// v0.5.0: capture the inbound's NodeID
+	// BEFORE the row is gone, so the enqueue
+	// can target the right applier.
+	prev, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return err
 	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
@@ -285,6 +364,14 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventInboundDeleted, map[string]string{
 		"id": id.String(),
 	})
+	// v0.5.0: enqueue a DeltaRemoveUser for
+	// the inbound's previous node. The appliers'
+	// cancel/replace logic will drop this delta
+	// if a DeltaAddUser for the same node
+	// (uuid.Nil) is enqueued in the same
+	// window — a delete-then-recreate sequence
+	// — so a no-op render is the right answer.
+	s.enqueueForNode(prev.NodeID, cores.DeltaRemoveUser)
 	return nil
 }
 

@@ -52,6 +52,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/cores/builder"
 	"github.com/QAdversif/AegisPanel/internal/cores/singbox"   // v0.4.0: needed for *Provider type assertion + Configure
 	_ "github.com/QAdversif/AegisPanel/internal/cores/singbox" // Phase 1 — real core provider (init() self-registers)
 	"github.com/QAdversif/AegisPanel/internal/db"
@@ -137,22 +138,17 @@ func main() {
 	}
 	defer a.Close()
 
-	// 4. v0.4.0-mvp-batched: wire the sing-box
-	//    provider's HTTP transport (panel -> agent)
-	//    and the per-node BatchedApplier queue.
-	//
-	//    `singboxWiring` injects a NodeResolver adapter
-	//    (delegates to nodes.Service.GetByID) and
-	//    the shared *http.Client. The helper stays in
-	//    main.go because it owns goroutines tied to
-	//    the boot ctx; lifting it into a method on
-	//    App would force an io.Closer pattern the
-	//    rest of the services do not need.
+	// 4. v0.5.0: wire the sing-box provider's HTTP
+	//    transport (panel -> agent) and the per-node
+	//    BatchedApplier queue. The wiring populates
+	//    `a.BatchedAppliers` and registers cancel
+	//    funcs for `a.Close()` to stop every
+	//    applier goroutine uniformly.
 	if sbp, sbErr := cores.Get("sing-box"); sbErr != nil {
 		log.Warn().Err(sbErr).Msg("cores: sing-box provider not registered; Apply will return ErrApplyNotConfigured")
 	} else if sbProvider, ok := sbp.(*singbox.Provider); ok {
-		if err := singboxWiring(ctx, sbProvider, a.Nodes); err != nil {
-			log.Fatal().Err(err).Msg("v0.4.0: singbox wiring failed")
+		if err := singboxWiring(ctx, sbProvider, a); err != nil {
+			log.Fatal().Err(err).Msg("v0.5.0: singbox wiring failed")
 		}
 	} else {
 		log.Warn().Msg("cores: registered sing-box provider is not *singbox.Provider — Apply transport disabled")
@@ -564,19 +560,30 @@ func adminUsage() {
 	fmt.Fprintln(os.Stderr, "The pg path requires AEGIS_POSTGRES_DSN.")
 }
 
-// singboxWiring is the v0.4.0-mvp-batched glue that
-// connects the sing-box CoreProvider (registered in the
-// process-global registry by the singbox package's init)
-// to the panel's node store + an HTTP client. It also
-// creates one BatchedApplier per node and spawns a
-// Run() goroutine for each.
+// singboxWiring is the v0.5.0 glue that connects the
+// sing-box CoreProvider (registered in the process-global
+// registry by the singbox package's init) to the
+// panel's node store + an HTTP client, then creates
+// one BatchedApplier per online node, spawns a Run()
+// goroutine for each, and registers the appliers on
+// the App (so users.Service / inbounds.Service can
+// Enqueue deltas via WithBatchApplier).
 //
-// The FlushFn is intentionally a no-op for v0.4.0-a:
-// the user-management layer that calls
-// BatchedApplier.Enqueue is the next slice (rolled
-// into v0.4.0-b). Once the user-management layer lands,
-// the only change here is the FlushFn body — the wiring
-// is otherwise complete.
+// Each applier's FlushFn is the v0.5.0 real path:
+//
+//  1. BuildCoreConfigForNode(inbounds, nodeID) —
+//     turn the inbounds table into a cores.CoreConfig.
+//  2. p.RenderConfig(coreConfig) — render the sing-box
+//     JSON from the CoreConfig.
+//  3. p.Apply(ctx, nodeID, rendered) — POST the
+//     rendered config to the agent's /v1/apply.
+//
+// The `AEGIS_BATCHED_APPLIER_ENABLED` flag (default
+// true) gates the whole wiring. When false, the
+// function returns nil after Configure() — no
+// appliers, no Enqueue, no goroutines. Services
+// that call WithBatchApplier get a nil-safe no-op
+// (see users.enqueueUserDelta / inbounds.enqueueForNode).
 //
 // `ctx` is the boot context (the same one signal.NotifyContext
 // returns in main). We derive each BatchedApplier's per-node
@@ -587,7 +594,7 @@ func adminUsage() {
 func singboxWiring(
 	ctx context.Context,
 	p *singbox.Provider,
-	nodesSvc *nodes.Service,
+	a *app.App,
 ) error {
 	// NodeResolver adapter: maps a node UUID to
 	// (address, bearer). The address is the
@@ -596,7 +603,7 @@ func singboxWiring(
 	// /etc/aegis/agent.env); the bearer is the
 	// shared secret from the v0.4.0
 	// agent_bearer column.
-	resolver := &singboxNodeResolver{svc: nodesSvc}
+	resolver := &singboxNodeResolver{svc: a.Nodes}
 
 	// Shared HTTP client. The singbox package's
 	// newHTTPClient() sets a 30s per-request
@@ -606,51 +613,57 @@ func singboxWiring(
 	// boot ctx (cancelled on shutdown).
 	p.Configure(resolver, singbox.NewHTTPClient())
 
+	// Hand the applier map to the services that
+	// produce deltas. This must happen BEFORE the
+	// loop below starts goroutines — otherwise a
+	// Create handler that fires during boot would
+	// enqueue into a half-built map.
+	a.Users.WithBatchApplier(a.BatchedAppliers)
+	a.Inbounds.WithBatchApplier(a.BatchedAppliers)
+
+	// The applier map is always non-nil on App
+	// (Build initialises it). When the feature
+	// flag is off, we keep the map empty and
+	// skip the per-node goroutines; the services
+	// above iterate an empty map and Enqueue
+	// becomes a no-op.
+	if !a.Config.BatchedApplierEnabled {
+		log.Warn().Msg("v0.5.0: BatchedApplier disabled (AEGIS_BATCHED_APPLIER_ENABLED=false); Apply will not be called from panel mutations")
+		return nil
+	}
+
 	// Per-node BatchedApplier map. Built once
-	// at boot from the current node list; the
-	// v0.4.0+ provisioning flow will add a
+	// at boot from the current online node list;
+	// the v0.5.0+ provisioning flow will add a
 	// callback (node transitioned to online →
-	// spawn Run for it) but for v0.4.0-a we
-	// cover the existing set.
-	allNodes, err := nodesSvc.List(ctx)
+	// spawn Run for it) but for v0.5.0 we cover
+	// the existing set.
+	allNodes, err := a.Nodes.List(ctx)
 	if err != nil {
-		return fmt.Errorf("v0.4.0: list nodes: %w", err)
+		return fmt.Errorf("v0.5.0: list nodes: %w", err)
 	}
 	for _, n := range allNodes {
 		if n.State != nodes.StateOnline {
 			continue
 		}
-		// FlushFn is a no-op for v0.4.0-a — the
-		// user-management layer that calls
-		// Enqueue is the next slice. When it
-		// lands, the FlushFn body becomes:
-		//   1. Re-render the affected node's
-		//      CoreConfig from current state.
-		//   2. Call p.Apply(ctx, n.ID.String(), rendered).
-		// Until then, the loop just demonstrates
-		// the wiring is functional.
-		applier := cores.NewBatchedApplier(
-			20*time.Second,
-			1000,
-			func(_ context.Context, deltas []cores.Delta) error {
-				log.Info().
-					Str("node", n.Name).
-					Int("deltas", len(deltas)).
-					Msg("v0.4.0: BatchedApplier flush (no-op stub; real render+apply lands with user-management)")
-				return nil
-			},
-		)
-		applierCtx, applierCancel := context.WithCancel(ctx)
-		go func() {
-			defer applierCancel()
-			if err := applier.Run(applierCtx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Error().Err(err).Str("node", n.Name).Msg("v0.4.0: BatchedApplier.Run exited unexpectedly")
-			}
-		}()
-		log.Info().
-			Str("node", n.Name).
-			Dur("window", applier.Window()).
-			Msg("v0.4.0: BatchedApplier started")
+		// Capture loop variable for the closure.
+		// The for-range over the slice (not map)
+		// would let us drop the shadow, but the
+		// linter's `loopclosure` check catches
+		// it regardless.
+		nodeID := n.ID
+		nodeName := n.Name
+		// FlushFn: the v0.5.0 real path.
+		// Phase 1 / v0.5.0: the sing-box
+		// renderer is single-user per inbound,
+		// so the per-user deltas are advisory.
+		// The flush always re-renders the full
+		// config and applies it; the agent's
+		// diff (future work) is what determines
+		// whether the file on disk actually
+		// changes.
+		flushFn := builder.NewFlushFn(a.Inbounds, p, nodeID, nodeName)
+		a.AddNodeBatchedApplier(ctx, nodeID, nodeName, flushFn)
 	}
 	return nil
 }

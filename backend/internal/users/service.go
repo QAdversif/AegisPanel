@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -14,6 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
+
+	"github.com/QAdversif/AegisPanel/internal/cores"
 )
 
 // MinUsernameLen / MaxUsernameLen are the inclusive
@@ -53,7 +56,15 @@ const (
 //   - sub_token rotation (the rotateSubToken
 //     helper implements migration 0011's
 //     "previous token keeps working for a grace
-//     window" semantics).
+//     window" semantics);
+//   - v0.5.0 BatchedApplier fan-out: every mutating
+//     method (Create/Update/Delete/RotateSubToken)
+//     enqueues a cores.Delta into every applier
+//     registered via WithBatchApplier. The appliers
+//     coalesce by user ID and call back into the
+//     FlushFn (wired in cmd/aegis/main.go) which
+//     re-renders the sing-box config and POSTs it
+//     to the agent.
 //
 // Handlers call Service rather than Store directly
 // so the rules stay in one place and the pgx
@@ -65,6 +76,15 @@ type Service struct {
 	idGen      func() uuid.UUID
 	tokenBytes int               // bytes of random for sub_token (default 32 → 64 hex)
 	webhooks   *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	// batchedAppliers is the v0.5.0 outbound
+	// render+apply fan-out. nil = feature disabled
+	// (no auto-apply); the field is intentionally
+	// kept separate from the webhooks field so a
+	// future "webhooks but not batched" deployment
+	// (e.g. an operator who only wants the event
+	// stream) is one flag away. See
+	// AEGIS_BATCHED_APPLIER_ENABLED.
+	batchedAppliers map[uuid.UUID]*cores.BatchedApplier
 }
 
 // NewService wires a Service around the given store.
@@ -87,6 +107,51 @@ func NewService(store Store) *Service {
 func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 	s.webhooks = svc
 	return s
+}
+
+// WithBatchApplier installs the per-node
+// BatchedApplier map. The map is owned by the
+// caller (typically `*app.App.BatchedAppliers`);
+// this setter only saves the reference so the
+// mutating methods can fan out a Delta to every
+// node on every change. A nil or empty map is a
+// no-op (the feature is effectively off); the
+// mutating methods test for that before
+// dereferencing.
+func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Service {
+	s.batchedAppliers = aps
+	return s
+}
+
+// enqueueUserDelta fans out a single Delta to every
+// registered BatchedApplier. Phase 1 / v0.5.0 does
+// not narrow the fan-out to "this user's nodes"
+// because the sing-box renderer is single-user and
+// the FlushFn re-renders the full config anyway.
+// A future Phase 2 PR narrows this to the nodes
+// matching the user's HostsAllowlist / Blocklist.
+//
+// The helper swallows no errors — Enqueue is a
+// blocking channel write and a slow consumer
+// (the FlushFn + agent round-trip) is the only
+// failure mode. The 1000-deep queue (set in
+// cmd/aegis/main.go) gives a 50-deltas-per-second
+// user-management rate ~20s of buffer; sustained
+// over that the channel blocks the mutating
+// method, which is the desired backpressure
+// signal (the operator will see latency on the
+// HTTP write and either scale the agent or
+// disable the feature).
+func (s *Service) enqueueUserDelta(d cores.Delta) {
+	if len(s.batchedAppliers) == 0 {
+		return
+	}
+	for _, ap := range s.batchedAppliers {
+		if ap == nil {
+			continue
+		}
+		ap.Enqueue(d)
+	}
 }
 
 // SetClock swaps the time source. Test-only.
@@ -254,6 +319,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 	// for the after-commit + non-blocking
 	// rationale.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserCreated, &out)
+	// v0.5.0: enqueue a DeltaAddUser for every
+	// registered BatchedApplier. The appliers
+	// coalesce by UserID (the cancel/replace
+	// logic in cores.BatchedApplier.absorb drops
+	// a paired DeltaRemoveUser from the same
+	// window).
+	s.enqueueUserDelta(cores.Delta{
+		Kind:   cores.DeltaAddUser,
+		UserID: out.ID,
+	})
 	return &out, nil
 }
 
@@ -375,6 +450,34 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 	// write (the row's UpdatedAt is bumped) and
 	// still fires the event.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
+	// v0.5.0: enqueue a DeltaAddUser so the next
+	// FlushFn re-renders the node config. We use
+	// DeltaAddUser (not DeltaSetLimit) because
+	// the sing-box renderer in Phase 1 is
+	// single-user and treats any change as
+	// "re-render". A future Phase 2 PR that
+	// narrows the renderer to per-user changes
+	// will switch this to DeltaSetLimit when
+	// in.TrafficLimitBytes is the only changed
+	// field, and keep DeltaAddUser otherwise.
+	delta := cores.Delta{
+		Kind:   cores.DeltaAddUser,
+		UserID: out.ID,
+	}
+	if in.TrafficLimitBytes != nil {
+		// TrafficLimitBytes is a per-user quota.
+		// In Phase 1 the renderer cannot enforce
+		// it natively; the enqueue still fires so
+		// the FlushFn re-renders and the agent
+		// gets a chance to apply any rate-limit
+		// sidecar (e.g. a netfilter nftables
+		// rule the agent maintains out-of-band).
+		delta.Kind = cores.DeltaSetLimit
+		delta.Payload, _ = json.Marshal(struct {
+			Bytes int64 `json:"bytes"`
+		}{Bytes: out.TrafficLimitBytes})
+	}
+	s.enqueueUserDelta(delta)
 	return out, nil
 }
 
@@ -399,6 +502,17 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// rely on a local cache).
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserDeleted, map[string]string{
 		"id": id.String(),
+	})
+	// v0.5.0: enqueue a DeltaRemoveUser so the
+	// next FlushFn re-renders the node config
+	// without the deleted user. The appliers'
+	// cancel/replace logic will drop this delta
+	// if a DeltaAddUser for the same UserID is
+	// enqueued in the same window (a quick
+	// delete-then-recreate).
+	s.enqueueUserDelta(cores.Delta{
+		Kind:   cores.DeltaRemoveUser,
+		UserID: id,
 	})
 	return nil
 }
@@ -467,6 +581,19 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 	// EventUserSubTokenRotated would be
 	// cleaner but is out of scope for v0.7.x.
 	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventUserUpdated, out)
+	// v0.5.0: enqueue a DeltaAddUser so the
+	// next FlushFn re-renders the config with
+	// the new sub_token. Phase 1's single-user
+	// sing-box renderer does not actually
+	// consume the token (the operator's
+	// credentials are in the inbound's Params),
+	// but the enqueue is symmetric with Create
+	// and Update so a Phase 2 multi-user
+	// renderer picks it up for free.
+	s.enqueueUserDelta(cores.Delta{
+		Kind:   cores.DeltaAddUser,
+		UserID: out.ID,
+	})
 	return out, nil
 }
 
