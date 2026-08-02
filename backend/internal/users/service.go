@@ -147,12 +147,38 @@ func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Ser
 }
 
 // enqueueUserDelta fans out a single Delta to every
-// registered BatchedApplier. Phase 1 / v0.5.0 does
-// not narrow the fan-out to "this user's nodes"
-// because the sing-box renderer is single-user and
-// the FlushFn re-renders the full config anyway.
-// A future Phase 2 PR narrows this to the nodes
-// matching the user's HostsAllowlist / Blocklist.
+// registered BatchedApplier that the user is
+// eligible for. Phase 1 / v0.5.0 did not narrow
+// the fan-out (the sing-box renderer was single-
+// user, the FlushFn re-rendered the full config
+// anyway). Phase 2 / v0.7.x narrows by the user's
+// `HostsAllowlist` and `HostsBlocklist`:
+//
+//   - If both are empty: fan-out to every node
+//     (default allow). This is the v0.5.0 behaviour
+//     and the safe migration path — a panel that
+//     has not yet populated the allowlist keeps
+//     its existing fan-out.
+//   - If `HostsAllowlist` is non-empty: only fan
+//     out to appliers whose node ID is in the
+//     allowlist. This is the "user is allowed on
+//     this set of nodes" semantic.
+//   - If `HostsBlocklist` is non-empty: skip any
+//     applier whose node ID is in the blocklist.
+//     The blocklist wins over the allowlist (an
+//     empty allowlist + non-empty blocklist means
+//     "all nodes EXCEPT these").
+//
+// The `nodeID` argument to Enqueue is the
+// BatchedApplier's per-node key. The user model
+// stores `HostsAllowlist` / `Blocklist` as
+// `[]uuid.UUID`; for v0.7.x the BatchedApplier
+// key is the *node* UUID (set by
+// `App.AddNodeBatchedApplier`). The semantic
+// "this user is allowed on these nodes" is the
+// fan-out filter; a future PR that adds a host-to-
+// node mapping can re-introduce the host-level
+// filter without changing this helper's contract.
 //
 // The helper swallows no errors — Enqueue is a
 // blocking channel write and a slow consumer
@@ -165,13 +191,45 @@ func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Ser
 // signal (the operator will see latency on the
 // HTTP write and either scale the agent or
 // disable the feature).
-func (s *Service) enqueueUserDelta(d cores.Delta) {
+func (s *Service) enqueueUserDelta(d cores.Delta, user *User) {
 	if len(s.batchedAppliers) == 0 {
 		return
 	}
-	for _, ap := range s.batchedAppliers {
+	// Fast paths: nil user (shouldn't happen at the
+	// call sites, but be defensive) OR no allowlist
+	// filter at all → fan out to every node.
+	if user == nil || (len(user.HostsAllowlist) == 0 && len(user.HostsBlocklist) == 0) {
+		for _, ap := range s.batchedAppliers {
+			if ap == nil {
+				continue
+			}
+			ap.Enqueue(d)
+		}
+		return
+	}
+	// Phase 2: filter by the user's allowlist /
+	// blocklist. The appliers' map key is the
+	// node UUID, so we look up by node ID
+	// directly.
+	allow := make(map[uuid.UUID]struct{}, len(user.HostsAllowlist))
+	for _, id := range user.HostsAllowlist {
+		allow[id] = struct{}{}
+	}
+	block := make(map[uuid.UUID]struct{}, len(user.HostsBlocklist))
+	for _, id := range user.HostsBlocklist {
+		block[id] = struct{}{}
+	}
+	for nodeID, ap := range s.batchedAppliers {
 		if ap == nil {
 			continue
+		}
+		if _, blocked := block[nodeID]; blocked {
+			continue
+		}
+		if len(allow) > 0 {
+			if _, allowed := allow[nodeID]; !allowed {
+				continue
+			}
 		}
 		ap.Enqueue(d)
 	}
@@ -358,11 +416,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 	// coalesce by UserID (the cancel/replace
 	// logic in cores.BatchedApplier.absorb drops
 	// a paired DeltaRemoveUser from the same
-	// window).
+	// window). v0.7.x: the fan-out is narrowed by
+	// the user's HostsAllowlist / Blocklist (see
+	// enqueueUserDelta for the contract).
 	s.enqueueUserDelta(cores.Delta{
 		Kind:   cores.DeltaAddUser,
 		UserID: out.ID,
-	})
+	}, &out)
 	return &out, nil
 }
 
@@ -525,7 +585,7 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 			Bytes int64 `json:"bytes"`
 		}{Bytes: out.TrafficLimitBytes})
 	}
-	s.enqueueUserDelta(delta)
+	s.enqueueUserDelta(delta, out)
 	return out, nil
 }
 
@@ -583,11 +643,15 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// cancel/replace logic will drop this delta
 	// if a DeltaAddUser for the same UserID is
 	// enqueued in the same window (a quick
-	// delete-then-recreate).
+	// delete-then-recreate). v0.7.x: pass the
+	// pre-delete user (`cur`) so the fan-out is
+	// narrowed by the same HostsAllowlist /
+	// Blocklist the user had when the row was
+	// alive.
 	s.enqueueUserDelta(cores.Delta{
 		Kind:   cores.DeltaRemoveUser,
 		UserID: id,
-	})
+	}, cur)
 	return nil
 }
 
@@ -678,11 +742,13 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 	// credentials are in the inbound's Params),
 	// but the enqueue is symmetric with Create
 	// and Update so a Phase 2 multi-user
-	// renderer picks it up for free.
+	// renderer picks it up for free. v0.7.x:
+	// the fan-out is narrowed by the post-
+	// rotate user's HostsAllowlist / Blocklist.
 	s.enqueueUserDelta(cores.Delta{
 		Kind:   cores.DeltaAddUser,
 		UserID: out.ID,
-	})
+	}, out)
 	return out, nil
 }
 
