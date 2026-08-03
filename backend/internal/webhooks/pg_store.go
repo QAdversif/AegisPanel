@@ -41,6 +41,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 )
 
 // jsonRawMessage wraps the JSONB bytes in a
@@ -58,7 +60,7 @@ func jsonRawMessage(b []byte) any {
 // PgStore is the PostgreSQL-backed Store.
 type PgStore struct {
 	pool   *pgxpool.Pool
-	cipher SecretCipher
+	cipher envelope.SecretCipher
 }
 
 // NewPgStore wires a PgStore from an open pgxpool
@@ -68,14 +70,15 @@ type PgStore struct {
 // write (encrypt the secret) and read (decrypt the
 // ciphertext back to plaintext for the Service).
 //
-// `cipher` is a SecretCipher interface; the
-// production wiring passes an *AgeSecretCipher
-// built from AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS
-// and AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE. Tests
-// can pass a NoopSecretCipher to bypass encryption
-// (the secret round-trips as plaintext through
-// the column).
-func NewPgStore(pool *pgxpool.Pool, cipher SecretCipher) *PgStore {
+// `cipher` is an `envelope.SecretCipher` (see
+// internal/crypto/envelope). The production wiring
+// passes an *envelope.AgeSecretCipher built from
+// AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS and
+// AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE. Tests can
+// pass an *envelope.NoopSecretCipher to bypass
+// encryption (the secret round-trips as plaintext
+// through the column).
+func NewPgStore(pool *pgxpool.Pool, cipher envelope.SecretCipher) *PgStore {
 	if cipher == nil {
 		// Fail loud: a nil cipher is a wiring
 		// bug, not a "fall back to plaintext"
@@ -514,7 +517,7 @@ type rowScanner interface {
 // the secret. The cipher is owned by the store
 // that called scanEndpoint (passed in by the
 // caller — see scanEndpointWithCipher).
-func scanEndpointWithCipher(row rowScanner, cipher SecretCipher) (*Endpoint, error) {
+func scanEndpointWithCipher(row rowScanner, cipher envelope.SecretCipher) (*Endpoint, error) {
 	var (
 		e              Endpoint
 		secretCipher   []byte
