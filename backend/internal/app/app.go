@@ -62,6 +62,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/noop"
 	"github.com/QAdversif/AegisPanel/internal/credentials"
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -278,15 +279,21 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 
 	// 9. Webhooks. pg backend requires the age
 	//    secret cipher; the memory backend uses
-	//    the NoopSecretCipher. We do not route
-	//    this through MustBuild because the pg
-	//    constructor needs the cipher and the
-	//    memory constructor does not — a one-off
-	//    switch is the smaller code.
+	//    the envelope.NoopSecretCipher. The cipher
+	//    itself lives in internal/crypto/envelope
+	//    (v0.8.x) so other at-rest secrets (the
+	//    persistent node SSH key being the first)
+	//    can share the same age boundary and the
+	//    same `AEGIS_*_SECRET_AGE_*` env vars. We
+	//    do not route this through MustBuild
+	//    because the pg constructor needs the
+	//    cipher and the memory constructor does
+	//    not — a one-off switch is the smaller
+	//    code.
 	var webhooksStore webhooks.Store
 	switch cfg.WebhooksBackend {
 	case "pg":
-		cipher, err := webhooks.NewAgeSecretCipher(
+		cipher, err := envelope.NewAgeSecretCipher(
 			cfg.WebhooksSecretAgeRecipients,
 			cfg.WebhooksSecretAgeKeyFile,
 		)
