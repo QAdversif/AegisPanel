@@ -28,6 +28,7 @@ import (
 	"filippo.io/age"
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 	"github.com/QAdversif/AegisPanel/testutil"
 )
 
@@ -64,15 +65,16 @@ func writeAgeIdentity(t *testing.T, id *age.X25519Identity) string {
 // test exit.
 func newPgStore(t *testing.T) *PgStore {
 	t.Helper()
-	return newPgStoreWithCipher(t, NewNoopSecretCipher())
+	return newPgStoreWithCipher(t, envelope.NewNoopSecretCipher())
 }
 
 // newPgStoreWithCipher is the lower-level helper
 // that lets a test pass a specific cipher (the
-// age-envelope tests build a real AgeSecretCipher
-// from a generated age key pair and assert
-// ciphertext-at-rest via a direct DB query).
-func newPgStoreWithCipher(t *testing.T, cipher SecretCipher) *PgStore {
+// age-envelope tests build a real
+// envelope.AgeSecretCipher from a generated age
+// key pair and assert ciphertext-at-rest via a
+// direct DB query).
+func newPgStoreWithCipher(t *testing.T, cipher envelope.SecretCipher) *PgStore {
 	t.Helper()
 	pool := testutil.MustNewPool(t)
 	if _, err := pool.Exec(context.Background(),
@@ -492,7 +494,7 @@ func TestPgStore_SecretAge_RoundTrip(t *testing.T) {
 	// helper reads this exact format.
 	identityPath := writeAgeIdentity(t, operatorIdentity)
 
-	cipher, err := NewAgeSecretCipher(
+	cipher, err := envelope.NewAgeSecretCipher(
 		[]string{operatorRecipient.String()},
 		identityPath,
 	)
@@ -566,7 +568,7 @@ func TestPgStore_SecretAge_RoundTrip(t *testing.T) {
 		t.Fatalf("GenerateX25519Identity (other): %v", err)
 	}
 	otherPath := writeAgeIdentity(t, otherIdentity)
-	otherCipher, err := NewAgeSecretCipher(
+	otherCipher, err := envelope.NewAgeSecretCipher(
 		[]string{otherIdentity.Recipient().String()},
 		otherPath,
 	)
