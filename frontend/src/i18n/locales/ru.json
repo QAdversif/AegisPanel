@@ -11,6 +11,7 @@
     "audits": "Аудит",
     "backups": "Бэкапы",
     "webhooks": "Вебхуки",
+    "credentials": "Учётки",
     "profile": "Профиль",
     "openMenu": "Открыть меню",
     "soon": "Скоро"
@@ -479,7 +480,8 @@
       "hosts": "Хосты",
       "audits": "Аудит",
       "backups": "Бэкапы",
-      "webhooks": "Вебхуки"
+      "webhooks": "Вебхуки",
+      "credentials": "Учётки"
     }
   },
   "webhooks": {
@@ -559,6 +561,44 @@
         "backup": "Бэкапы",
         "inbound": "Инбаунды"
       }
+    }
+  },
+  "credentials": {
+    "title": "Учётки",
+    "subtitle": "Per-(user, inbound) sing-box учётки. Одна строка на пару (user, inbound); ротация через меню строки.",
+    "newCredential": "Новая учётка",
+    "searchPlaceholder": "Поиск по user, inbound или значению…",
+    "empty": "Учётки пока не настроены.",
+    "rotate": "Ротировать",
+    "delete": "Удалить",
+    "viewForUser": "Показать учётки этого пользователя",
+    "filterPrefix": "фильтр:",
+    "filterClear": "очистить",
+    "columns": {
+      "user": "Пользователь",
+      "inbound": "Inbound",
+      "value": "Значение",
+      "createdAt": "Создано",
+      "updatedAt": "Обновлено"
+    },
+    "createTitle": "Создать учётку",
+    "createDescription": "Добавить новую per-(user, inbound) учётку. Пара (user, inbound) должна быть уникальной.",
+    "rotateTitle": "Ротировать значение",
+    "rotateDescription": "Заменить значение учётки. Пара (user, inbound) фиксирована существующей строкой.",
+    "deleteTitle": "Удалить учётку",
+    "deleteDescription": "Безвозвратное удаление. Пару (user, inbound) можно пересоздать через форму новой учётки.",
+    "loadFailed": "Не удалось загрузить учётки",
+    "createFailed": "Не удалось создать учётку",
+    "rotateFailed": "Не удалось ротировать учётку",
+    "deleteFailed": "Не удалось удалить учётку",
+    "created": "Учётка создана",
+    "rotated": "Учётка ротирована",
+    "deleted": "Учётка удалена",
+    "field": {
+      "userId": "Пользователь",
+      "inboundId": "Inbound",
+      "credentialValue": "Значение",
+      "credentialValueHelp": "1-512 символов. Валидация per-protocol формы — на стороне sing-box renderer'а."
     }
   }
 }
