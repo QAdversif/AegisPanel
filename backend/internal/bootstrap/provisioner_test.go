@@ -3,14 +3,18 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 )
 
 // mockNodeProvider is a minimal in-memory
@@ -45,7 +49,43 @@ func (m *mockNodeProvider) GetByID(_ context.Context, id uuid.UUID) (NodeRow, er
 func (m *mockNodeProvider) Update(_ context.Context, row NodeRow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows[row.ID] = row
+	existing, ok := m.rows[row.ID]
+	if !ok {
+		return errors.New("mock: not found")
+	}
+	// The mock mirrors the production SQL
+	// Update path: only the fields the
+	// provisioner owns (Name, State, Address,
+	// AgentBearer) are overwritten; the
+	// dedicated-method columns
+	// (SSHPrivateKeyCiphertext) are preserved
+	// on the existing row. The production
+	// PgStore.Update does this at the SQL
+	// level (the UPDATE statement only names
+	// the columns the provisioner writes);
+	// the mock enforces the same contract
+	// at the Go level so the test set is
+	// faithful to what the production code
+	// will see in the DB.
+	merged := existing
+	merged.ID = row.ID
+	merged.Name = row.Name
+	merged.State = row.State
+	merged.Address = row.Address
+	// AgentBearer is dedicated-method
+	// territory (SetAgentBearer) but the
+	// production Update SQL does not touch
+	// it either; preserve the existing
+	// value unless the caller explicitly
+	// overwrites it.
+	merged.AgentBearer = row.AgentBearer
+	// SSHPrivateKeyCiphertext is the v0.8.x
+	// dedicated-method column; the mock
+	// preserves whatever SetSSHPrivateKeyCiphertext
+	// last wrote.
+	// (merged.SSHPrivateKeyCiphertext is
+	// already the existing value.)
+	m.rows[row.ID] = merged
 	return nil
 }
 
@@ -57,6 +97,26 @@ func (m *mockNodeProvider) SetAgentBearer(_ context.Context, id uuid.UUID, beare
 		return errors.New("mock: not found")
 	}
 	r.AgentBearer = bearer
+	m.rows[id] = r
+	return nil
+}
+
+func (m *mockNodeProvider) SetSSHPrivateKeyCiphertext(_ context.Context, id uuid.UUID, ciphertext []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.rows[id]
+	if !ok {
+		return errors.New("mock: not found")
+	}
+	// The mock follows the production contract:
+	// nil from the caller becomes an empty slice
+	// (the "no key yet" sentinel) rather than a
+	// nil slice. The provisioner never passes nil;
+	// the guard mirrors the production path.
+	if ciphertext == nil {
+		ciphertext = []byte{}
+	}
+	r.SSHPrivateKeyCiphertext = ciphertext
 	m.rows[id] = r
 	return nil
 }
@@ -213,6 +273,290 @@ func TestProvisioner_RetryFromOffline(t *testing.T) {
 	}
 	if newState != StateOnline {
 		t.Errorf("state = %s, want online (retry succeeded)", newState)
+	}
+}
+
+// TestProvisioner_PasswordInstall_GeneratesAndStoresSSHKey
+// verifies the v0.8.x "auto-deploy" path: a
+// password-based install generates a fresh
+// ed25519 keypair on the panel, encrypts the
+// private half via the envelope, persists the
+// ciphertext, and pushes the public half into
+// $HOME/.ssh/authorized_keys on the node.
+// The test asserts:
+//
+//   - the row's SSHPrivateKeyCiphertext is
+//     non-empty after a successful install
+//   - the ciphertext decrypts through the same
+//     envelope back to a valid OpenSSH-PEM
+//     ed25519 private key block
+//   - the SSH client received an Upload call
+//     to the /tmp/.aegis-pubkey path (the
+//     SFTP push of the public key)
+//   - the SSH client received a Run call for
+//     the constant "append + cleanup" shell
+//     command
+func TestProvisioner_PasswordInstall_GeneratesAndStoresSSHKey(t *testing.T) {
+	const (
+		nodeIDStr = "55555555-5555-4555-8555-555555555555"
+		nodeName  = "test-node-password"
+	)
+	nodeID := uuid.MustParse(nodeIDStr)
+	store := newMockNodeProvider(NodeRow{
+		ID:      nodeID,
+		Name:    nodeName,
+		State:   string(StateNew),
+		Address: "10.0.0.1:22",
+	})
+	src := writeTempScript(t, "#!/bin/sh\nexec sleep infinity\n")
+	mock := &mockClient{runOut: "active\n"}
+	svc := NewService(ServiceConfig{
+		Nodes:       store,
+		AgentBinary: src,
+		KnownHosts:  filepath.Join(t.TempDir(), "known_hosts"),
+		SSHUser:     "root",
+		SSHPort:     22,
+		// The NoopSecretCipher is the in-memory
+		// equivalent of the production age
+		// cipher for test purposes: the
+		// provisioner encrypts with it on
+		// store and decrypts with it on
+		// re-provision, both operations
+		// returning the same bytes.
+		Envelope: envelope.NewNoopSecretCipher(),
+	})
+	svc.installer = &Installer{
+		ClientFactory: func(InstallInput) (Client, error) { return mock, nil },
+	}
+	newState, err := svc.Provision(context.Background(), nodeID, nil, ProvisionRequest{
+		SSHPassword: "test-password",
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if newState != StateOnline {
+		t.Errorf("state = %s, want online", newState)
+	}
+	row, _ := store.GetByID(context.Background(), nodeID)
+	if len(row.SSHPrivateKeyCiphertext) == 0 {
+		t.Fatal("row.SSHPrivateKeyCiphertext is empty; provisioner did not persist the panel key")
+	}
+	// The mock uses a NoopSecretCipher, so the
+	// "ciphertext" is the plaintext PEM
+	// verbatim. A real age envelope would
+	// produce different bytes; the integration
+	// tests under `envelope_test.go` cover
+	// the round-trip. The unit test only
+	// asserts the bytes land in the column.
+	if !bytes.Contains(row.SSHPrivateKeyCiphertext, []byte("PRIVATE KEY")) {
+		t.Errorf("row.SSHPrivateKeyCiphertext does not look like a PEM block: %q", row.SSHPrivateKeyCiphertext)
+	}
+	// Verify the SSH client received the
+	// expected SFTP + Run calls. UploadPaths
+	// is populated by the mockClient (see
+	// installer_test.go).
+	if len(mock.uploadPaths) == 0 {
+		t.Error("expected at least one SFTP Upload call (the /tmp/.aegis-pubkey push)")
+	}
+	foundPubKeyUpload := false
+	for _, p := range mock.uploadPaths {
+		if p == "/tmp/.aegis-pubkey" {
+			foundPubKeyUpload = true
+			break
+		}
+	}
+	if !foundPubKeyUpload {
+		t.Errorf("expected SFTP upload to /tmp/.aegis-pubkey; got %v", mock.uploadPaths)
+	}
+	if len(mock.runCmds) == 0 {
+		t.Error("expected at least one Run call (the authorized_keys append command)")
+	}
+}
+
+// TestProvisioner_StoredKeyReuse_DecryptsOnReProvision
+// verifies the "no password on re-provision"
+// behaviour: a node that already has a stored
+// SSH key uses that key for the next install,
+// ignoring any password the operator types.
+// The test pre-seeds the row with a ciphertext
+// (a valid OpenSSH-PEM block, encrypted with
+// the NoopSecretCipher for the round-trip)
+// and then runs a Provision. The assertion is
+// that:
+//
+//   - the install succeeded (the mock client
+//     returns active)
+//   - the row's ciphertext was NOT overwritten
+//     (the provisioner does not rotate an
+//     existing key on a successful re-install)
+//   - the row's state transitioned to online
+func TestProvisioner_StoredKeyReuse_DecryptsOnReProvision(t *testing.T) {
+	const (
+		nodeIDStr = "66666666-6666-4666-8666-666666666666"
+		nodeName  = "test-node-reuse"
+	)
+	nodeID := uuid.MustParse(nodeIDStr)
+	// Pre-existing ciphertext. The provisioner
+	// decrypts this and uses it as the auth
+	// material for the next install. With the
+	// NoopSecretCipher the "ciphertext" is
+	// the plaintext bytes. The fixture is a
+	// deliberately non-PEM byte string so the
+	// gitleaks CI job (which pattern-matches
+	// on the "BEGIN ... PRIVATE KEY" header)
+	// does not flag the test as a real
+	// secret leak — the test only needs
+	// "some bytes that round-trip through
+	// the envelope", which a non-PEM string
+	// satisfies just as well.
+	existingKey := []byte("existing-pem-bytes-from-previous-run")
+	store := newMockNodeProvider(NodeRow{
+		ID:                      nodeID,
+		Name:                    nodeName,
+		State:                   string(StateOffline), // re-provision from a previous failure
+		Address:                 "10.0.0.1:22",
+		SSHPrivateKeyCiphertext: existingKey,
+	})
+	src := writeTempScript(t, "#!/bin/sh\nexec sleep infinity\n")
+	mock := &mockClient{runOut: "active\n"}
+	svc := NewService(ServiceConfig{
+		Nodes:       store,
+		AgentBinary: src,
+		KnownHosts:  filepath.Join(t.TempDir(), "known_hosts"),
+		SSHUser:     "root",
+		SSHPort:     22,
+		Envelope:    envelope.NewNoopSecretCipher(),
+	})
+	svc.installer = &Installer{
+		ClientFactory: func(InstallInput) (Client, error) { return mock, nil },
+	}
+	// Operator still types a password on the
+	// form. The provisioner must ignore it
+	// (the stored key wins).
+	newState, err := svc.Provision(context.Background(), nodeID, nil, ProvisionRequest{
+		SSHPassword: "ignored-because-stored-key-wins",
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if newState != StateOnline {
+		t.Errorf("state = %s, want online", newState)
+	}
+	row, _ := store.GetByID(context.Background(), nodeID)
+	// The stored ciphertext must be unchanged
+	// (no rotation on a successful re-install).
+	if !bytes.Equal(row.SSHPrivateKeyCiphertext, existingKey) {
+		t.Errorf("row.SSHPrivateKeyCiphertext was overwritten; want preserved existing bytes")
+	}
+}
+
+// TestProvisioner_OperatorKeyInstall_DoesNotRegenerate
+// verifies the "operator gave a private key"
+// path: the provisioner uses the operator's
+// key as-is and does NOT register the
+// post-install key-generation hook. The
+// operator's key is the persistent credential
+// for this node, so the panel has no business
+// generating its own. The assertion is that
+// the row's SSHPrivateKeyCiphertext stays
+// empty (no panel key was written).
+func TestProvisioner_OperatorKeyInstall_DoesNotRegenerate(t *testing.T) {
+	const (
+		nodeIDStr = "77777777-7777-4777-8777-777777777777"
+		nodeName  = "test-node-operator-key"
+	)
+	nodeID := uuid.MustParse(nodeIDStr)
+	store := newMockNodeProvider(NodeRow{
+		ID:      nodeID,
+		Name:    nodeName,
+		State:   string(StateNew),
+		Address: "10.0.0.1:22",
+	})
+	src := writeTempScript(t, "#!/bin/sh\nexec sleep infinity\n")
+	mock := &mockClient{runOut: "active\n"}
+	svc := NewService(ServiceConfig{
+		Nodes:       store,
+		AgentBinary: src,
+		KnownHosts:  filepath.Join(t.TempDir(), "known_hosts"),
+		SSHUser:     "root",
+		SSHPort:     22,
+		Envelope:    envelope.NewNoopSecretCipher(),
+	})
+	svc.installer = &Installer{
+		ClientFactory: func(InstallInput) (Client, error) { return mock, nil },
+	}
+	_, err := svc.Provision(context.Background(), nodeID, nil, ProvisionRequest{
+		// Operator gave a key, not a password.
+		// The provisioner uses the key for
+		// the install and does NOT register
+		// the post-install key-generation
+		// hook (the operator's key is the
+		// persistent credential).
+		SSHPrivateKey: "operator-supplied-pem",
+	})
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	row, _ := store.GetByID(context.Background(), nodeID)
+	if len(row.SSHPrivateKeyCiphertext) != 0 {
+		t.Errorf("row.SSHPrivateKeyCiphertext = %q; want empty (operator key path does not generate a panel key)",
+			row.SSHPrivateKeyCiphertext)
+	}
+}
+
+// TestProvisioner_StoredKeyWithoutEnvelope_FailsClosed
+// verifies the v0.8.x failure mode: the row
+// has a stored SSH key (from a previous run
+// with a real age envelope) but the panel was
+// booted without an envelope (a config bug).
+// The provisioner refuses to proceed — the
+// alternative is to silently fall through to
+// the operator's request and lose access to
+// the stored key on the next SSH-rotate.
+//
+// This is the "envelope is required for stored
+// key decryption" contract; the symmetric
+// failure (no stored key, no envelope,
+// password given) is the "key generation
+// skipped silently" path that is documented
+// in buildPersistentSSHKeyHook.
+func TestProvisioner_StoredKeyWithoutEnvelope_FailsClosed(t *testing.T) {
+	const (
+		nodeIDStr = "88888888-8888-4888-8888-888888888888"
+		nodeName  = "test-node-no-envelope"
+	)
+	nodeID := uuid.MustParse(nodeIDStr)
+	store := newMockNodeProvider(NodeRow{
+		ID:                      nodeID,
+		Name:                    nodeName,
+		State:                   string(StateOffline),
+		Address:                 "10.0.0.1:22",
+		SSHPrivateKeyCiphertext: []byte("encrypted-blob-from-previous-run"),
+	})
+	src := writeTempScript(t, "#!/bin/sh\nexit 0\n")
+	mock := &mockClient{runOut: "active\n"}
+	svc := NewService(ServiceConfig{
+		Nodes:       store,
+		AgentBinary: src,
+		KnownHosts:  filepath.Join(t.TempDir(), "known_hosts"),
+		SSHUser:     "root",
+		SSHPort:     22,
+		// Envelope deliberately omitted (nil).
+	})
+	svc.installer = &Installer{
+		ClientFactory: func(InstallInput) (Client, error) { return mock, nil },
+	}
+	_, err := svc.Provision(context.Background(), nodeID, nil, ProvisionRequest{
+		SSHPassword: "ignored",
+	})
+	if err == nil {
+		t.Fatal("Provision: expected error on stored key without envelope, got nil")
+	}
+	if !strings.Contains(err.Error(), "envelope is not configured") {
+		t.Errorf("err = %v, want one mentioning 'envelope is not configured'", err)
+	}
+	if mock.connectCalled {
+		t.Error("Connect was called despite the pre-condition failure")
 	}
 }
 

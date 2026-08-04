@@ -78,6 +78,23 @@ type Node struct {
 	// before the migration will have an empty bearer
 	// until a Re-Provision re-mints it.
 	AgentBearer string `json:"-"`
+	// SSHPrivateKeyCiphertext is the panel's persistent
+	// SSH private key for this node, sealed with the
+	// operator's age envelope (see
+	// internal/crypto/envelope, PR #177). The plaintext
+	// shape is an ed25519 OpenSSH-PEM block (~390
+	// bytes); the ciphertext is `len(plaintext) + 49`
+	// bytes of raw `age` output. Empty bytes mean "no
+	// key yet" — the provisioner reads the column,
+	// decrypts on re-provision, and writes a freshly-
+	// generated ciphertext on the first password-based
+	// install (v0.8.x). The field is JSON-skipped
+	// because the ciphertext is opaque to the HTTP
+	// layer (no API surface reads or returns it) and
+	// logging it would be a leak.
+	//
+	// v0.8.x: added in migration 0020.
+	SSHPrivateKeyCiphertext []byte `json:"-"`
 	// Tags is a small set of free-form labels (e.g. "vless-reality",
 	// "shadowsocks-2022", "eu-west-1"). The agent reads them
 	// during apply to decide which inbounds to render.

@@ -1979,7 +1979,13 @@ components:
 
     NodeProvisionRequest:
       type: object
-      required: [ssh_private_key]
+      description: |
+        Exactly one of `ssh_private_key` or `ssh_password`
+        must be set. The `ssh_password` path is the
+        first-time-install UX: the operator pastes the
+        VPS root password, the panel SSHes in to install
+        the agent, and the agent switches to bearer-
+        token auth so the password is never reused.
       properties:
         ssh_port:
           type: integer
@@ -1995,7 +2001,18 @@ components:
           description: |
             Operator-pasted private key (PEM, no passphrase).
             The panel does NOT store this; the install is
-            the only consumer.
+            the only consumer. Mutually exclusive with
+            `ssh_password`.
+        ssh_password:
+          type: string
+          format: password
+          description: |
+            Operator's SSH login password for first-time
+            auth on a fresh node. The panel does NOT
+            store this; the install is the only consumer.
+            The agent switches to bearer-token auth so
+            the password is never reused. Mutually
+            exclusive with `ssh_private_key`.
         tofu_policy:
           $ref: '#/components/schemas/TofuPolicy'
         expected_fingerprint:

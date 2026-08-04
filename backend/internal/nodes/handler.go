@@ -97,11 +97,12 @@ func (a *BootstrapNodeProvider) GetByID(ctx context.Context, id uuid.UUID) (boot
 		return bootstrap.NodeRow{}, err
 	}
 	return bootstrap.NodeRow{
-		ID:          n.ID,
-		Name:        n.Name,
-		State:       string(n.State),
-		Address:     n.Address,
-		AgentBearer: n.AgentBearer,
+		ID:                      n.ID,
+		Name:                    n.Name,
+		State:                   string(n.State),
+		Address:                 n.Address,
+		AgentBearer:             n.AgentBearer,
+		SSHPrivateKeyCiphertext: n.SSHPrivateKeyCiphertext,
 	}, nil
 }
 
@@ -136,6 +137,21 @@ func (a *BootstrapNodeProvider) Update(ctx context.Context, row bootstrap.NodeRo
 // alone.
 func (a *BootstrapNodeProvider) SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error {
 	return a.Svc.store.SetAgentBearer(ctx, id, bearer)
+}
+
+// SetSSHPrivateKeyCiphertext implements
+// bootstrap.NodeProvider. v0.8.x: the
+// provisioner's post-install hook calls this
+// with the freshly-generated ed25519 private
+// key sealed by the operator's age envelope.
+// The setter bypasses nodes.Service for the
+// same reason as SetAgentBearer (the rest of
+// the row is left alone). The MemoryStore path
+// deep-clones the node before mutating, so the
+// adapter is safe to call from the hook's
+// closure without holding any other lock.
+func (a *BootstrapNodeProvider) SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, ciphertext []byte) error {
+	return a.Svc.store.SetSSHPrivateKeyCiphertext(ctx, id, ciphertext)
 }
 
 // _ keeps the unused imports in scope while

@@ -277,35 +277,40 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.Plans = plans.NewService(plansStore)
 
-	// 9. Webhooks. pg backend requires the age
-	//    secret cipher; the memory backend uses
-	//    the envelope.NoopSecretCipher. The cipher
-	//    itself lives in internal/crypto/envelope
-	//    (v0.8.x) so other at-rest secrets (the
-	//    persistent node SSH key being the first)
-	//    can share the same age boundary and the
-	//    same `AEGIS_*_SECRET_AGE_*` env vars. We
-	//    do not route this through MustBuild
-	//    because the pg constructor needs the
-	//    cipher and the memory constructor does
-	//    not — a one-off switch is the smaller
-	//    code.
-	var webhooksStore webhooks.Store
+	// 9. Build the age envelope. v0.8.x: the same
+	//    cipher is shared between webhooks (for
+	//    endpoint secrets) and bootstrap (for the
+	//    panel's persistent node SSH key). We
+	//    pick the implementation based on the
+	//    webhooks backend (the same `pg` /
+	//    `memory` switch the panel has used
+	//    since v0.7.0) and share the result with
+	//    the bootstrap service later in this
+	//    function. Memory mode uses the
+	//    `envelope.NoopSecretCipher` (dev only,
+	//    same plaintext-on-DB caveat as the v0.7.0
+	//    webhook memory store).
+	var (
+		cipher        envelope.SecretCipher
+		webhooksStore webhooks.Store
+	)
 	switch cfg.WebhooksBackend {
 	case "pg":
-		cipher, err := envelope.NewAgeSecretCipher(
+		ageCipher, err := envelope.NewAgeSecretCipher(
 			cfg.WebhooksSecretAgeRecipients,
 			cfg.WebhooksSecretAgeKeyFile,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("webhooks: failed to build age secret cipher: %w", err)
 		}
+		cipher = ageCipher
 		webhooksStore = webhooks.NewPgStore(pool, cipher)
 		logger.Info().
 			Int("recipients", len(cfg.WebhooksSecretAgeRecipients)).
 			Str("key_file", cfg.WebhooksSecretAgeKeyFile).
 			Msg("webhooks: using pgx-backed store (PgStore, age-encrypted secret)")
 	default:
+		cipher = envelope.NewNoopSecretCipher()
 		webhooksStore = webhooks.NewMemoryStore()
 		logger.Warn().Msg("webhooks: using in-memory store (MemoryStore, dev only — secret is plaintext)")
 	}
@@ -428,6 +433,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	a.Bootstrap = bootstrap.NewService(bootstrap.ServiceConfig{
 		Nodes:       &nodes.BootstrapNodeProvider{Svc: a.Nodes},
 		Audits:      a.Audits,
+		Envelope:    cipher, // shared with the webhooks Store above; see section 9
 		AgentBinary: cfg.AgentBinaryPath,
 		KnownHosts:  cfg.AgentKnownHosts,
 		SSHUser:     cfg.AgentSSHUser,
