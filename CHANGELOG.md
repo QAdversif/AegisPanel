@@ -1064,17 +1064,6 @@ What this PR does NOT ship (deferred to v0.8.2/v0.8.3):
 - **Smoke test on fresh VM in CI** — v0.9.0 candidate. `tools/scripts/smoke-local.sh` covers the local docker-compose path; a terraform + ansible + boot-log CI job is a separate work unit.
 - **`internal/cabinet` (doc.go-only) end-user surface** — the per-user sub URL is the per-user cabinet for v0.8.0. A separate end-user-facing cabinet (login UI, sub URL fetch, traffic stats, plan change) is v1.2+.
 
-## [Unreleased]
-
-The next-up work is captured in [`docs/ROADMAP.md`](docs/ROADMAP.md). The
-detailed per-PR notes that used to live in this section have been
-migrated to the matching tagged release sections:
-
-- v0.5.0 content (`#119`-`#126`) — moved to `[0.5.0] - 2026-07-30` below
-- v0.4.0-post content (`#102`, `#103`, `#104`, `#111`) — folded into `[0.4.0]`
-- v0.7.x Go+frontend dep batch (`#141`-`#144`) — duplicate of the
-  `[0.7.1]` section; removed
-
 ## [0.5.0] - 2026-07-30
 
 Eight-PR operations-grade polish batch. Closes the
