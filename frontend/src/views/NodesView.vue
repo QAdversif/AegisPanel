@@ -14,167 +14,216 @@
   mounted from the per-row DropdownMenu. The
   backend route is `POST /api/v1/nodes/{id}/provision`
   (see `internal/bootstrap/handler.go`).
+
+  v0.8.4 lands: rotate-panel-key — a fourth
+  dialog with the operator's existing PEM,
+  mounted from the per-row DropdownMenu. The
+  backend route is
+  `POST /api/v1/nodes/{id}/rotate-panel-key`
+  (see `internal/bootstrap/handler.go`; HTTP
+  mirror of the v0.8.3 `aegis admin node
+  rotate-panel-key` CLI from PR #184). The
+  dialog is hidden for `new` state (the panel
+  cannot SSH into a never-installed node
+  because no key is in authorized_keys);
+  visible for `online`, `offline`, and
+  `disabled` (the operator may still want to
+  rotate a key on a node they later intend to
+  re-enable).
 -->
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { MoreHorizontal, Plus, Server } from 'lucide-vue-next'
-import { KeyRound, KeySquare, Lock } from 'lucide-vue-next'
-import type { ColumnDef } from '@tanstack/vue-table'
+import { computed, h, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { MoreHorizontal, Plus, Server } from "lucide-vue-next";
+import { KeyRound, KeySquare, Lock, RefreshCw } from "lucide-vue-next";
+import type { ColumnDef } from "@tanstack/vue-table";
 
-import { useAuthStore } from '@/stores/auth'
-import { useToastStore } from '@/stores/toast'
-import { toApiError } from '@/api/client'
+import { useAuthStore } from "@/stores/auth";
+import { useToastStore } from "@/stores/toast";
+import { toApiError } from "@/api/client";
 import {
   createNode,
   deleteNode,
   listNodes,
   provisionNode,
+  rotateNodePanelKey,
   updateNode,
-} from '@/api/services'
-import type { Node, NodeState } from '@/types'
+} from "@/api/services";
+import type { Node, NodeRotatePanelKeyResponse, NodeState } from "@/types";
 import {
   nodeCreateSchema,
   nodeProvisionSchema,
+  nodeRotatePanelKeySchema,
   nodeUpdateSchema,
-} from '@/schemas'
-import { useZodForm } from '@/composables/useZodForm'
+} from "@/schemas";
+import { useZodForm } from "@/composables/useZodForm";
 
-import DataTable from '@/components/DataTable.vue'
-import Button from '@/components/ui/Button.vue'
-import Badge from '@/components/ui/Badge.vue'
-import Dialog from '@/components/ui/Dialog.vue'
-import DialogContent from '@/components/ui/DialogContent.vue'
-import DialogHeader from '@/components/ui/DialogHeader.vue'
-import DialogTitle from '@/components/ui/DialogTitle.vue'
-import DialogDescription from '@/components/ui/DialogDescription.vue'
-import DialogFooter from '@/components/ui/DialogFooter.vue'
-import DialogClose from '@/components/ui/DialogClose.vue'
-import DropdownMenu from '@/components/ui/DropdownMenu.vue'
-import DropdownMenuTrigger from '@/components/ui/DropdownMenuTrigger.vue'
-import DropdownMenuContent from '@/components/ui/DropdownMenuContent.vue'
-import DropdownMenuItem from '@/components/ui/DropdownMenuItem.vue'
-import Input from '@/components/ui/Input.vue'
-import Textarea from '@/components/ui/Textarea.vue'
-import Form from '@/components/Form.vue'
-import FormField from '@/components/FormField.vue'
+import DataTable from "@/components/DataTable.vue";
+import Button from "@/components/ui/Button.vue";
+import Badge from "@/components/ui/Badge.vue";
+import Dialog from "@/components/ui/Dialog.vue";
+import DialogContent from "@/components/ui/DialogContent.vue";
+import DialogHeader from "@/components/ui/DialogHeader.vue";
+import DialogTitle from "@/components/ui/DialogTitle.vue";
+import DialogDescription from "@/components/ui/DialogDescription.vue";
+import DialogFooter from "@/components/ui/DialogFooter.vue";
+import DialogClose from "@/components/ui/DialogClose.vue";
+import DropdownMenu from "@/components/ui/DropdownMenu.vue";
+import DropdownMenuTrigger from "@/components/ui/DropdownMenuTrigger.vue";
+import DropdownMenuContent from "@/components/ui/DropdownMenuContent.vue";
+import DropdownMenuItem from "@/components/ui/DropdownMenuItem.vue";
+import Input from "@/components/ui/Input.vue";
+import Textarea from "@/components/ui/Textarea.vue";
+import Form from "@/components/Form.vue";
+import FormField from "@/components/FormField.vue";
 
-const { t } = useI18n()
-const auth = useAuthStore()
-const toast = useToastStore()
+const { t } = useI18n();
+const auth = useAuthStore();
+const toast = useToastStore();
 
-const nodes = ref<Node[]>([])
-const loading = ref(false)
-const editing = ref<Node | null>(null)
-const createOpen = ref(false)
-const editOpen = ref(false)
+const nodes = ref<Node[]>([]);
+const loading = ref(false);
+const editing = ref<Node | null>(null);
+const createOpen = ref(false);
+const editOpen = ref(false);
 
 // v0.3.0: provision dialog. The "provisioning" node
 // is the one currently being installed; the dialog
 // stays open until the install completes (sync
 // call) and shows the new state on success.
-const provisioning = ref<Node | null>(null)
-const provisionOpen = ref(false)
+const provisioning = ref<Node | null>(null);
+const provisionOpen = ref(false);
+
+// v0.8.4: rotate-panel-key dialog. The "rotating"
+// node is the one whose panel key is being
+// regenerated. The dialog stays open until the
+// SSH handshake + SFTP push + remote shell
+// complete (sync call) and shows the new public
+// key line + SHA256 fingerprint on success.
+//
+// We keep the response object on `rotationResult`
+// so the success card can render the public key
+// line + fingerprint side-by-side. The card
+// stays in the dialog after the form closes so
+// the operator can copy the fingerprint.
+const rotating = ref<Node | null>(null);
+const rotateOpen = ref(false);
+const rotationResult = ref<NodeRotatePanelKeyResponse | null>(null);
 
 // Only `new` and `offline` are provisionable per
 // ARCHITECTURE §8.3. The dropdown hides the entry
 // for the other three so the operator does not
 // see a 409 on click.
 function isProvisionable(state: NodeState): boolean {
-  return state === 'new' || state === 'offline'
+  return state === "new" || state === "offline";
+}
+
+// v0.8.4: rotate-panel-key is hidden for `new`
+// (the panel has no key to back-fill — the
+// `provision` dialog does the first-install
+// flow on that path). For `online` / `offline`
+// / `disabled` / `draining` the dropdown shows
+// the entry: the operator pastes the PEM they
+// used to install the node, the panel SSHes
+// in, generates a new key, appends the public
+// half to authorized_keys.
+function isRotatable(state: NodeState): boolean {
+  return state !== "new";
 }
 
 async function refresh(): Promise<void> {
-  loading.value = true
+  loading.value = true;
   try {
-    nodes.value = await listNodes()
+    nodes.value = await listNodes();
   } catch (error) {
-    const apiErr = toApiError(error)
+    const apiErr = toApiError(error);
     toast.add({
-      title: t('nodes.loadFailed'),
+      title: t("nodes.loadFailed"),
       description: apiErr.message,
-      variant: 'destructive',
-    })
+      variant: "destructive",
+    });
   } finally {
-    loading.value = false
+    loading.value = false;
   }
 }
 
 onMounted(() => {
-  void refresh()
-})
+  void refresh();
+});
 
 // --- Create -----------------------------------------------------------------
 
 const createForm = useZodForm({
   schema: nodeCreateSchema,
-  initialValues: { name: '', region: '', address: '' },
+  initialValues: { name: "", region: "", address: "" },
   onSubmit: async (values) => {
     try {
-      await createNode(values)
-      createOpen.value = false
-      toast.add({ title: t('nodes.created'), variant: 'success' })
-      await refresh()
+      await createNode(values);
+      createOpen.value = false;
+      toast.add({ title: t("nodes.created"), variant: "success" });
+      await refresh();
     } catch (error) {
       toast.add({
-        title: t('nodes.createFailed'),
+        title: t("nodes.createFailed"),
         description: toApiError(error).message,
-        variant: 'destructive',
-      })
+        variant: "destructive",
+      });
     }
   },
-})
+});
 
 // --- Edit -------------------------------------------------------------------
 
 const editForm = useZodForm({
   schema: nodeUpdateSchema,
-  initialValues: editing.value ? {
-    name: editing.value.name,
-    region: editing.value.region,
-    address: editing.value.address,
-    capacityHint: editing.value.capacityHint ?? '',
-  } : { name: '', region: '', address: '' },
+  initialValues: editing.value
+    ? {
+        name: editing.value.name,
+        region: editing.value.region,
+        address: editing.value.address,
+        capacityHint: editing.value.capacityHint ?? "",
+      }
+    : { name: "", region: "", address: "" },
   onSubmit: async (values) => {
-    if (!editing.value) return
+    if (!editing.value) return;
     try {
-      await updateNode(editing.value.id, values)
-      editOpen.value = false
-      editing.value = null
-      toast.add({ title: t('nodes.updated'), variant: 'success' })
-      await refresh()
+      await updateNode(editing.value.id, values);
+      editOpen.value = false;
+      editing.value = null;
+      toast.add({ title: t("nodes.updated"), variant: "success" });
+      await refresh();
     } catch (error) {
       toast.add({
-        title: t('nodes.updateFailed'),
+        title: t("nodes.updateFailed"),
         description: toApiError(error).message,
-        variant: 'destructive',
-      })
+        variant: "destructive",
+      });
     }
   },
-})
+});
 
 function startEdit(node: Node): void {
-  editing.value = node
+  editing.value = node;
   editForm.resetForm({
     values: {
       name: node.name,
       region: node.region,
       address: node.address,
-      capacityHint: node.capacityHint ?? '',
+      capacityHint: node.capacityHint ?? "",
     },
-  })
-  editOpen.value = true
+  });
+  editOpen.value = true;
 }
 
 function startCreate(): void {
-  createForm.resetForm({ values: { name: '', region: '', address: '' } })
-  createOpen.value = true
+  createForm.resetForm({ values: { name: "", region: "", address: "" } });
+  createOpen.value = true;
 }
 
 // --- Provision (v0.3.0) ----------------------------------------------------
 
 function startProvision(node: Node): void {
-  provisioning.value = node
+  provisioning.value = node;
   // v0.8.x: the auth-method radio default.
   // First-time installs (state 'new') default
   // to 'key' (the operator pastes a private
@@ -184,34 +233,34 @@ function startProvision(node: Node): void {
   // node) default to 'stored' — the panel
   // re-uses its own key, the operator clicks
   // submit with no input.
-  const defaultAuth = node.state === 'offline' ? 'stored' : 'key'
+  const defaultAuth = node.state === "offline" ? "stored" : "key";
   provisionForm.resetForm({
     values: {
       authMethod: defaultAuth,
       ssh_port: undefined,
-      ssh_user: '',
-      ssh_private_key: '',
-      ssh_password: '',
-      tofu_policy: 'reject',
-      expected_fingerprint: '',
+      ssh_user: "",
+      ssh_private_key: "",
+      ssh_password: "",
+      tofu_policy: "reject",
+      expected_fingerprint: "",
     },
-  })
-  provisionOpen.value = true
+  });
+  provisionOpen.value = true;
 }
 
 const provisionForm = useZodForm({
   schema: nodeProvisionSchema,
   initialValues: {
-    authMethod: 'key' as const,
+    authMethod: "key" as const,
     ssh_port: undefined,
-    ssh_user: '',
-    ssh_private_key: '',
-    ssh_password: '',
-    tofu_policy: 'reject' as const,
-    expected_fingerprint: '',
+    ssh_user: "",
+    ssh_private_key: "",
+    ssh_password: "",
+    tofu_policy: "reject" as const,
+    expected_fingerprint: "",
   },
   onSubmit: async (values) => {
-    if (!provisioning.value) return
+    if (!provisioning.value) return;
     // v0.8.x: the UI's authMethod radio is a
     // local form state; the Go API's wire
     // format is the two-field XOR
@@ -224,90 +273,176 @@ const provisionForm = useZodForm({
     //   encrypted panel key it stored on the
     //   first install).
     const wirePayload: {
-      ssh_private_key?: string
-      ssh_password?: string
-      ssh_port?: number
-      ssh_user?: string
-      tofu_policy?: 'reject' | 'accept-and-append'
-      expected_fingerprint?: string
+      ssh_private_key?: string;
+      ssh_password?: string;
+      ssh_port?: number;
+      ssh_user?: string;
+      tofu_policy?: "reject" | "accept-and-append";
+      expected_fingerprint?: string;
     } = {
       ssh_port: values.ssh_port,
       ssh_user: values.ssh_user,
       tofu_policy: values.tofu_policy,
       expected_fingerprint: values.expected_fingerprint,
-    }
-    if (values.authMethod === 'key') {
-      wirePayload.ssh_private_key = values.ssh_private_key
-    } else if (values.authMethod === 'password') {
-      wirePayload.ssh_password = values.ssh_password
+    };
+    if (values.authMethod === "key") {
+      wirePayload.ssh_private_key = values.ssh_private_key;
+    } else if (values.authMethod === "password") {
+      wirePayload.ssh_password = values.ssh_password;
     }
     // 'stored' path: no auth fields. The Go side
     // falls back to the encrypted panel key.
     try {
-      const res = await provisionNode(provisioning.value.id, wirePayload as never)
-      provisionOpen.value = false
-      provisioning.value = null
+      const res = await provisionNode(
+        provisioning.value.id,
+        wirePayload as never,
+      );
+      provisionOpen.value = false;
+      provisioning.value = null;
       toast.add({
-        title: t('nodes.provisioned', { state: res.new_state }),
-        variant: res.new_state === 'online' ? 'success' : 'destructive',
-      })
-      await refresh()
+        title: t("nodes.provisioned", { state: res.new_state }),
+        variant: res.new_state === "online" ? "success" : "destructive",
+      });
+      await refresh();
     } catch (error) {
       toast.add({
-        title: t('nodes.provisionFailed'),
+        title: t("nodes.provisionFailed"),
         description: toApiError(error).message,
-        variant: 'destructive',
-      })
+        variant: "destructive",
+      });
     }
   },
-})
+});
+
+// --- Rotate (v0.8.4) -------------------------------------------------------
+
+function startRotate(node: Node): void {
+  rotating.value = node;
+  rotationResult.value = null;
+  rotateForm.resetForm({
+    values: {
+      ssh_private_key: "",
+      ssh_port: undefined,
+      ssh_user: "",
+    },
+  });
+  rotateOpen.value = true;
+}
+
+const rotateForm = useZodForm({
+  schema: nodeRotatePanelKeySchema,
+  initialValues: {
+    ssh_private_key: "",
+    ssh_port: undefined,
+    ssh_user: "",
+  },
+  onSubmit: async (values) => {
+    if (!rotating.value) return;
+    try {
+      const res = await rotateNodePanelKey(rotating.value.id, {
+        ssh_private_key: values.ssh_private_key,
+        ssh_port: values.ssh_port,
+        ssh_user: values.ssh_user,
+      });
+      // Stash the response so the success card
+      // can render the public key line +
+      // fingerprint side-by-side. The dialog
+      // stays open (rotateOpen stays true) so
+      // the operator can copy the fingerprint
+      // before closing — the form is "submitted"
+      // but the success card is the closing
+      // surface.
+      rotationResult.value = res;
+      toast.add({
+        title: t("nodes.rotated", { name: rotating.value.name }),
+        variant: "success",
+      });
+      // The list does not need a refresh —
+      // the row's state machine did not
+      // change; only the row's encrypted
+      // ssh_private_key_ciphertext column
+      // changed, and the panel does not
+      // expose that field in the wire
+      // shape (Node doesn't include it).
+    } catch (error) {
+      const apiErr = toApiError(error);
+      toast.add({
+        title: t("nodes.rotateFailed"),
+        description: apiErr.message,
+        variant: "destructive",
+      });
+    }
+  },
+});
+
+function closeRotateDialog(): void {
+  rotateOpen.value = false;
+  rotating.value = null;
+  rotationResult.value = null;
+}
 
 // --- Delete -----------------------------------------------------------------
 
 async function confirmDelete(node: Node): Promise<void> {
-  if (!window.confirm(t('nodes.confirmDelete', { name: node.name }))) return
+  if (!window.confirm(t("nodes.confirmDelete", { name: node.name }))) return;
   try {
-    await deleteNode(node.id)
-    toast.add({ title: t('nodes.deleted'), variant: 'success' })
-    await refresh()
+    await deleteNode(node.id);
+    toast.add({ title: t("nodes.deleted"), variant: "success" });
+    await refresh();
   } catch (error) {
     toast.add({
-      title: t('nodes.deleteFailed'),
+      title: t("nodes.deleteFailed"),
       description: toApiError(error).message,
-      variant: 'destructive',
-    })
+      variant: "destructive",
+    });
   }
 }
 
 // --- Table columns ----------------------------------------------------------
 
-const stateVariant: Record<NodeState, 'default' | 'success' | 'warning' | 'destructive' | 'secondary'> = {
-  new: 'secondary',
-  online: 'success',
-  draining: 'warning',
-  offline: 'destructive',
-  disabled: 'secondary',
-}
+const stateVariant: Record<
+  NodeState,
+  "default" | "success" | "warning" | "destructive" | "secondary"
+> = {
+  new: "secondary",
+  online: "success",
+  draining: "warning",
+  offline: "destructive",
+  disabled: "secondary",
+};
 
 const columns: ColumnDef<Node, unknown>[] = [
-  { accessorKey: 'name', header: () => t('nodes.name') },
-  { accessorKey: 'region', header: () => t('nodes.region') },
+  { accessorKey: "name", header: () => t("nodes.name") },
+  { accessorKey: "region", header: () => t("nodes.region") },
   {
-    accessorKey: 'state',
-    header: () => t('nodes.state'),
-    cell: ({ row }) => h(Badge, { variant: stateVariant[row.original.state] }, () => t(`nodes.states.${row.original.state}`)),
+    accessorKey: "state",
+    header: () => t("nodes.state"),
+    cell: ({ row }) =>
+      h(Badge, { variant: stateVariant[row.original.state] }, () =>
+        t(`nodes.states.${row.original.state}`),
+      ),
   },
-  { accessorKey: 'address', header: () => t('nodes.address') },
+  { accessorKey: "address", header: () => t("nodes.address") },
   {
-    id: 'actions',
-    header: () => h('span', { class: 'sr-only' }, 'Actions'),
+    id: "actions",
+    header: () => h("span", { class: "sr-only" }, "Actions"),
     cell: ({ row }) =>
       h(DropdownMenu, null, () => [
         h(DropdownMenuTrigger, null, () =>
-          h(Button, { variant: 'ghost', size: 'icon', 'aria-label': t('common.actions') }, () => h(MoreHorizontal, { class: 'h-4 w-4' })),
+          h(
+            Button,
+            {
+              variant: "ghost",
+              size: "icon",
+              "aria-label": t("common.actions"),
+            },
+            () => h(MoreHorizontal, { class: "h-4 w-4" }),
+          ),
         ),
-        h(DropdownMenuContent, { align: 'end' }, () => [
-          h(DropdownMenuItem, { onSelect: () => startEdit(row.original) }, () => t('common.edit')),
+        h(DropdownMenuContent, { align: "end" }, () => [
+          h(DropdownMenuItem, { onSelect: () => startEdit(row.original) }, () =>
+            t("common.edit"),
+          ),
           // v0.3.0: BYO Node bootstrap. Hidden for
           // states that would 409 (online / draining
           // / disabled). The hint tooltip explains
@@ -316,14 +451,35 @@ const columns: ColumnDef<Node, unknown>[] = [
             ? h(
                 DropdownMenuItem,
                 { onSelect: () => startProvision(row.original) },
-                () => t('nodes.provision'),
+                () => t("nodes.provision"),
               )
             : null,
-          h(DropdownMenuItem, { onSelect: () => confirmDelete(row.original) }, () => t('common.delete')),
+          // v0.8.4: rotate-panel-key. Hidden for
+          // `new` (the panel cannot SSH into a
+          // never-installed node — the dropdown
+          // shows the entry only when the node
+          // has had a previous install that left
+          // an authorized_keys line for the
+          // panel's operator-owned PEM to dial
+          // through). The `online` / `offline` /
+          // `draining` / `disabled` states are
+          // all valid rotation sources.
+          isRotatable(row.original.state)
+            ? h(
+                DropdownMenuItem,
+                { onSelect: () => startRotate(row.original) },
+                () => t("nodes.rotate"),
+              )
+            : null,
+          h(
+            DropdownMenuItem,
+            { onSelect: () => confirmDelete(row.original) },
+            () => t("common.delete"),
+          ),
         ]),
       ]),
   },
-]
+];
 
 // Quick scope check for the current user. The Go
 // side enforces this; we hide the create button
@@ -344,11 +500,11 @@ const columns: ColumnDef<Node, unknown>[] = [
 // this is safe (a read-only user clicking "Add node"
 // still gets a 403 from the panel).
 const canWrite = computed(() => {
-  if (!auth.isAuthenticated) return false
-  const scopes = auth.me?.scopes ?? []
-  if (scopes.length === 0) return true // fallback when /me is broken
-  return scopes.includes('write') || scopes.includes('admin')
-})
+  if (!auth.isAuthenticated) return false;
+  const scopes = auth.me?.scopes ?? [];
+  if (scopes.length === 0) return true; // fallback when /me is broken
+  return scopes.includes("write") || scopes.includes("admin");
+});
 </script>
 
 <template>
@@ -356,18 +512,15 @@ const canWrite = computed(() => {
     <header class="nodes__header">
       <div>
         <h1 class="nodes__title">
-          {{ t('nodes.title') }}
+          {{ t("nodes.title") }}
         </h1>
         <p class="nodes__subtitle">
-          {{ t('nodes.subtitle') }}
+          {{ t("nodes.subtitle") }}
         </p>
       </div>
-      <Button
-        v-if="canWrite"
-        @click="startCreate"
-      >
+      <Button v-if="canWrite" @click="startCreate">
         <Plus class="h-4 w-4" />
-        {{ t('nodes.create') }}
+        {{ t("nodes.create") }}
       </Button>
     </header>
 
@@ -383,39 +536,37 @@ const canWrite = computed(() => {
     <Dialog v-model:open="createOpen">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{{ t('nodes.createTitle') }}</DialogTitle>
-          <DialogDescription>{{ t('nodes.createDescription') }}</DialogDescription>
+          <DialogTitle>{{ t("nodes.createTitle") }}</DialogTitle>
+          <DialogDescription>{{
+            t("nodes.createDescription")
+          }}</DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="createForm.isSubmitting.value"
           @submit="createForm.handleSubmit"
         >
-          <FormField
-            name="name"
-            :label="t('nodes.name')"
-            required
-          >
+          <FormField name="name" :label="t('nodes.name')" required>
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => createForm.setFieldValue('name', v)"
+                @update:model-value="
+                  (v: string) => createForm.setFieldValue('name', v)
+                "
                 @blur="onBlur"
               />
             </template>
           </FormField>
-          <FormField
-            name="region"
-            :label="t('nodes.region')"
-            required
-          >
+          <FormField name="region" :label="t('nodes.region')" required>
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => createForm.setFieldValue('region', v)"
+                @update:model-value="
+                  (v: string) => createForm.setFieldValue('region', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -432,7 +583,9 @@ const canWrite = computed(() => {
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
                 placeholder="node1.example.com:22"
-                @update:model-value="(v: string) => createForm.setFieldValue('address', v)"
+                @update:model-value="
+                  (v: string) => createForm.setFieldValue('address', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -448,25 +601,21 @@ const canWrite = computed(() => {
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
                 placeholder="1 Gbps"
-                @update:model-value="(v: string) => createForm.setFieldValue('capacityHint', v)"
+                @update:model-value="
+                  (v: string) => createForm.setFieldValue('capacityHint', v)
+                "
                 @blur="onBlur"
               />
             </template>
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-              >
-                {{ t('common.cancel') }}
+              <Button type="button" variant="outline">
+                {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button
-              type="submit"
-              :disabled="createForm.isSubmitting.value"
-            >
-              {{ t('common.create') }}
+            <Button type="submit" :disabled="createForm.isSubmitting.value">
+              {{ t("common.create") }}
             </Button>
           </DialogFooter>
         </Form>
@@ -477,39 +626,37 @@ const canWrite = computed(() => {
     <Dialog v-model:open="editOpen">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{{ t('nodes.editTitle') }}</DialogTitle>
-          <DialogDescription>{{ t('nodes.editDescription') }}</DialogDescription>
+          <DialogTitle>{{ t("nodes.editTitle") }}</DialogTitle>
+          <DialogDescription>{{
+            t("nodes.editDescription")
+          }}</DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="editForm.isSubmitting.value"
           @submit="editForm.handleSubmit"
         >
-          <FormField
-            name="name"
-            :label="t('nodes.name')"
-            required
-          >
+          <FormField name="name" :label="t('nodes.name')" required>
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => editForm.setFieldValue('name', v)"
+                @update:model-value="
+                  (v: string) => editForm.setFieldValue('name', v)
+                "
                 @blur="onBlur"
               />
             </template>
           </FormField>
-          <FormField
-            name="region"
-            :label="t('nodes.region')"
-            required
-          >
+          <FormField name="region" :label="t('nodes.region')" required>
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => editForm.setFieldValue('region', v)"
+                @update:model-value="
+                  (v: string) => editForm.setFieldValue('region', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -525,39 +672,34 @@ const canWrite = computed(() => {
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => editForm.setFieldValue('address', v)"
+                @update:model-value="
+                  (v: string) => editForm.setFieldValue('address', v)
+                "
                 @blur="onBlur"
               />
             </template>
           </FormField>
-          <FormField
-            name="capacityHint"
-            :label="t('nodes.capacityHint')"
-          >
+          <FormField name="capacityHint" :label="t('nodes.capacityHint')">
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
-                @update:model-value="(v: string) => editForm.setFieldValue('capacityHint', v)"
+                @update:model-value="
+                  (v: string) => editForm.setFieldValue('capacityHint', v)
+                "
                 @blur="onBlur"
               />
             </template>
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-              >
-                {{ t('common.cancel') }}
+              <Button type="button" variant="outline">
+                {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button
-              type="submit"
-              :disabled="editForm.isSubmitting.value"
-            >
-              {{ t('common.save') }}
+            <Button type="submit" :disabled="editForm.isSubmitting.value">
+              {{ t("common.save") }}
             </Button>
           </DialogFooter>
         </Form>
@@ -570,9 +712,11 @@ const canWrite = computed(() => {
         <DialogHeader>
           <DialogTitle>
             <Server class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t('nodes.provisionTitle') }}
+            {{ t("nodes.provisionTitle") }}
           </DialogTitle>
-          <DialogDescription>{{ t('nodes.provisionDescription') }}</DialogDescription>
+          <DialogDescription>{{
+            t("nodes.provisionDescription")
+          }}</DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="provisionForm.isSubmitting.value"
@@ -580,8 +724,8 @@ const canWrite = computed(() => {
         >
           <p class="nodes__provision-target">
             <strong>{{ provisioning?.name }}</strong>
-            ({{ provisioning?.address }})
-            — {{ provisioning ? t(`nodes.states.${provisioning.state}`) : '' }}
+            ({{ provisioning?.address }}) —
+            {{ provisioning ? t(`nodes.states.${provisioning.state}`) : "" }}
           </p>
           <FormField
             name="ssh_user"
@@ -594,7 +738,9 @@ const canWrite = computed(() => {
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
                 placeholder="root"
-                @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_user', v)"
+                @update:model-value="
+                  (v: string) => provisionForm.setFieldValue('ssh_user', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -611,7 +757,13 @@ const canWrite = computed(() => {
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
                 placeholder="22"
-                @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_port', v === '' ? undefined : Number(v))"
+                @update:model-value="
+                  (v: string) =>
+                    provisionForm.setFieldValue(
+                      'ssh_port',
+                      v === '' ? undefined : Number(v),
+                    )
+                "
                 @blur="onBlur"
               />
             </template>
@@ -649,14 +801,16 @@ const canWrite = computed(() => {
                     name="authMethod"
                     value="key"
                     :checked="value === 'key'"
-                    @change="() => {
-                      provisionForm.setFieldValue('authMethod', 'key')
-                      provisionForm.setFieldValue('ssh_private_key', '')
-                      provisionForm.setFieldValue('ssh_password', '')
-                    }"
-                  >
+                    @change="
+                      () => {
+                        provisionForm.setFieldValue('authMethod', 'key');
+                        provisionForm.setFieldValue('ssh_private_key', '');
+                        provisionForm.setFieldValue('ssh_password', '');
+                      }
+                    "
+                  />
                   <KeySquare class="h-4 w-4" />
-                  <span>{{ t('nodes.authMethodKey') }}</span>
+                  <span>{{ t("nodes.authMethodKey") }}</span>
                 </label>
                 <label
                   class="nodes__auth-radio"
@@ -667,22 +821,29 @@ const canWrite = computed(() => {
                     name="authMethod"
                     value="password"
                     :checked="value === 'password'"
-                    @change="() => {
-                      provisionForm.setFieldValue('authMethod', 'password')
-                      provisionForm.setFieldValue('ssh_private_key', '')
-                      provisionForm.setFieldValue('ssh_password', '')
-                    }"
-                  >
+                    @change="
+                      () => {
+                        provisionForm.setFieldValue('authMethod', 'password');
+                        provisionForm.setFieldValue('ssh_private_key', '');
+                        provisionForm.setFieldValue('ssh_password', '');
+                      }
+                    "
+                  />
                   <Lock class="h-4 w-4" />
-                  <span>{{ t('nodes.authMethodPassword') }}</span>
+                  <span>{{ t("nodes.authMethodPassword") }}</span>
                 </label>
                 <label
                   class="nodes__auth-radio"
                   :class="{
                     'nodes__auth-radio--active': value === 'stored',
-                    'nodes__auth-radio--disabled': provisioning?.state !== 'offline',
+                    'nodes__auth-radio--disabled':
+                      provisioning?.state !== 'offline',
                   }"
-                  :title="provisioning?.state !== 'offline' ? t('nodes.authMethodStoredDisabledTitle') : ''"
+                  :title="
+                    provisioning?.state !== 'offline'
+                      ? t('nodes.authMethodStoredDisabledTitle')
+                      : ''
+                  "
                 >
                   <input
                     type="radio"
@@ -690,14 +851,16 @@ const canWrite = computed(() => {
                     value="stored"
                     :checked="value === 'stored'"
                     :disabled="provisioning?.state !== 'offline'"
-                    @change="() => {
-                      provisionForm.setFieldValue('authMethod', 'stored')
-                      provisionForm.setFieldValue('ssh_private_key', '')
-                      provisionForm.setFieldValue('ssh_password', '')
-                    }"
-                  >
+                    @change="
+                      () => {
+                        provisionForm.setFieldValue('authMethod', 'stored');
+                        provisionForm.setFieldValue('ssh_private_key', '');
+                        provisionForm.setFieldValue('ssh_password', '');
+                      }
+                    "
+                  />
                   <KeyRound class="h-4 w-4" />
-                  <span>{{ t('nodes.authMethodStored') }}</span>
+                  <span>{{ t("nodes.authMethodStored") }}</span>
                 </label>
               </div>
             </template>
@@ -717,7 +880,10 @@ const canWrite = computed(() => {
                 :class="hasError && 'border-destructive'"
                 spellcheck="false"
                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_private_key', v)"
+                @update:model-value="
+                  (v: string) =>
+                    provisionForm.setFieldValue('ssh_private_key', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -737,7 +903,9 @@ const canWrite = computed(() => {
                 :model-value="String(value ?? '')"
                 :class="hasError && 'border-destructive'"
                 spellcheck="false"
-                @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_password', v)"
+                @update:model-value="
+                  (v: string) => provisionForm.setFieldValue('ssh_password', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -752,17 +920,24 @@ const canWrite = computed(() => {
                 :id="id"
                 :value="value"
                 :class="['nodes__select', hasError && 'border-destructive']"
-                @change="(event: Event) => {
-                  const v = (event.target as HTMLSelectElement).value
-                  provisionForm.setFieldValue('tofu_policy', v === '' ? undefined : (v as 'reject' | 'accept-and-append'))
-                  onBlur()
-                }"
+                @change="
+                  (event: Event) => {
+                    const v = (event.target as HTMLSelectElement).value;
+                    provisionForm.setFieldValue(
+                      'tofu_policy',
+                      v === ''
+                        ? undefined
+                        : (v as 'reject' | 'accept-and-append'),
+                    );
+                    onBlur();
+                  }
+                "
               >
                 <option value="reject">
-                  {{ t('nodes.tofuReject') }}
+                  {{ t("nodes.tofuReject") }}
                 </option>
                 <option value="accept-and-append">
-                  {{ t('nodes.tofuAcceptAndAppend') }}
+                  {{ t("nodes.tofuAcceptAndAppend") }}
                 </option>
               </select>
             </template>
@@ -778,7 +953,10 @@ const canWrite = computed(() => {
                 :model-value="value"
                 :class="hasError && 'border-destructive'"
                 placeholder="SHA256:abc123..."
-                @update:model-value="(v: string) => provisionForm.setFieldValue('expected_fingerprint', v)"
+                @update:model-value="
+                  (v: string) =>
+                    provisionForm.setFieldValue('expected_fingerprint', v)
+                "
                 @blur="onBlur"
               />
             </template>
@@ -791,18 +969,168 @@ const canWrite = computed(() => {
                 :disabled="provisionForm.isSubmitting.value"
                 @click="provisioning = null"
               >
-                {{ t('common.cancel') }}
+                {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button
-              type="submit"
-              :disabled="provisionForm.isSubmitting.value"
-            >
+            <Button type="submit" :disabled="provisionForm.isSubmitting.value">
               <Server class="h-4 w-4 mr-2" />
-              {{ t('nodes.provision') }}
+              {{ t("nodes.provision") }}
             </Button>
           </DialogFooter>
         </Form>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Rotate-panel-key dialog (v0.8.4) -->
+    <Dialog v-model:open="rotateOpen">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.rotateTitle") }}
+          </DialogTitle>
+          <DialogDescription>{{
+            t("nodes.rotateDescription")
+          }}</DialogDescription>
+        </DialogHeader>
+        <p class="nodes__provision-target">
+          <strong>{{ rotating?.name }}</strong>
+          ({{ rotating?.address }}) —
+          {{ rotating ? t(`nodes.states.${rotating.state}`) : "" }}
+        </p>
+        <Form
+          v-if="!rotationResult"
+          :is-submitting="rotateForm.isSubmitting.value"
+          @submit="rotateForm.handleSubmit"
+        >
+          <FormField
+            name="ssh_user"
+            :label="t('nodes.sshUser')"
+            :hint="t('nodes.sshUserHint')"
+          >
+            <template #default="{ id, value, onBlur, hasError }">
+              <Input
+                :id="id"
+                :model-value="value"
+                :class="hasError && 'border-destructive'"
+                placeholder="root"
+                @update:model-value="
+                  (v: string) => rotateForm.setFieldValue('ssh_user', v)
+                "
+                @blur="onBlur"
+              />
+            </template>
+          </FormField>
+          <FormField
+            name="ssh_port"
+            :label="t('nodes.sshPort')"
+            :hint="t('nodes.sshPortHint')"
+          >
+            <template #default="{ id, value, onBlur, hasError }">
+              <Input
+                :id="id"
+                type="number"
+                :model-value="value"
+                :class="hasError && 'border-destructive'"
+                placeholder="22"
+                @update:model-value="
+                  (v: string) =>
+                    rotateForm.setFieldValue(
+                      'ssh_port',
+                      v === '' ? undefined : Number(v),
+                    )
+                "
+                @blur="onBlur"
+              />
+            </template>
+          </FormField>
+          <FormField
+            name="ssh_private_key"
+            :label="t('nodes.rotateSshPrivateKey')"
+            required
+            :hint="t('nodes.rotateSshPrivateKeyHint')"
+          >
+            <template #default="{ id, value, onBlur, hasError }">
+              <Textarea
+                :id="id"
+                :model-value="String(value ?? '')"
+                :rows="10"
+                :class="hasError && 'border-destructive'"
+                spellcheck="false"
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                @update:model-value="
+                  (v: string) => rotateForm.setFieldValue('ssh_private_key', v)
+                "
+                @blur="onBlur"
+              />
+            </template>
+          </FormField>
+          <DialogFooter>
+            <DialogClose>
+              <Button
+                type="button"
+                variant="outline"
+                :disabled="rotateForm.isSubmitting.value"
+                @click="closeRotateDialog"
+              >
+                {{ t("common.cancel") }}
+              </Button>
+            </DialogClose>
+            <Button type="submit" :disabled="rotateForm.isSubmitting.value">
+              <RefreshCw class="h-4 w-4" />
+              {{ t("nodes.rotateAction") }}
+            </Button>
+          </DialogFooter>
+        </Form>
+        <!-- Success card. Renders after a
+             200 response. The dialog stays
+             open so the operator can copy the
+             fingerprint before closing. The
+             form is hidden (`v-if`) so the
+             submit button is not visible
+             alongside the success card. -->
+        <div v-else class="nodes__rotation-result">
+          <h3 class="nodes__rotation-result-title">
+            <KeyRound class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.rotateResultTitle") }}
+          </h3>
+          <p class="nodes__rotation-result-help">
+            {{ t("nodes.rotateResultHelp") }}
+          </p>
+          <FormField
+            name="rotate-public-key"
+            :label="t('nodes.rotatePublicKeyLine')"
+          >
+            <template #default="{ id }">
+              <Textarea
+                :id="id"
+                :model-value="rotationResult.public_key_line"
+                :rows="4"
+                readonly
+                spellcheck="false"
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <FormField
+            name="rotate-fingerprint"
+            :label="t('nodes.rotateFingerprint')"
+          >
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                :model-value="rotationResult.fingerprint"
+                readonly
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <DialogFooter>
+            <Button type="button" @click="closeRotateDialog">
+              {{ t("common.close") }}
+            </Button>
+          </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   </section>
@@ -897,12 +1225,38 @@ const canWrite = computed(() => {
   cursor: not-allowed;
 }
 
-.nodes__auth-radio input[type='radio'] {
+.nodes__auth-radio input[type="radio"] {
   margin: 0;
   cursor: inherit;
 }
 
-.nodes__auth-radio--disabled input[type='radio'] {
+.nodes__auth-radio--disabled input[type="radio"] {
   cursor: not-allowed;
+}
+
+/* v0.8.4: rotate-panel-key success card. The
+   card sits inside the rotate dialog after a
+   200 response; the dialog stays open so the
+   operator can copy the fingerprint. The
+   layout is a small column with a title, a
+   one-line help hint, and the two read-only
+   fields. */
+.nodes__rotation-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.nodes__rotation-result-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.nodes__rotation-result-help {
+  font-size: 0.85rem;
+  color: hsl(var(--muted-foreground));
+  margin: 0;
 }
 </style>

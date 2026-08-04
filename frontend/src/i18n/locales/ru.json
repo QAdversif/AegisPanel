@@ -138,7 +138,19 @@
     "expectedFingerprint": "Ожидаемый fingerprint (SHA256:base64)",
     "expectedFingerprintHint": "Обязателен при политике «Отклонить». Получить: `ssh-keyscan -t ssh-ed25519 HOST | ssh-keygen -lf -`.",
     "provisioned": "Агент установлен — состояние: {state}",
-    "provisionFailed": "Не удалось установить агент"
+    "provisionFailed": "Не удалось установить агент",
+    "rotate": "Сменить ключ панели",
+    "rotateTitle": "Сменить ключ панели",
+    "rotateDescription": "Генерирует новую ed25519-пару, пушит публичную половину в authorized_keys ноды и сохраняет зашифрованную приватную половину на панели. Следующая ре-провизия ноды расшифрует и использует новый ключ — «auto-deploy» из v0.8.x становится доступен задним числом на нодах v0.3.0..v0.7.x. Это UI-зеркало v0.8.3 CLI `aegis admin node rotate-panel-key`.",
+    "rotateSshPrivateKey": "Существующий SSH-ключ оператора",
+    "rotateSshPrivateKeyHint": "PEM, без пароля. Панель использует его для SSH-входа на ноду, затем отбрасывает. Ключ уже должен быть в authorized_keys ноды (т.е. это ключ, которым ставили ноду).",
+    "rotateAction": "Сменить",
+    "rotateResultTitle": "Ключ сменён",
+    "rotateResultHelp": "Новый публичный ключ добавлен в authorized_keys ноды. Следующая ре-провизия этой ноды пойдёт уже по ключу панели (без участия оператора).",
+    "rotatePublicKeyLine": "Новый публичный ключ (добавлен в authorized_keys)",
+    "rotateFingerprint": "SHA256-отпечаток",
+    "rotated": "Ключ панели сменён на {name}",
+    "rotateFailed": "Не удалось сменить ключ панели"
   },
   "inbounds": {
     "title": "Инбаунды",

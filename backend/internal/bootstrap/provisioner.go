@@ -550,6 +550,15 @@ func claimsFromClaims(c *auth.Claims) string {
 // "post-install-hook:" prefix the provisioner
 // state machine keys on for the failure stage.
 //
+// The RotationResult is discarded here: the
+// post-install hook has no caller to surface
+// the new public key / fingerprint to (the
+// operator who ran the install already has
+// the rest of the row from the `Provision`
+// call; the row's `ssh_private_key_ciphertext`
+// column is the persistent signal on the
+// panel side).
+//
 // The "what this does" docstring lives on
 // generateAndPushKey in rotate_panel_key.go;
 // this wrapper exists only to keep the
@@ -559,7 +568,7 @@ func (s *Service) buildPersistentSSHKeyHook(
 	nodeName string,
 ) func(ctx context.Context, c Client) error {
 	return func(ctx context.Context, c Client) error {
-		if err := s.generateAndPushKey(ctx, nodeID, nodeName, c, s.envelope); err != nil {
+		if _, err := s.generateAndPushKey(ctx, nodeID, nodeName, c, s.envelope); err != nil {
 			return fmt.Errorf("post-install-hook: %w", err)
 		}
 		return nil

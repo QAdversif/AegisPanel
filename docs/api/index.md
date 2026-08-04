@@ -8,6 +8,27 @@ The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
 in the repo root.
 
+**v0.8.4** adds `POST /api/v1/nodes/{id}/rotate-panel-key`,
+the HTTP mirror of the v0.8.3
+`aegis admin node rotate-panel-key` CLI (PR #184). The
+endpoint generates a fresh ed25519 keypair on the panel,
+encrypts the private half with the operator's age
+envelope, persists the ciphertext on the
+`nodes.ssh_private_key_ciphertext` column, and appends
+the public half to the node's `~/.ssh/authorized_keys`.
+The 200 body carries the new public key line and SHA256
+fingerprint so the operator can verify what is now in
+the node's authorized_keys. After the call returns, the
+next re-provision on the node (via
+`POST /api/v1/nodes/{id}/provision` with the
+`authMethod: 'stored'` path) decrypts and reuses the new
+key — the v0.8.x "auto-deploy" experience becomes
+available retroactively on v0.3.0..v0.7.x nodes. The
+NodesView's per-row dropdown gets a "Rotate panel key"
+entry (visible for `online` / `offline` / `draining` /
+`disabled`; hidden for `new` since the panel cannot SSH
+into a never-installed node).
+
 **v0.8.2** adds the credentials admin surface
 (`/api/v1/credentials/` + the per-user and
 per-inbound cross-cut reads) backed by the data
@@ -76,7 +97,7 @@ layer / docs changes). The headline groups:
 | Group         | Endpoints                                                                                                   |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
 | `auth`        | `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`, `POST /auth/change-password`                    |
-| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow)                                 |
+| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) |
 | `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}`                                                                     |
 | `hosts`       | CRUD on `/hosts/{id}`                                                                                       |
 | `plans`       | CRUD on `/plans/{id}` (v0.6.0) вЂ” the operator-facing tariff catalog                                          |
@@ -111,7 +132,11 @@ The following endpoints are documented in
   v0.8.x)
 - The `aegis admin node rotate-panel-key` CLI
   subcommand (v0.8.3; takes an existing node and
-  rotates the stored panel SSH key)
+  rotates the stored panel SSH key). v0.8.4 ships
+  the HTTP mirror
+  (`POST /api/v1/nodes/{id}/rotate-panel-key`); the
+  CLI is now the operator-side fallback, the UI
+  button is the primary path.
 
 ## See also
 

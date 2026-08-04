@@ -71,10 +71,41 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 )
 
+// RotationResult is what RotatePanelKey returns
+// on success. The HTTP handler surfaces the
+// public-key line + fingerprint in the 200 body
+// so the operator can verify what is now in the
+// node's authorized_keys. The CLI ignores the
+// struct (its caller already has the bytes on
+// disk via the same code path).
+//
+// The fields are:
+//
+//   - PublicKeyLine: the OpenSSH authorized_keys
+//     line that was uploaded + appended to
+//     $HOME/.ssh/authorized_keys. Starts with
+//     "ssh-ed25519 ", followed by the base64
+//     payload, followed by the comment
+//     `aegis-panel@node-<nodeName>`.
+//   - Fingerprint: the canonical `SHA256:base64`
+//     SHA-256 fingerprint of the public key.
+//     `ssh-keygen -lf` outputs the same string.
+//     Surfaced in the UI for at-a-glance
+//     verification (an operator can compare the
+//     fingerprint the panel shows against the
+//     one they see in `ssh-add -L` after the
+//     re-provision's first contact).
+type RotationResult struct {
+	PublicKeyLine string
+	Fingerprint   string
+}
+
 // RotatePanelKey is the public entry point for
 // the operator-side key rotation flow. The
 // caller (the `aegis admin node rotate-panel-key`
-// CLI subcommand) is expected to:
+// CLI subcommand, or the admin UI's
+// `POST /api/v1/nodes/{id}/rotate-panel-key`
+// handler) is expected to:
 //
 //  1. Resolve the node row to confirm the row
 //     is in a state where rotation makes sense
@@ -101,6 +132,12 @@ import (
 //     path on the node via SFTP, then run a
 //     constant shell command that appends the
 //     key to $HOME/.ssh/authorized_keys.
+//
+// On success the function returns a
+// RotationResult with the public key line and
+// fingerprint the caller can surface to the
+// operator. The CLI ignores the struct; the
+// HTTP handler returns it in the 200 body.
 //
 // The function is fail-closed: any error in any
 // step returns without leaving the panel in a
@@ -132,32 +169,38 @@ import (
 // for the CLI path that does not have a request
 // context (the CLI records the audit via the
 // CLI-side audit helper, not the bootstrap
-// Service).
+// Service). The HTTP handler records via
+// `audits.RecordFromRequest` AFTER the row is
+// persisted (after-commit ordering; same
+// pattern as the other v0.7+ write paths).
 func (s *Service) RotatePanelKey(
 	ctx context.Context,
 	nodeID uuid.UUID,
 	nodeName string,
 	sshClient Client,
-) error {
+) (RotationResult, error) {
 	if s.envelope == nil {
-		return fmt.Errorf("bootstrap: RotatePanelKey: envelope is not configured (set AEGIS_WEBHOOKS_SECRET_AGE_* env vars)")
+		return RotationResult{}, fmt.Errorf("bootstrap: RotatePanelKey: envelope is not configured (set AEGIS_WEBHOOKS_SECRET_AGE_* env vars)")
 	}
 	if sshClient == nil {
-		return fmt.Errorf("bootstrap: RotatePanelKey: sshClient is nil")
+		return RotationResult{}, fmt.Errorf("bootstrap: RotatePanelKey: sshClient is nil")
 	}
-	if err := s.generateAndPushKey(ctx, nodeID, nodeName, sshClient, s.envelope); err != nil {
-		return fmt.Errorf("bootstrap: RotatePanelKey: %w", err)
+	res, err := s.generateAndPushKey(ctx, nodeID, nodeName, sshClient, s.envelope)
+	if err != nil {
+		return RotationResult{}, fmt.Errorf("bootstrap: RotatePanelKey: %w", err)
 	}
-	return nil
+	return res, nil
 }
 
 // generateAndPushKey is the shared body of
 // buildPersistentSSHKeyHook (the password-install
 // post-install path) and RotatePanelKey (the
-// operator-side CLI path). It does not touch the
-// audit log — the caller records the audit (the
-// provisioner has the per-call action name; the
-// CLI records `node.rotate-panel-key`).
+// operator-side CLI / HTTP path). It does not
+// touch the audit log — the caller records the
+// audit (the provisioner has the per-call action
+// name; the CLI records `node.rotate-panel-key`;
+// the HTTP handler records via
+// `audits.RecordFromRequest`).
 //
 // nodeName is folded into the SSH key comment
 // (`aegis-panel@node-<name>`) so the operator's
@@ -166,17 +209,25 @@ func (s *Service) RotatePanelKey(
 // panel's own audit log will read back via the
 // `adduser`-style line in the node's
 // authorized_keys.
+//
+// On success the function returns a
+// RotationResult with the public key line and
+// fingerprint. The provisioner's
+// buildPersistentSSHKeyHook caller discards the
+// result (the post-install flow has no caller to
+// surface it to); the CLI and HTTP handler
+// callers surface it to the operator.
 func (s *Service) generateAndPushKey(
 	ctx context.Context,
 	nodeID uuid.UUID,
 	nodeName string,
 	c Client,
 	cipher envelope.SecretCipher,
-) error {
+) (RotationResult, error) {
 	// 1. Generate ed25519 keypair.
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return fmt.Errorf("ed25519.GenerateKey: %w", err)
+		return RotationResult{}, fmt.Errorf("ed25519.GenerateKey: %w", err)
 	}
 	// 2. Marshal private to OpenSSH PEM. The
 	// comment is informational only (the SSH
@@ -185,7 +236,7 @@ func (s *Service) generateAndPushKey(
 	// and in the agent's debug logs.
 	privPEMBlock, err := ssh.MarshalPrivateKey(priv, "aegis-panel@node-"+nodeName)
 	if err != nil {
-		return fmt.Errorf("ssh.MarshalPrivateKey: %w", err)
+		return RotationResult{}, fmt.Errorf("ssh.MarshalPrivateKey: %w", err)
 	}
 	privPEM := pem.EncodeToMemory(privPEMBlock)
 	// 3. Marshal public to authorized_keys
@@ -197,13 +248,13 @@ func (s *Service) generateAndPushKey(
 	// shape we upload.
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
-		return fmt.Errorf("ssh.NewPublicKey: %w", err)
+		return RotationResult{}, fmt.Errorf("ssh.NewPublicKey: %w", err)
 	}
 	pubLine := bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub))
 	// 4. Encrypt private key.
 	encrypted, err := cipher.Encrypt(privPEM)
 	if err != nil {
-		return fmt.Errorf("envelope encrypt: %w", err)
+		return RotationResult{}, fmt.Errorf("envelope encrypt: %w", err)
 	}
 	// 5. Persist ciphertext. A failure here
 	// leaves the operator's key in place on
@@ -211,7 +262,7 @@ func (s *Service) generateAndPushKey(
 	// new public key) and the row's
 	// ciphertext column is unchanged.
 	if err := s.nodes.SetSSHPrivateKeyCiphertext(ctx, nodeID, encrypted); err != nil {
-		return fmt.Errorf("persist ciphertext: %w", err)
+		return RotationResult{}, fmt.Errorf("persist ciphertext: %w", err)
 	}
 	// 6. Push public key. We upload the
 	// single line to a fixed temp path on
@@ -256,19 +307,19 @@ func (s *Service) generateAndPushKey(
 	// bytes; we clean it up below.
 	localTmp, err := os.CreateTemp("", "aegis-pubkey-*.pub")
 	if err != nil {
-		return fmt.Errorf("local temp: %w", err)
+		return RotationResult{}, fmt.Errorf("local temp: %w", err)
 	}
 	localPath := localTmp.Name()
 	defer func() { _ = os.Remove(localPath) }()
 	if _, err := localTmp.Write(pubLine); err != nil {
 		_ = localTmp.Close()
-		return fmt.Errorf("local write: %w", err)
+		return RotationResult{}, fmt.Errorf("local write: %w", err)
 	}
 	if err := localTmp.Close(); err != nil {
-		return fmt.Errorf("local close: %w", err)
+		return RotationResult{}, fmt.Errorf("local close: %w", err)
 	}
 	if err := c.Upload(ctx, localPath, remotePubKeyPath, 0o600); err != nil {
-		return fmt.Errorf("sftp upload: %w", err)
+		return RotationResult{}, fmt.Errorf("sftp upload: %w", err)
 	}
 	// The remote command is a constant
 	// string — the public key is in a
@@ -289,7 +340,10 @@ func (s *Service) generateAndPushKey(
 		"  rm -f \"$PUBKEY_FILE\"\n" +
 		"fi\n"
 	if _, err := c.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("append authorized_keys: %w", err)
+		return RotationResult{}, fmt.Errorf("append authorized_keys: %w", err)
 	}
-	return nil
+	return RotationResult{
+		PublicKeyLine: string(pubLine),
+		Fingerprint:   ssh.FingerprintSHA256(sshPub),
+	}, nil
 }

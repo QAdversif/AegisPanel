@@ -26,14 +26,14 @@
 // ---------------------------------------------------------------------------
 
 /** ISO-8601 timestamp string. */
-export type ISODateTime = string
+export type ISODateTime = string;
 
 /**
  * A bare UUID v4 string. We do not brand the type
  * because v0.1.0 does not have a single hand-off
  * point that benefits from a stronger guarantee.
  */
-export type UUID = string
+export type UUID = string;
 
 // ---------------------------------------------------------------------------
 // Nodes
@@ -42,18 +42,119 @@ export type UUID = string
 /** Lifecycle state of a Node. The set is closed
  * (see `backend/internal/nodes/node.go`).
  */
-export type NodeState = 'new' | 'online' | 'draining' | 'offline' | 'disabled'
+export type NodeState = "new" | "online" | "draining" | "offline" | "disabled";
 
 export interface Node {
-  id: UUID
-  name: string
-  region: string
-  state: NodeState
-  capacityHint?: string
-  address: string
-  tags?: string[]
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  name: string;
+  region: string;
+  state: NodeState;
+  capacityHint?: string;
+  address: string;
+  tags?: string[];
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+// NodeCreateRequest is the v0.1.0 wire shape
+// for the create endpoint. PATCH /api/v1/nodes/{id}
+// takes the same fields, all optional
+// (a no-op PATCH is a legal call).
+export interface NodeCreateRequest {
+  name: string;
+  region: string;
+  address: string;
+  capacityHint?: string;
+  tags?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Node v0.8.x wire shapes (provision + rotate-panel-key)
+// ---------------------------------------------------------------------------
+//
+// The v0.3.0 provision flow has its own request /
+// response shapes (the v0.8.1 wire format
+// collapsed the auth fields into a two-field
+// XOR ssh_private_key / ssh_password). The
+// v0.8.4 rotate-panel-key flow is the HTTP
+// mirror of the v0.8.3 `aegis admin node
+// rotate-panel-key` CLI (PR #184) and uses a
+// single-endpoint shape: the operator's
+// existing private key is the only required
+// field, the response carries the new public
+// key line + SHA256 fingerprint so the UI
+// can surface them in a "rotation result" card.
+//
+// All four types live in `@/types` (this file)
+// rather than in `api/services/nodes.ts` so the
+// rest of the frontend (NodesView, schema
+// validators, future "key fingerprint viewer"
+// debug surface) can import the wire shape
+// without pulling in axios. The services file
+// re-exports the request types for callers
+// that want "service + type" in one import.
+
+// NodeProvisionRequest is the v0.8.1 wire
+// shape. The auth fields are optional at the
+// type level; the Go handler enforces the
+// XOR (see `internal/bootstrap/handler.go`,
+// `TestHandleProvision`). The UI's
+// authMethod radio is a local-only
+// discriminator; the wire format collapses
+// to the two-field XOR. v0.8.4 adds the
+// "stored" path: both auth fields are empty
+// when the operator selects the panel's own
+// stored key (the Go side falls back to the
+// encrypted panel key on that path).
+//
+// The v0.8.4 second copy of this interface
+// (the original v0.3.0 definition with
+// `ssh_private_key: string` required) is
+// below at the v0.3.0 backwards-compat
+// section; the v0.8.1+ canonical version is
+// this one. The duplicate is kept for the
+// codegen stability contract; future
+// refactors will collapse the two.
+export interface NodeProvisionRequest {
+  ssh_private_key?: string;
+  ssh_password?: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  tofu_policy?: "reject" | "accept-and-append";
+  expected_fingerprint?: string;
+}
+
+export interface NodeProvisionResponse {
+  node_id: UUID;
+  new_state: NodeState;
+  install_stage?: string;
+  install_error?: string;
+  verify_latency?: string;
+}
+
+// NodeRotatePanelKeyRequest is the v0.8.4 wire
+// shape. Only the operator's existing private
+// key is required; ssh_port / ssh_user are
+// optional overrides that fall back to the
+// panel's service-wide defaults.
+export interface NodeRotatePanelKeyRequest {
+  ssh_private_key: string;
+  ssh_port?: number;
+  ssh_user?: string;
+}
+
+// NodeRotatePanelKeyResponse is the v0.8.4 200
+// body. The UI surfaces the public_key_line
+// and fingerprint in a "rotation result" card
+// so the operator can verify what is now in
+// the node's authorized_keys. node_id is the
+// same {id} the URL already had; the field is
+// included so the response is self-describing
+// for any future bulk-call path.
+export interface NodeRotatePanelKeyResponse {
+  node_id: UUID;
+  public_key_line: string;
+  fingerprint: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,79 +164,71 @@ export interface Node {
 /** Protocol family of an Inbound. The set is closed
  * (see `backend/internal/inbounds/inbound.go`).
  */
-export type Protocol = 'vless' | 'hysteria2' | 'shadowsocks' | 'trojan'
+export type Protocol = "vless" | "hysteria2" | "shadowsocks" | "trojan";
 
 export interface Inbound {
-  id: UUID
-  nodeId: UUID
-  name: string
-  protocol: Protocol
-  listen: string
-  listenPort: number
-  listenPorts?: number[]
-  enabled: boolean
-  tags?: string[]
-  params?: Record<string, unknown>
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  nodeId: UUID;
+  name: string;
+  protocol: Protocol;
+  listen: string;
+  listenPort: number;
+  listenPorts?: number[];
+  enabled: boolean;
+  tags?: string[];
+  params?: Record<string, unknown>;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 // ---------------------------------------------------------------------------
 // Hosts (v3 model: bundle of Endpoints)
 // ---------------------------------------------------------------------------
 
-export type HostType = 'direct' | 'balancer'
+export type HostType = "direct" | "balancer";
 
 export type BalancerStrategy =
-  | 'round_robin'
-  | 'least_loaded'
-  | 'random'
-  | 'least_ping'
-  | 'urltest'
+  "round_robin" | "least_loaded" | "random" | "least_ping" | "urltest";
 
 export type UserStatus =
-  | 'active'
-  | 'on_hold'
-  | 'expired'
-  | 'limited'
-  | 'disabled'
+  "active" | "on_hold" | "expired" | "limited" | "disabled";
 
 export interface Endpoint {
-  id?: UUID
-  nodeId: UUID
-  inboundId: UUID
-  protocol: Protocol
-  weight: number
-  address?: string[]
-  port?: number
-  sni?: string[]
-  host?: string[]
-  path?: string
-  downloadHostId?: UUID
+  id?: UUID;
+  nodeId: UUID;
+  inboundId: UUID;
+  protocol: Protocol;
+  weight: number;
+  address?: string[];
+  port?: number;
+  sni?: string[];
+  host?: string[];
+  path?: string;
+  downloadHostId?: UUID;
 }
 
 export interface Balancer {
-  strategy: BalancerStrategy
-  healthcheckUrl?: string
-  healthcheckIntervalSec?: number
-  failoverEndpointIds?: UUID[]
+  strategy: BalancerStrategy;
+  healthcheckUrl?: string;
+  healthcheckIntervalSec?: number;
+  failoverEndpointIds?: UUID[];
 }
 
 export interface Host {
-  id: UUID
-  remark: string
-  displayName?: string
-  type: HostType
-  enabled: boolean
-  priority: number
-  statusFilter?: UserStatus[]
-  country?: string
-  city?: string
-  tags?: string[]
-  endpoints: Endpoint[]
-  balancer?: Balancer
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  remark: string;
+  displayName?: string;
+  type: HostType;
+  enabled: boolean;
+  priority: number;
+  statusFilter?: UserStatus[];
+  country?: string;
+  city?: string;
+  tags?: string[];
+  endpoints: Endpoint[];
+  balancer?: Balancer;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,37 +237,33 @@ export interface Host {
 
 /** Lifecycle state of a User. */
 export type UserLifecycleStatus =
-  | 'active'
-  | 'grace'
-  | 'disabled'
-  | 'expired'
-  | 'deleted'
+  "active" | "grace" | "disabled" | "expired" | "deleted";
 
-export type ResetPeriod = 'daily' | 'weekly' | 'monthly' | 'never'
+export type ResetPeriod = "daily" | "weekly" | "monthly" | "never";
 
-export type PoolStrategy = 'all' | 'round_robin' | 'least_loaded' | 'geo_aware'
+export type PoolStrategy = "all" | "round_robin" | "least_loaded" | "geo_aware";
 
 export interface User {
-  id: UUID
-  username: string
-  status: UserLifecycleStatus
-  planId?: UUID
-  expireAt?: ISODateTime
-  trafficLimitBytes: number
-  trafficUsedBytes: number
-  deviceLimit: number
-  hostsAllowlist?: UUID[]
-  hostsBlocklist?: UUID[]
-  subToken: string
-  subTokenRotatedAt?: ISODateTime
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  username: string;
+  status: UserLifecycleStatus;
+  planId?: UUID;
+  expireAt?: ISODateTime;
+  trafficLimitBytes: number;
+  trafficUsedBytes: number;
+  deviceLimit: number;
+  hostsAllowlist?: UUID[];
+  hostsBlocklist?: UUID[];
+  subToken: string;
+  subTokenRotatedAt?: ISODateTime;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 export interface Plan {
-  id: UUID
-  name: string
-  trafficLimitBytes: number
+  id: UUID;
+  name: string;
+  trafficLimitBytes: number;
   // Validity period of a subscription issued on
   // this plan, in nanoseconds. The Go side stores
   // it as a Postgres INTERVAL; the API exposes it
@@ -183,21 +272,21 @@ export interface Plan {
   // precision. Convert to a human-readable unit
   // at the rendering layer (the PlansView in #134
   // uses Intl.DurationFormat or a tiny helper).
-  durationNs: number
-  deviceLimit: number
-  resetPeriod: ResetPeriod
-  priceCents: number
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  durationNs: number;
+  deviceLimit: number;
+  resetPeriod: ResetPeriod;
+  priceCents: number;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 export interface Pool {
-  id: UUID
-  name: string
-  strategy: PoolStrategy
-  antiaffinity: boolean
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  name: string;
+  strategy: PoolStrategy;
+  antiaffinity: boolean;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +294,10 @@ export interface Pool {
 // ---------------------------------------------------------------------------
 
 export interface PanelPathConfig {
-  id: UUID
-  subPath: string
-  rotatedAt: ISODateTime
-  createdAt: ISODateTime
+  id: UUID;
+  subPath: string;
+  rotatedAt: ISODateTime;
+  createdAt: ISODateTime;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,15 +306,15 @@ export interface PanelPathConfig {
 
 /** Standard error shape the Go panel returns. */
 export interface ApiError {
-  code: string
-  message: string
-  details?: Record<string, string>
+  code: string;
+  message: string;
+  details?: Record<string, string>;
 }
 
 /** Standard list envelope. */
 export interface ListResponse<T> {
-  items: T[]
-  total: number
+  items: T[];
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,17 +330,17 @@ export interface ListResponse<T> {
  * that want the diff should call `getAudit(id)`.
  */
 export interface AuditEntry {
-  id: string
-  actorId?: string
-  actorUsername?: string
-  action: string
-  resourceType: string
-  resourceId?: string
-  before?: unknown
-  after?: unknown
-  ip?: string
-  userAgent?: string
-  createdAt: ISODateTime
+  id: string;
+  actorId?: string;
+  actorUsername?: string;
+  action: string;
+  resourceType: string;
+  resourceId?: string;
+  before?: unknown;
+  after?: unknown;
+  ip?: string;
+  userAgent?: string;
+  createdAt: ISODateTime;
 }
 
 /**
@@ -260,8 +349,8 @@ export interface AuditEntry {
  * body round-trips through the auth handler.
  */
 export interface ChangePasswordRequest {
-  current_password: string
-  new_password: string
+  current_password: string;
+  new_password: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,12 +370,12 @@ export interface ChangePasswordRequest {
  * 0019 from v0.8.0 (PR #167).
  */
 export interface Credential {
-  id: UUID
-  userId: UUID
-  inboundId: UUID
-  credentialValue: string
-  createdAt: ISODateTime
-  updatedAt: ISODateTime
+  id: UUID;
+  userId: UUID;
+  inboundId: UUID;
+  credentialValue: string;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,25 +390,41 @@ export interface Credential {
  * contact" UX where the panel pins the key on
  * connect and reports the fingerprint back.
  */
-export type TofuPolicy = 'reject' | 'accept-and-append'
+export type TofuPolicy = "reject" | "accept-and-append";
 
 /**
  * Body of `POST /api/v1/nodes/{id}/provision`. Snake-
  * case field names match the Go json tags so the
  * request body round-trips through the bootstrap
  * handler.
+ *
+ * v0.8.4: the v0.3.0 canonical "required key" shape
+ * is no longer the only one — the v0.8.1 wire format
+ * made `ssh_private_key` and `ssh_password` both
+ * optional (the `authMethod: 'stored'` path sends
+ * an empty auth object so the Go provisioner falls
+ * back to the encrypted panel key). The canonical
+ * `NodeProvisionRequest` lives earlier in this file
+ * (the v0.8.1+ shape). This entry is kept as a
+ * `LegacyV030NodeProvisionRequest` alias so the
+ * v0.3.0 codegen consumers still type-check; new
+ * code should import the canonical interface.
+ *
+ * @deprecated since v0.8.4 — use NodeProvisionRequest
+ * (the v0.8.1+ canonical shape, both auth fields
+ * optional). Kept for the codegen stability contract.
  */
-export interface NodeProvisionRequest {
+export type LegacyV030NodeProvisionRequest = {
   /** Per-call override. Zero/omitted = service-wide default (22). */
-  ssh_port?: number
+  ssh_port?: number;
   /** Per-call override. Empty/omitted = service-wide default (root). */
-  ssh_user?: string
+  ssh_user?: string;
   /** Operator-pasted private key (PEM, no passphrase). Required. */
-  ssh_private_key: string
-  tofu_policy?: TofuPolicy
+  ssh_private_key: string;
+  tofu_policy?: TofuPolicy;
   /** Required when `tofu_policy === 'reject'`. `SHA256:base64`. */
-  expected_fingerprint?: string
-}
+  expected_fingerprint?: string;
+};
 
 /**
  * Response of `POST /api/v1/nodes/{id}/provision`.
@@ -328,14 +433,14 @@ export interface NodeProvisionRequest {
  * surfaced for the "retry" button's tooltip.
  */
 export interface NodeProvisionResponse {
-  node_id: string
-  new_state: NodeState
+  node_id: string;
+  new_state: NodeState;
   /** Best-effort stage tag from the provisioner. */
-  install_stage?: string
+  install_stage?: string;
   /** Set when `new_state === 'offline'`. Empty string on success. */
-  install_error?: string
+  install_error?: string;
   /** ISO-8601 duration for the systemd is-active poll (e.g. `PT2.5S`). */
-  verify_latency?: string
+  verify_latency?: string;
 }
 
 // --- v0.5.0 backups (#120 backend, #121 frontend) ---
@@ -345,7 +450,7 @@ export interface NodeProvisionResponse {
  *  - `manual`    — operator clicked Create / POSTed with `{"trigger":"manual"}`
  *  - `scheduled` — the in-process scheduler fired on cron match
  */
-export type BackupTrigger = 'manual' | 'scheduled'
+export type BackupTrigger = "manual" | "scheduled";
 
 /**
  * Lifecycle of a single backup. The state machine is
@@ -353,7 +458,7 @@ export type BackupTrigger = 'manual' | 'scheduled'
  * (error; the row is retained for forensics with
  * `error` populated and the partial file deleted).
  */
-export type BackupStatus = 'running' | 'ok' | 'failed'
+export type BackupStatus = "running" | "ok" | "failed";
 
 /**
  * One row of the v0.5.0 backup table. Mirrors the
@@ -368,19 +473,19 @@ export type BackupStatus = 'running' | 'ok' | 'failed'
  * `running` state has it empty too.
  */
 export interface Backup {
-  id: string
-  createdAt: string
-  sizeBytes: number
-  trigger: BackupTrigger
-  status: BackupStatus
-  error?: string
-  schemaVersion: number
-  nodeCount: number
-  userCount: number
-  hostCount: number
-  checksumSha256: string
+  id: string;
+  createdAt: string;
+  sizeBytes: number;
+  trigger: BackupTrigger;
+  status: BackupStatus;
+  error?: string;
+  schemaVersion: number;
+  nodeCount: number;
+  userCount: number;
+  hostCount: number;
+  checksumSha256: string;
   /** Server-side path (relative to the backups root).
    *  Surfaced so the UI can show `<id>.dump.gz` as
    *  the download filename. Empty for in-flight rows. */
-  path?: string
+  path?: string;
 }
