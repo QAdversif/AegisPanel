@@ -970,7 +970,6 @@ migrated to the matching tagged release sections:
 - v0.7.x Go+frontend dep batch (`#141`-`#144`) — duplicate of the
   `[0.7.1]` section; removed
 
-
 ## [0.5.0] - 2026-07-30
 
 Eight-PR operations-grade polish batch. Closes the
@@ -986,7 +985,6 @@ four pillars; the operator guide + security
 policy + quickstart docs land the soft-launch
 documentation contract; the container-wiring PR
 binds #119 into the panel + agent systemd units.
-
 
 ### Added (operator guide + security policy + quickstart docs, #126)
 
