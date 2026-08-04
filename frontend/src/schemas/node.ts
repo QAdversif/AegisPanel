@@ -9,17 +9,17 @@
 // `z.enum` rather than `z.string` catches typos at
 // the form layer.
 
-import { z } from 'zod'
+import { z } from "zod";
 
-import { hostPortSchema, tagSchema } from './primitives'
+import { hostPortSchema, tagSchema } from "./primitives";
 
 export const nodeStateSchema = z.enum([
-  'new',
-  'online',
-  'draining',
-  'offline',
-  'disabled',
-])
+  "new",
+  "online",
+  "draining",
+  "offline",
+  "disabled",
+]);
 
 /** Fields the operator sets when creating a node. The
  * `id`, `state`, and timestamps are server-side.
@@ -30,23 +30,23 @@ export const nodeCreateSchema = z.object({
   capacityHint: z.string().max(64).optional(),
   address: hostPortSchema,
   tags: z.array(tagSchema).max(16).optional(),
-})
+});
 
-export type NodeCreateInput = z.infer<typeof nodeCreateSchema>
+export type NodeCreateInput = z.infer<typeof nodeCreateSchema>;
 
 /** Fields the operator may patch. The Go Service
  * rejects unknown fields, so we use `.strict()` to
  * surface typos early.
  */
-export const nodeUpdateSchema = nodeCreateSchema.partial().strict()
+export const nodeUpdateSchema = nodeCreateSchema.partial().strict();
 
-export type NodeUpdateInput = z.infer<typeof nodeUpdateSchema>
+export type NodeUpdateInput = z.infer<typeof nodeUpdateSchema>;
 
 /** TofuPolicy is the closed set of SSH host-key trust
  * policies the panel accepts (see
  * `backend/internal/bootstrap/state.go`).
  */
-export const tofuPolicySchema = z.enum(['reject', 'accept-and-append'])
+export const tofuPolicySchema = z.enum(["reject", "accept-and-append"]);
 
 /** AuthMethod is the v0.8.x UI discriminator for the
  * provision form's three-way radio (key / password /
@@ -73,7 +73,7 @@ export const tofuPolicySchema = z.enum(['reject', 'accept-and-append'])
  *   which is the only state a previously-provisioned
  *   node can be in per the v8.x state machine).
  */
-export const authMethodSchema = z.enum(['key', 'password', 'stored'])
+export const authMethodSchema = z.enum(["key", "password", "stored"]);
 
 /** Fields the operator sets when provisioning a node.
  * v0.8.x schema: the `authMethod` radio is the new
@@ -102,8 +102,8 @@ export const nodeProvisionSchema = z
     ssh_port: z
       .number()
       .int()
-      .min(1, 'ssh_port must be 1..65535')
-      .max(65535, 'ssh_port must be 1..65535')
+      .min(1, "ssh_port must be 1..65535")
+      .max(65535, "ssh_port must be 1..65535")
       .optional(),
     ssh_user: z.string().max(64).optional(),
     tofu_policy: tofuPolicySchema.optional(),
@@ -116,35 +116,39 @@ export const nodeProvisionSchema = z
     // layer); the form check is for UX (the operator
     // gets the error in their own time, not after a
     // 502 round-trip).
-    if (value.authMethod === 'key') {
-      if (!value.ssh_private_key || value.ssh_private_key.trim() === '') {
+    if (value.authMethod === "key") {
+      if (!value.ssh_private_key || value.ssh_private_key.trim() === "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_private_key'],
-          message: 'ssh_private_key is required when auth_method is "key" (PEM, no passphrase).',
-        })
+          path: ["ssh_private_key"],
+          message:
+            'ssh_private_key is required when auth_method is "key" (PEM, no passphrase).',
+        });
       }
-      if (value.ssh_password && value.ssh_password !== '') {
+      if (value.ssh_password && value.ssh_password !== "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_password'],
-          message: 'ssh_password must be empty when auth_method is "key" (XOR with ssh_private_key).',
-        })
+          path: ["ssh_password"],
+          message:
+            'ssh_password must be empty when auth_method is "key" (XOR with ssh_private_key).',
+        });
       }
-    } else if (value.authMethod === 'password') {
-      if (!value.ssh_password || value.ssh_password === '') {
+    } else if (value.authMethod === "password") {
+      if (!value.ssh_password || value.ssh_password === "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_password'],
-          message: 'ssh_password is required when auth_method is "password" (the VPS root password).',
-        })
+          path: ["ssh_password"],
+          message:
+            'ssh_password is required when auth_method is "password" (the VPS root password).',
+        });
       }
-      if (value.ssh_private_key && value.ssh_private_key.trim() !== '') {
+      if (value.ssh_private_key && value.ssh_private_key.trim() !== "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_private_key'],
-          message: 'ssh_private_key must be empty when auth_method is "password" (XOR with ssh_password).',
-        })
+          path: ["ssh_private_key"],
+          message:
+            'ssh_private_key must be empty when auth_method is "password" (XOR with ssh_password).',
+        });
       }
     } else {
       // authMethod === 'stored': the panel re-uses
@@ -154,19 +158,21 @@ export const nodeProvisionSchema = z
       // schema check is here for defence-in-depth
       // (a custom form integration could submit
       // stale values).
-      if (value.ssh_private_key && value.ssh_private_key.trim() !== '') {
+      if (value.ssh_private_key && value.ssh_private_key.trim() !== "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_private_key'],
-          message: 'ssh_private_key must be empty when auth_method is "stored" (the panel re-uses its own key).',
-        })
+          path: ["ssh_private_key"],
+          message:
+            'ssh_private_key must be empty when auth_method is "stored" (the panel re-uses its own key).',
+        });
       }
-      if (value.ssh_password && value.ssh_password !== '') {
+      if (value.ssh_password && value.ssh_password !== "") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['ssh_password'],
-          message: 'ssh_password must be empty when auth_method is "stored" (the panel re-uses its own key).',
-        })
+          path: ["ssh_password"],
+          message:
+            'ssh_password must be empty when auth_method is "stored" (the panel re-uses its own key).',
+        });
       }
     }
     // The Go handler accepts empty / omitted `tofu_policy`
@@ -177,16 +183,64 @@ export const nodeProvisionSchema = z
     // the fingerprint is ignored (the panel records the
     // observed one instead).
     if (
-      (value.tofu_policy === undefined || value.tofu_policy === 'reject') &&
-      (!value.expected_fingerprint || value.expected_fingerprint.trim() === '')
+      (value.tofu_policy === undefined || value.tofu_policy === "reject") &&
+      (!value.expected_fingerprint || value.expected_fingerprint.trim() === "")
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['expected_fingerprint'],
+        path: ["expected_fingerprint"],
         message:
           'expected_fingerprint is required when tofu_policy is "reject" (the safe default). Either paste the SHA256 fingerprint or switch tofu_policy to "accept-and-append".',
-      })
+      });
     }
-  })
+  });
 
-export type NodeProvisionInput = z.infer<typeof nodeProvisionSchema>
+export type NodeProvisionInput = z.infer<typeof nodeProvisionSchema>;
+
+/**
+ * Schema for the v0.8.4 rotate-panel-key dialog.
+ * The form is a single textarea (the operator's
+ * existing SSH private key, PEM-encoded, no
+ * passphrase) plus the optional ssh_port /
+ * ssh_user overrides. The PEM is the only
+ * required field — the rest fall back to the
+ * panel's service-wide defaults (root@:22).
+ *
+ * The wire payload (what the form's onSubmit
+ * posts to `/api/v1/nodes/{id}/rotate-panel-key`)
+ * is the `NodeRotatePanelKeyRequest` shape from
+ * `api/services/nodes.ts`; the zod schema here
+ * validates the form's local state, which is the
+ * same shape minus the codegen drift.
+ *
+ * v0.8.x auth-method context: the
+ * rotate-panel-key flow is NOT the v0.8.1
+ * "first-time install" path. The endpoint is the
+ * v0.3.0..v0.7.x re-provision escape hatch:
+ * the node already has the operator's PEM
+ * authorised in $HOME/.ssh/authorized_keys from
+ * the original install. A password would only be
+ * meaningful on a brand-new node that does not
+ * yet have any keys — that path is the
+ * `POST /{id}/provision` endpoint, not this
+ * one. The form therefore has no auth-method
+ * radio: a private key is the only legal auth
+ * method here.
+ */
+export const nodeRotatePanelKeySchema = z.object({
+  ssh_private_key: z
+    .string()
+    .min(
+      1,
+      "ssh_private_key is required (paste the operator PEM the panel used to install this node)",
+    ),
+  ssh_port: z
+    .number()
+    .int()
+    .min(1, "ssh_port must be 1..65535")
+    .max(65535, "ssh_port must be 1..65535")
+    .optional(),
+  ssh_user: z.string().max(64).optional(),
+});
+
+export type NodeRotatePanelKeyInput = z.infer<typeof nodeRotatePanelKeySchema>;
