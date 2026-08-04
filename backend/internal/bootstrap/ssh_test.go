@@ -43,6 +43,44 @@ func TestNewClient_RequiredFields(t *testing.T) {
 	}
 }
 
+// TestNewClient_AuthMethodXOR covers the
+// first-time-install UX: exactly one of
+// PrivateKey or Password must be set, never both,
+// never neither. Both set is ambiguous (the
+// client can't pick); neither set means no auth.
+// The test runs the cross product and asserts the
+// right error in each cell.
+func TestNewClient_AuthMethodXOR(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     []byte
+		pass    string
+		wantErr bool
+	}{
+		{"both empty", nil, "", true},
+		{"only key set", []byte("k"), "", false},
+		{"only password set", nil, "secret", false},
+		{"both set (ambiguous)", []byte("k"), "secret", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := NewClient(ClientConfig{
+				Address:    "h:22",
+				User:       "root",
+				PrivateKey: c.key,
+				Password:   c.pass,
+				KnownHosts: "/tmp/kh",
+			})
+			if c.wantErr && err == nil {
+				t.Errorf("NewClient(%+v) = nil, want error", c)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("NewClient(%+v) = %v, want nil", c, err)
+			}
+		})
+	}
+}
+
 // TestFingerprintEqual is a small helper for
 // the TOFU code. The on-the-wire form is
 // "SHA256:base64"; the operator's paste may

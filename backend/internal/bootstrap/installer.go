@@ -106,7 +106,16 @@ type InstallInput struct {
 	// private key (decoded from the form's
 	// "SSH key" textarea). The PEM is passed
 	// to ssh.ParsePrivateKey in the Client.
+	// Mutually exclusive with Password.
 	PrivateKeyPEM []byte
+	// Password is the SSH login password for
+	// first-time auth on a fresh node. The
+	// install is the only consumer — the
+	// agent switches to bearer-token auth
+	// once the env file is in place. Not
+	// stored by the panel. Mutually exclusive
+	// with PrivateKeyPEM.
+	Password string
 	// KnownHosts is the panel's known_hosts
 	// file path. The Client appends the new
 	// entry on first contact (TOFU).
@@ -127,6 +136,21 @@ type InstallInput struct {
 	// placeholder; v0.4.0 swaps for a real
 	// release artifact.
 	AgentSource string
+	// PostInstallHook, when non-nil, runs after
+	// the systemd unit is installed and reloaded
+	// but before the post-install `systemctl
+	// is-active` verify. The hook receives the
+	// open SSH client so it can issue additional
+	// remote commands without re-dialling (e.g.
+	// `cat >> ~/.ssh/authorized_keys` to push
+	// the panel's persistent SSH public key for
+	// the node). A nil return means success; any
+	// non-nil error fails the install at the
+	// `post-install-hook` stage with the hook's
+	// error message preserved. v0.8.x adds the
+	// hook for the persistent node SSH key flow
+	// (PR #179).
+	PostInstallHook func(ctx context.Context, c Client) error
 }
 
 // InstallResult is the per-call output. The
@@ -169,6 +193,7 @@ func NewClientFactory(in InstallInput) (Client, error) {
 		Address:             joinHostPort(in.Address, in.Port),
 		User:                in.SSHUser,
 		PrivateKey:          in.PrivateKeyPEM,
+		Password:            in.Password,
 		KnownHosts:          in.KnownHosts,
 		Tofu:                in.Tofu,
 		ExpectedFingerprint: in.ExpectedFingerprint,
@@ -240,6 +265,23 @@ func (i *Installer) Install(ctx context.Context, in InstallInput) InstallResult 
 	}
 	if err := i.installSystemdUnit(ctx, client); err != nil {
 		return InstallResult{Stage: "install-unit", Err: err}
+	}
+	// Post-install hook: runs after the systemd
+	// unit is in place but before the verify
+	// probe. v0.8.x uses this for the persistent
+	// node SSH key (generate ed25519, encrypt,
+	// save, push pub key to authorized_keys).
+	// The hook runs while the SSH client is
+	// still connected, so it does not need to
+	// re-dial. A hook error is the install's
+	// failure mode; we record the stage so the
+	// audit log can surface "post-install-hook"
+	// distinctly from "install-unit" or
+	// "verify".
+	if in.PostInstallHook != nil {
+		if err := in.PostInstallHook(ctx, client); err != nil {
+			return InstallResult{Stage: "post-install-hook", Err: err}
+		}
 	}
 	latency, err := i.verify(ctx, client)
 	if err != nil {

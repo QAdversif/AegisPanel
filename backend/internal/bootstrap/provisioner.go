@@ -65,7 +65,11 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -74,9 +78,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 )
 
 // NodeProvider is the subset of nodes.Service
@@ -102,6 +108,16 @@ type NodeProvider interface {
 	// need it (one-shot bootstrap, no ongoing
 	// panel->agent traffic).
 	SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error
+	// SetSSHPrivateKeyCiphertext persists the
+	// panel's persistent SSH private key for
+	// the node, sealed with the operator's age
+	// envelope (see internal/crypto/envelope,
+	// PR #177). v0.8.x added this; the
+	// provisioner's post-install hook calls
+	// it on the first password-based install
+	// and on every password-based re-provision
+	// where the stored key has been wiped.
+	SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, ciphertext []byte) error
 }
 
 // NodeRow is the minimal projection of
@@ -123,6 +139,17 @@ type NodeRow struct {
 	// the freshly-minted secret without a full
 	// Update cycle on the rest of the row.
 	AgentBearer string
+	// SSHPrivateKeyCiphertext is the panel's
+	// persistent SSH private key for this node,
+	// sealed with the operator's age envelope.
+	// Empty bytes mean "no key yet" — the
+	// provisioner treats empty as the signal to
+	// fall through to the operator-supplied
+	// password / key on the install path, and
+	// the signal to gen-and-save a new panel
+	// key on the post-install hook. v0.8.x
+	// added this field (migration 0020).
+	SSHPrivateKeyCiphertext []byte
 }
 
 // Service is the bootstrap entry point. main.go
@@ -133,6 +160,17 @@ type Service struct {
 	installer *Installer
 	sm        *StateMachine
 	audits    *audits.Service
+	// envelope is the age cipher the provisioner
+	// uses to seal / open the panel's persistent
+	// node SSH private key. v0.8.x added this;
+	// the field is nil-safe (a Service without
+	// an envelope skips the post-install key
+	// generation and the on-the-fly decrypt
+	// path, falling back to the operator-
+	// supplied auth on every call). Production
+	// wiring (internal/app/app.go) installs the
+	// same envelope the webhooks PgStore uses.
+	envelope envelope.SecretCipher
 	// agentBinary is the absolute path of the
 	// placeholder agent binary the installer
 	// uploads. The path is set by main.go from
@@ -157,6 +195,7 @@ type Service struct {
 type ServiceConfig struct {
 	Nodes       NodeProvider
 	Audits      *audits.Service
+	Envelope    envelope.SecretCipher // optional; see Service.envelope
 	AgentBinary string
 	KnownHosts  string
 	SSHUser     string
@@ -179,11 +218,25 @@ func NewService(cfg ServiceConfig) *Service {
 		installer:   NewInstaller(),
 		sm:          NewStateMachine(),
 		audits:      cfg.Audits,
+		envelope:    cfg.Envelope,
 		agentBinary: cfg.AgentBinary,
 		knownHosts:  cfg.KnownHosts,
 		sshUser:     cfg.SSHUser,
 		sshPort:     cfg.SSHPort,
 	}
+}
+
+// WithEnvelope replaces the service's age
+// cipher. The setter is nil-safe (a nil
+// cipher disables the persistent-key path),
+// matching the `WithAudits` / `WithWebhooks`
+// pattern in other Service types. Tests use
+// the setter to inject an in-memory
+// `envelope.NoopSecretCipher` without going
+// through the production `cfg.Envelope` field.
+func (s *Service) WithEnvelope(cipher envelope.SecretCipher) *Service {
+	s.envelope = cipher
+	return s
 }
 
 // Provision runs the full bootstrap sequence
@@ -244,6 +297,89 @@ func (s *Service) Provision(
 	if err != nil {
 		return prev, fmt.Errorf("bootstrap: mint secret: %w", err)
 	}
+	// 1.5. Decide the SSH auth method.
+	//
+	// Three options, in priority order:
+	//
+	//   a. Stored panel key (v0.8.x, migration
+	//      0020). If the row already carries a
+	//      non-empty ssh_private_key_ciphertext,
+	//      decrypt it via the envelope and use
+	//      that PEM as the auth material. The
+	//      operator's request (key OR password)
+	//      is ignored on this path — the stored
+	//      key wins. The post-install hook is
+	//      NOT registered because the key is
+	//      already in place on the node from
+	//      the first install.
+	//
+	//   b. Operator-supplied password (first-
+	//      time install or fresh re-provision
+	//      after the stored key was wiped). Use
+	//      the password; register the post-
+	//      install hook to generate a fresh
+	//      ed25519 keypair, encrypt the private
+	//      half via the envelope, persist the
+	//      ciphertext to the node row, and
+	//      append the public half to the node's
+	//      authorized_keys.
+	//
+	//   c. Operator-supplied private key. Use
+	//      the operator's key as-is; the
+	//      operator's key is already the
+	//      persistent credential so no panel-
+	//      side rotation is needed. The
+	//      post-install hook is NOT registered.
+	//
+	// Option (a) is what makes the v0.8.x
+	// "auto-deploy" actually auto: the operator
+	// does not need to paste a key on every
+	// re-provision. Option (b) is the first-
+	// time-install path; the operator pastes
+	// the VPS root password once and the panel
+	// takes over from there.
+	//
+	// The HTTP layer still enforces the XOR on
+	// the request (the operator must supply at
+	// least one of key or password); the
+	// provisioner is authoritative on the
+	// ACTUAL auth method, which is the right
+	// place for "stored key overrides request"
+	// because the request does not know what
+	// is in the DB.
+	var postInstallHook func(ctx context.Context, c Client) error
+	switch {
+	case len(row.SSHPrivateKeyCiphertext) > 0:
+		if s.envelope == nil {
+			// v0.8.x failure mode: the column
+			// has a stored key but the panel
+			// was booted without an envelope.
+			// The two are designed to be
+			// installed together (the app
+			// wiring installs both in the same
+			// block); a missing envelope
+			// means a config bug. Fail
+			// closed.
+			return prev, errors.New("bootstrap: node has stored SSH key but envelope is not configured")
+		}
+		privPEM, err := s.envelope.Decrypt(row.SSHPrivateKeyCiphertext)
+		if err != nil {
+			return prev, fmt.Errorf("bootstrap: decrypt stored SSH key: %w", err)
+		}
+		r.SSHPassword = ""
+		r.SSHPrivateKey = string(privPEM)
+	case r.SSHPassword != "":
+		// Password-first install. Register the
+		// post-install hook ONLY if the
+		// envelope is configured (without
+		// the envelope we cannot seal the
+		// private key for later re-use, so
+		// the rotation step is a no-op;
+		// the password remains one-shot).
+		if s.envelope != nil {
+			postInstallHook = s.buildPersistentSSHKeyHook(ctx, row.ID, row.Name)
+		}
+	}
 	// 2. Run the installer. The result is
 	// always populated, even on failure.
 	in := InstallInput{
@@ -253,11 +389,13 @@ func (s *Service) Provision(
 		Port:                r.SSHPort,
 		SSHUser:             r.SSHUser,
 		PrivateKeyPEM:       []byte(r.SSHPrivateKey),
+		Password:            r.SSHPassword,
 		KnownHosts:          s.knownHosts,
 		Tofu:                r.Tofu,
 		ExpectedFingerprint: r.ExpectedFingerprint,
 		BearerSecret:        plain,
 		AgentSource:         s.agentBinary,
+		PostInstallHook:     postInstallHook,
 	}
 	// Default the SSH port / user to the
 	// service-wide values when the request does
@@ -371,7 +509,16 @@ type ProvisionRequest struct {
 	// SSHPrivateKey is the operator's pasted
 	// private key (PEM). The provisioner
 	// passes it to the installer as-is.
+	// Mutually exclusive with SSHPassword —
+	// the HTTP layer enforces the XOR.
 	SSHPrivateKey string
+	// SSHPassword is the operator's SSH login
+	// password for first-time auth on a fresh
+	// node. The provisioner passes it to the
+	// installer as-is; the installer is the
+	// only consumer. Mutually exclusive with
+	// SSHPrivateKey.
+	SSHPassword string
 	// Tofu is the trust-on-first-use policy.
 	// The provisioner forwards to the
 	// installer; the installer's TofuReject
@@ -396,6 +543,180 @@ func claimsFromClaims(c *auth.Claims) string {
 		return ""
 	}
 	return c.Subject
+}
+
+// buildPersistentSSHKeyHook returns a
+// post-install hook (the function shape
+// expected by InstallInput.PostInstallHook)
+// that runs at the end of a successful
+// password-based install. The hook:
+//
+//  1. Generates a fresh ed25519 keypair on
+//     the panel side.
+//  2. Marshals the private key to OpenSSH
+//     PEM and seals it with the operator's
+//     age envelope (see
+//     internal/crypto/envelope, PR #177).
+//  3. Persists the ciphertext via
+//     SetSSHPrivateKeyCiphertext so the
+//     next re-provision can decrypt and
+//     reuse the same key without the
+//     operator re-pasting a password.
+//  4. Uploads the public key to a temp
+//     path on the node via SFTP and then
+//     runs a constant shell command (no
+//     string interpolation) that copies
+//     the key into
+//     $HOME/.ssh/authorized_keys with the
+//     correct mode. The constant command
+//     keeps the gosec G204 (sub-shell
+//     injection) check happy: the command
+//     is built at compile time and never
+//     touches operator-controlled bytes.
+//
+// The hook runs while the SSH client is
+// still connected, so no second dial is
+// needed. A failure at any step fails the
+// install at the `post-install-hook` stage
+// (recorded in the audit log by the
+// provisioner) and the agent is left
+// un-initialised — the operator's "retry"
+// button restarts the install with the same
+// password and a new keypair is generated.
+//
+// nodeName is folded into the SSH key
+// comment ("aegis-panel@node-<name>") so
+// the operator's `ssh-add -L` output is
+// self-documenting in a multi-node fleet.
+func (s *Service) buildPersistentSSHKeyHook(
+	_ context.Context,
+	nodeID uuid.UUID,
+	nodeName string,
+) func(ctx context.Context, c Client) error {
+	return func(ctx context.Context, c Client) error {
+		// 1. Generate ed25519 keypair.
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return fmt.Errorf("post-install-hook: ed25519.GenerateKey: %w", err)
+		}
+		// 2. Marshal private to OpenSSH PEM.
+		// The comment is informational only
+		// (the SSH client never sends it back
+		// to the server); it shows up in
+		// `ssh-add -L` and in the agent's
+		// debug logs.
+		privPEMBlock, err := ssh.MarshalPrivateKey(priv, "aegis-panel@node-"+nodeName)
+		if err != nil {
+			return fmt.Errorf("post-install-hook: ssh.MarshalPrivateKey: %w", err)
+		}
+		privPEM := pem.EncodeToMemory(privPEMBlock)
+		// 3. Marshal public to authorized_keys
+		// line. ssh.MarshalAuthorizedKey returns
+		// "<key-type> <base64> <comment>\n" —
+		// the trailing newline is trimmed so
+		// the per-line `grep -qxF` idempotency
+		// check on the remote side matches the
+		// line shape we upload.
+		sshPub, err := ssh.NewPublicKey(pub)
+		if err != nil {
+			return fmt.Errorf("post-install-hook: ssh.NewPublicKey: %w", err)
+		}
+		pubLine := bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub))
+		// 4. Encrypt private key.
+		cipher, err := s.envelope.Encrypt(privPEM)
+		if err != nil {
+			return fmt.Errorf("post-install-hook: envelope encrypt: %w", err)
+		}
+		// 5. Persist ciphertext. The hook runs
+		// BEFORE the post-install verify, so a
+		// SetSSHPrivateKeyCiphertext error
+		// here does not leave the agent in a
+		// half-installed state — the verify
+		// probe is the next step and would
+		// fail anyway.
+		if err := s.nodes.SetSSHPrivateKeyCiphertext(ctx, nodeID, cipher); err != nil {
+			return fmt.Errorf("post-install-hook: persist ciphertext: %w", err)
+		}
+		// 6. Push public key. We upload the
+		// single line to a fixed temp path
+		// on the node via SFTP (the bytes
+		// are written verbatim, so there
+		// is no shell-quoting concern), then
+		// run a CONSTANT shell command (no
+		// string interpolation) that ensures
+		// $HOME/.ssh exists with mode 0700,
+		// creates authorized_keys with mode
+		// 0600 if it does not exist,
+		// idempotently appends the uploaded
+		// line, and removes the temp file.
+		// The `grep -qxF` check makes the
+		// append idempotent on retry: a key
+		// that is already in the file is
+		// left untouched.
+		//
+		// The fixed path is safe because the
+		// provisioner state machine forbids
+		// concurrent provisions of the same
+		// node (a node is `new` -> `online`
+		// or `offline`; the state machine
+		// rejects a re-provision from
+		// `online`). On retry from `offline`
+		// the previous temp file is left
+		// behind but the `rm -f` at the end
+		// of the new run cleans it up.
+		//
+		// The remote command is a constant
+		// string — the public key is in a
+		// file, not interpolated. gosec G204
+		// (sub-shell injection) is satisfied
+		// because the only `Run` argument
+		// here is a compile-time string
+		// literal.
+		const remotePubKeyPath = "/tmp/.aegis-pubkey"
+		// Upload the public key to a local
+		// temp file first, then SFTP it onto
+		// the node. The local file is the
+		// panel-side source-of-truth for the
+		// bytes; we clean it up below.
+		localTmp, err := os.CreateTemp("", "aegis-pubkey-*.pub")
+		if err != nil {
+			return fmt.Errorf("post-install-hook: local temp: %w", err)
+		}
+		localPath := localTmp.Name()
+		defer func() { _ = os.Remove(localPath) }()
+		if _, err := localTmp.Write(pubLine); err != nil {
+			_ = localTmp.Close()
+			return fmt.Errorf("post-install-hook: local write: %w", err)
+		}
+		if err := localTmp.Close(); err != nil {
+			return fmt.Errorf("post-install-hook: local close: %w", err)
+		}
+		if err := c.Upload(ctx, localPath, remotePubKeyPath, 0o600); err != nil {
+			return fmt.Errorf("post-install-hook: sftp upload: %w", err)
+		}
+		// The remote command is a constant
+		// string — the public key is in a
+		// file, not interpolated. gosec G204
+		// (sub-shell injection) is satisfied
+		// because the only `Run` argument
+		// here is a compile-time string
+		// literal.
+		const cmd = "set -e\n" +
+			"install -d -m 0700 \"$HOME/.ssh\"\n" +
+			"touch \"$HOME/.ssh/authorized_keys\"\n" +
+			"chmod 0600 \"$HOME/.ssh/authorized_keys\"\n" +
+			"PUBKEY_FILE=\"/tmp/.aegis-pubkey\"\n" +
+			"if [ -f \"$PUBKEY_FILE\" ]; then\n" +
+			"  if ! grep -qxF \"$(cat \"$PUBKEY_FILE\")\" \"$HOME/.ssh/authorized_keys\" 2>/dev/null; then\n" +
+			"    cat \"$PUBKEY_FILE\" >> \"$HOME/.ssh/authorized_keys\"\n" +
+			"  fi\n" +
+			"  rm -f \"$PUBKEY_FILE\"\n" +
+			"fi\n"
+		if _, err := c.Run(ctx, cmd); err != nil {
+			return fmt.Errorf("post-install-hook: append authorized_keys: %w", err)
+		}
+		return nil
+	}
 }
 
 // errString returns the error message or ""
