@@ -360,3 +360,136 @@ func TestPgStore_ReuseRevokesChain(t *testing.T) {
 		t.Fatalf("B should be revoked after chain policy, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GetByID — v0.8.2 fix for /me 500 on the pg backend.
+// Pre-v0.8.2, Service.lookupByID type-asserted the store
+// to *MemoryStore and fell through to "only supported
+// for MemoryStore" on PgStore, which the /me handler
+// mapped to HTTP 500. GetByID makes the call site
+// store-agnostic. The integration test below is the
+// canonical regression: it exercises the same SQL the
+// production /me call now uses.
+// ---------------------------------------------------------------------------
+
+// TestPgStore_GetByID_Found pins the happy path: an admin
+// row is seeded, GetByID returns the matching *User with
+// the correct fields, including the role-derived Scopes.
+func TestPgStore_GetByID_Found(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	uid := seedAdmin(t, store, "dave", "super-admin", true)
+
+	got, err := store.GetByID(context.Background(), uid.String())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.ID != uid.String() {
+		t.Fatalf("id = %q, want %q", got.ID, uid.String())
+	}
+	if got.Username != "dave" {
+		t.Fatalf("username = %q, want dave", got.Username)
+	}
+	if !got.Scopes.Has(ScopeAdmin) {
+		t.Fatalf("super-admin should have ScopeAdmin, got %v", got.Scopes)
+	}
+	if !got.Enabled {
+		t.Fatal("enabled flag should be true")
+	}
+}
+
+// TestPgStore_GetByID_OperatorRole pins that an operator
+// row resolves to a non-admin scope set. The role -> scopes
+// mapping is the only place where the wire role enum meets
+// the internal Scope vocabulary; a bug here would
+// accidentally grant (or withhold) admin on /me.
+func TestPgStore_GetByID_OperatorRole(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	uid := seedAdmin(t, store, "eve", "operator", true)
+
+	got, err := store.GetByID(context.Background(), uid.String())
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Scopes.Has(ScopeAdmin) {
+		t.Fatalf("operator should NOT have ScopeAdmin, got %v", got.Scopes)
+	}
+	if !got.Scopes.Has(ScopeRead) || !got.Scopes.Has(ScopeWrite) {
+		t.Fatalf("operator should have read+write, got %v", got.Scopes)
+	}
+}
+
+// TestPgStore_GetByID_UnknownReturnsErrUnauthorised pins
+// the "not found" -> ErrUnauthorised collapse. A malformed
+// / missing id is a 401 on the wire, not a 500.
+func TestPgStore_GetByID_UnknownReturnsErrUnauthorised(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+
+	bogus := uuid.New().String()
+	if _, err := store.GetByID(context.Background(), bogus); !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("err = %v, want ErrUnauthorised", err)
+	}
+}
+
+// TestPgStore_GetByID_DisabledReturnsErrUnauthorised pins
+// the "disabled" -> ErrUnauthorised collapse. A disabled
+// admin row should not be discoverable via /me; the
+// collapse matches LookupUser so the wire response is
+// indistinguishable from a missing id.
+func TestPgStore_GetByID_DisabledReturnsErrUnauthorised(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	uid := seedAdmin(t, store, "frank", "viewer", false) // enabled=false
+
+	if _, err := store.GetByID(context.Background(), uid.String()); !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("disabled admin should collapse to ErrUnauthorised, got %v", err)
+	}
+}
+
+// TestPgStore_GetByID_MalformedIDReturnsErrUnauthorised
+// pins the malformed-UUID guard. A tampered JWT whose
+// Subject is not a valid UUID is the same security class
+// as a JWT whose Subject points at a missing row: the
+// caller is unauthenticated. Returning a 4xx (mapped from
+// ErrUnauthorised) is the right semantics; returning a 5xx
+// would leak "we tried to parse the id and failed" to the
+// caller, which is a side-channel the project does not
+// want.
+func TestPgStore_GetByID_MalformedIDReturnsErrUnauthorised(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+
+	if _, err := store.GetByID(context.Background(), "not-a-uuid"); !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("err = %v, want ErrUnauthorised", err)
+	}
+}
+
+// TestPgStore_MeStyleLookup exercises the canonical
+// /me call path against a real Postgres: seed an admin,
+// resolve the user by ID through GetByID, confirm the
+// returned *User has the right ID / username / scopes.
+// Pre-v0.8.2, this would fail with the "only supported
+// for MemoryStore" error from the type-asserted walk
+// in Service.lookupByID. v0.8.2 makes the call site
+// store-agnostic; the regression here is the closest
+// thing to an end-to-end /me test we can do without
+// spinning up the HTTP layer.
+func TestPgStore_MeStyleLookup(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	uid := seedAdmin(t, store, "grace", "super-admin", true)
+
+	// Mirror Service.Me: claims.Subject -> store.GetByID.
+	got, err := store.GetByID(context.Background(), uid.String())
+	if err != nil {
+		t.Fatalf("me-style lookup: %v", err)
+	}
+	if got.ID != uid.String() || got.Username != "grace" {
+		t.Fatalf("got %+v, want id=%q username=grace", got, uid.String())
+	}
+	if !got.Scopes.Has(ScopeAdmin) {
+		t.Fatalf("scopes missing admin: %v", got.Scopes)
+	}
+}
