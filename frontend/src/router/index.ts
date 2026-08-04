@@ -90,6 +90,12 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.webhooks', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/credentials',
+    name: 'credentials',
+    component: () => import('@/views/CredentialsView.vue'),
+    meta: { titleKey: 'nav.credentials', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/me',
     name: 'profile',
     component: () => import('@/views/ProfileView.vue'),
