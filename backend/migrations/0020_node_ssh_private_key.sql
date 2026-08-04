@@ -1,0 +1,97 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- +migrate Up
+--
+-- v0.8.x — add `ssh_private_key_ciphertext` to the
+-- nodes table.
+--
+-- The column stores the panel's persistent SSH
+-- private key for each node, sealed with the
+-- operator's age envelope (see
+-- internal/crypto/envelope, PR #177). The wire
+-- shape is the raw `age` binary output: STREAM-KEY
+-- (1 byte) + 16-byte nonce + ChaCha20-Poly1305
+-- ciphertext. Length is `len(plaintext) + 49` bytes
+-- for a typical ed25519 key (the panel uses
+-- ed25519-OpenSSH-PEM, ~390 bytes plaintext; the
+-- ciphertext is ~440 bytes).
+--
+-- The column is NOT NULL with a default of
+-- `\x`::bytea (empty BYTEA). An empty value is the
+-- "no key yet" sentinel; the provisioner reads
+-- the column, treats empty as "no stored key",
+-- and either (a) decrypts on re-provision or
+-- (b) generates + writes a new key on first
+-- password-based install.
+--
+-- # Why BYTEA and not TEXT
+--
+-- The ciphertext is binary (raw `age` output).
+-- A TEXT cast would round-trip through UTF-8 and
+-- either truncate the high bytes or, depending
+-- on the Postgres server encoding, reject the
+-- value altogether. BYTEA is the natural fit;
+-- pgx scans it as `[]byte` directly, no encoding
+-- layer in between.
+--
+-- # Why NOT NULL with empty default
+--
+-- Two reasons:
+--
+--   1. The pg query path is one column shorter
+--      when the column is NOT NULL; the scan code
+--      does not need a `pgtype.Bytea` wrapper to
+--      distinguish "value missing" from "value is
+--      empty bytes". The empty-sentinel check
+--      happens in Go (`len(ciphertext) == 0`),
+--      not in SQL.
+--
+--   2. A v0.8.0 node that was provisioned before
+--      this migration lands has no SSH private
+--      key at all (the panel's only persistent
+--      credential for v0.3.0..v0.8.0 is the
+--      agent_bearer, which is a separate
+--      plaintext column with its own semantics).
+--      The "no key yet" sentinel is the right
+--      starting state; the first password-based
+--      provision overwrites the empty bytes
+--      with the freshly-generated ciphertext.
+--
+-- # What is NOT here
+--
+-- The encryption itself is the
+-- `internal/crypto/envelope.AgeSecretCipher` (PR
+-- #177) — this migration only adds the storage
+-- column. The key-gen flow lives in
+-- `internal/bootstrap/provisioner.go` (PR #179);
+-- the HTTP wire format is unchanged (the
+-- `ssh_private_key` / `ssh_password` XOR field
+-- pair from PR #177 / commit 1426b7b).
+--
+-- # Idempotency
+--
+-- The ALTER TABLE is a single ADD COLUMN with a
+-- constant default; running it twice is a hard
+-- error (column already exists) which is the
+-- standard migration contract. v0.8.0 panels that
+-- have already shipped this column will refuse
+-- to re-run.
+
+ALTER TABLE nodes ADD COLUMN ssh_private_key_ciphertext BYTEA NOT NULL DEFAULT '\x'::bytea;
+
+-- +migrate Down
+
+-- The down migration drops the column. v0.8.0
+-- is the first version that ever populated it,
+-- so a fresh re-run of v0.7.2 on a v0.8.0+ DB
+-- would lose the panel's persistent SSH key for
+-- every node — the operator must re-provision
+-- each node from the v0.7.2 era (which means
+-- pasting a fresh key on the form for each
+-- node, because v0.7.2 had no persistent key
+-- path). The down migration is included for
+-- symmetry with the rest of the panel's
+-- migration files; the live deploy is on
+-- v0.8.0+ and the down path is not on the
+-- critical path.
+ALTER TABLE nodes DROP COLUMN ssh_private_key_ciphertext;
