@@ -139,24 +139,22 @@ func (s *Service) issuePair(ctx context.Context, u *User) (*LoginResult, error) 
 	}, nil
 }
 
-// lookupByID resolves a user by ID. In Phase 0 we walk the
-// in-memory map; Phase 2 will replace this with a single-row
-// SELECT.
-func (s *Service) lookupByID(_ context.Context, id string) (*User, error) {
-	// MemoryStore doesn't index by ID — we walk. Phase 0 only
-	// has 1-3 users, this is fine.
-	mem, ok := s.store.(*MemoryStore)
-	if !ok {
-		return nil, fmt.Errorf("auth: lookupByID only supported for MemoryStore in Phase 0")
-	}
-	mem.mu.RLock()
-	defer mem.mu.RUnlock()
-	for _, u := range mem.users {
-		if u.ID == id {
-			return u, nil
-		}
-	}
-	return nil, ErrUnauthorised
+// lookupByID resolves a user by ID. The Store interface
+// provides GetByID on both MemoryStore (walk) and
+// PgStore (single-row SELECT); the call is now
+// store-agnostic.
+//
+// v0.8.2 fix: pre-v0.8.2 this method used a type
+// assertion to *MemoryStore and walked the in-memory
+// map. On the pg backend, the assertion failed and
+// the method returned a 500 ("only supported for
+// MemoryStore in Phase 0"). Service.Me and
+// Service.Refresh both go through here, so a logged-in
+// pg-backend user could not hit /me or refresh their
+// token. The /me workaround in the UI (PR #172) hid
+// the bug; this is the real fix.
+func (s *Service) lookupByID(ctx context.Context, id string) (*User, error) {
+	return s.store.GetByID(ctx, id)
 }
 
 // CreateAdmin mints a new admin user with an argon2id-hashed

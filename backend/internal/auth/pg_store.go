@@ -209,6 +209,72 @@ func (s *PgStore) LookupByUsername(ctx context.Context, username string) (*User,
 	return s.LookupUser(ctx, username)
 }
 
+// GetByID implements Store. Returns the admin user
+// with the given ID, or ErrUnauthorised if not found
+// or disabled. The "not found" / "disabled" collapse
+// matches LookupUser so the wire response to /me is
+// indistinguishable from a not-found /me.
+//
+// A malformed id (not a UUID) is mapped to
+// ErrUnauthorised — the JWT Subject is always a
+// well-formed UUID minted by Store.CreateUser, so
+// this is a defensive guard against a tampered token
+// that somehow carries a non-UUID subject. Returning
+// a 4xx (not 5xx) is the right semantics: a token
+// that points at a malformed id is the same security
+// class as a token that points at a missing id.
+//
+// Added in v0.8.2 to fix the /me 500 on the pg
+// backend. Pre-v0.8.2, Service.lookupByID used a
+// type-asserted walk on MemoryStore, which fell
+// through to "only supported for MemoryStore" on
+// PgStore. The canonical store-agnostic call site is
+// `s.store.GetByID(ctx, id)`; the SQL here is the
+// single-row SELECT the pre-v0.8.2 walk was a
+// fallback for.
+func (s *PgStore) GetByID(ctx context.Context, id string) (*User, error) {
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		return nil, ErrUnauthorised
+	}
+	const q = `
+		SELECT id, username, email, password_hash, role, enabled, created_at, updated_at
+		FROM admins
+		WHERE id = $1
+		LIMIT 1`
+	row := s.pool.QueryRow(ctx, q, uid)
+	var (
+		gotID        uuid.UUID
+		uname        string
+		email        string
+		passwordHash string
+		role         string
+		enabled      bool
+		createdAt    time.Time
+		updatedAt    time.Time
+	)
+	if err := row.Scan(&gotID, &uname, &email, &passwordHash, &role, &enabled, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrUnauthorised
+		}
+		return nil, fmt.Errorf("auth: GetByID query: %w", err)
+	}
+	if !enabled {
+		return nil, ErrUnauthorised
+	}
+	return &User{
+		ID:           gotID.String(),
+		Username:     uname,
+		Email:        email,
+		PasswordHash: passwordHash,
+		Role:         role,
+		Enabled:      enabled,
+		Scopes:       scopesForRole(role),
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
+	}, nil
+}
+
 // SaveRefresh persists a refresh-token hash bound to userID. The
 // token itself is never stored.
 func (s *PgStore) SaveRefresh(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
