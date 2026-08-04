@@ -6,24 +6,31 @@ title: API reference
 
 The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
-in the repo root. v0.8.0 ships the same admin surface
-as v0.7.0 (auth, nodes, inbounds, hosts, plans, users,
-panelcfg, audits, backups, webhooks). v0.8.0 is
-purely internal: a new migration table and the data
-layer for Phase 2 multi-user. The release closes the
+in the repo root.
+
+**v0.8.1** (`ssh_password` field added to the
+`NodeProvisionRequest` schema; the panel now accepts
+an SSH login password for first-time node install in
+addition to the pre-existing `ssh_private_key` field).
+The two fields are mutually exclusive at the HTTP
+layer (XOR enforced in
+`backend/internal/bootstrap/handler.go`). The
+endpoints list is unchanged from v0.8.0. The
+front-end uses `openapi-typescript` to generate a
+typed client from it. This page is a short overview
+— for per-endpoint details, see the spec.
+
+v0.8.0 ships the same admin surface as v0.7.0 (auth,
+nodes, inbounds, hosts, plans, users, panelcfg,
+audits, backups, webhooks). v0.8.0 is purely
+internal: a new migration table and the data layer
+for Phase 2 multi-user. The release closes the
 Phase 2 multi-user sing-box render milestone
 end-to-end (data model in `internal/credentials` with
 migration 0019, multi-user renderer signature, builder
 wiring and `BatchedApplier` fan-out narrow, per-user
 subscription render) plus the audit-log call-site
-wiring into every mutating service. None of those
-landed in `docs/openapi.yaml` yet — the per-(user,
-inbound) credentials surface is the v0.8.x HTTP
-admin follow-up. The OpenAPI spec still carries the
-v0.7.0 version because no new endpoints were added.
-The front-end uses `openapi-typescript` to generate
-a typed client from it. This page is a short overview
-— for per-endpoint details, see the spec.
+wiring into every mutating service.
 
 ## Conventions
 

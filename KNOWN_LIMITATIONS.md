@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.0
+# Known Limitations — AegisPanel v0.8.1
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,26 +6,50 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.0** (the
-Phase 2 multi-user sing-box render milestone plus a
-frontend dependency batch and the audit-log call-site
-wiring). v0.8.0 is **end-to-end multi-user**: the
-panel can issue per-(user, inbound) credentials via the
-`internal/credentials` Service + Store, the sing-box
-renderer emits multi-user `users: [...]` arrays, the
-BatchedApplier fan-out is narrowed by
-`user.HostsAllowlist` and `Blocklist`, and the
-per-user sub URL renders the user's own UUID/password
-in both sing-box and Clash formats. The HTTP admin
-surface for the credentials table is a follow-up PR;
-the data flow is end-to-end. The next candidate
-release is v0.9.0 (smoke test on a fresh VM in CI).
+The current state of the project is **v0.8.1** (the
+auto-deploy bootstrap batch). v0.8.1 ships the shared
+`internal/crypto/envelope` package (X25519 +
+ChaCha20-Poly1305, multi-recipient for key rotation),
+the `brace-expansion` 5.0.8 → 5.0.9 CVE bump, the
+backend password-based first auth for the BYO Node
+flow with a persistent panel key that the panel
+generates on first install and re-uses on every
+re-provision (encrypted with the operator's age
+envelope, pushed to the node's
+`$HOME/.ssh/authorized_keys`), and the matching
+three-way radio in the admin UI. v0.8.0 shipped
+the Phase 2 multi-user sing-box render end-to-end
+(data model + renderer + builder + subscription
+per-user render + audit-log call-site wiring + the
+9-PR dependency batch). v0.8.1 is the next release
+in the auto-deploy series; the next candidate is
+v0.8.2 (server-side `/me` fix + HTTP admin surface
+for the credentials table).
 
-## v0.8.0 — currently open
+## v0.8.1 — currently open
 
 ### Operations
 
-#### HTTP admin surface for `user_inbound_credentials` — v0.8.x
+#### Server-side `/me` fix (auth.Store.GetByID) — v0.8.2
+
+The v0.8.0 release introduced a regression in
+`auth.Service.Me()`: the function walks the in-memory
+admin map (`lookupByID`) which only works on the
+`MemoryStore`. On the `pg` backend, the call falls
+through to "lookupByID only supported for MemoryStore
+in Phase 0" and returns 500. The UI had a
+defensive fallback (#172) that hides the bug
+(`canWrite ?? true` when `auth.me === null`), but the
+topbar's "Logged in as X" still renders empty, and
+the user detail page fails to render the user's
+scopes. The fix is a `GetByID(ctx, id)` method on
+the `auth.Store` interface, implemented in both
+`MemoryStore` (walk the map) and `PgStore`
+(`SELECT FROM admins WHERE id = $1`), with
+`Service.lookupByID` rewired to use the interface
+method. v0.8.2.
+
+#### HTTP admin surface for `user_inbound_credentials` — v0.8.2
 
 The data layer for Phase 2 multi-user is in place
 (PR #167 — `internal/credentials` Service + Store +
@@ -39,6 +63,39 @@ with the HTTP layer. This is a focused PR
 (2-file change for the AdminRouter + OpenAPI, a
 third file for the UI tab); the rest of Phase 2
 multi-user is end-to-end.
+
+### BatchedApplier and re-provision follow-ups (deferred from v0.8.1)
+
+#### BatchedApplier decrypt-and-use path for the stored
+panel key — v0.8.3
+
+The Builder fetches the operator's credential from
+`inbound.Params` (Phase 1 path) and now optionally
+overrides with `user_inbound_credentials` (Phase 2
+path, PR #169). Neither path uses the v0.8.1
+panel-generated SSH key for the sing-box
+`Apply` transport. The applier still uses the
+`AgentBearer` from `nodes.agent_bearer` to POST
+`/v1/apply` to the agent. The next step is the
+BatchedApplier reading `nodes.ssh_private_key_ciphertext`,
+decrypting via the envelope, and using the key for
+the transport. v0.8.3.
+
+#### Re-provision path for v0.3.0..v0.7.x nodes (CLI "force
+rotation") — v0.8.3
+
+A node that was provisioned before v0.8.1 has an
+empty `nodes.ssh_private_key_ciphertext` and no
+panel key on the agent. Re-provisioning such a node
+on v0.8.1 takes the "operator-supplied key" path
+(the operator pastes their existing PEM). A future
+CLI command (`aegis admin node rotate-panel-key <id>`)
+and matching admin UI button would generate a fresh
+panel key for an existing node (uses the operator's
+current auth to bootstrap, then rotates to the new
+key). v0.8.3.
+
+### UX follow-ups (deferred from v0.8.1)
 
 #### Host → node mapping in the Builder-side filter — v0.8.x
 
@@ -71,6 +128,38 @@ work is the next step (the `Params` blob becomes
 "shared defaults" and the per-user credential is
 the only thing that varies). v0.8.x or later.
 
+#### "Show me the stored public key" debug surface — v0.8.x
+
+The "Stored panel key" radio option in the
+provision form is opaque — the operator clicks
+submit, the panel re-uses its own key. There is
+no "what is the panel's key on this node right now"
+debug view. A small SHA-256 fingerprint display
+on the node row (the public key is safe to show;
+the private key never leaves the panel) would help
+operators verify that the node has the right key
+after a manual `ssh` rotation. v0.8.x.
+
+#### Merged "Add node + Provision" dialog — v0.8.x
+
+v0.8.1 keeps the v0.3.0 2-step shape: a Create
+dialog then a separate Provision dialog with the
+new auth method radio. A future merged "Add node"
+dialog that does both in one step (the auth
+method is radio-selected per the form state)
+would be a UX simplification. v0.8.x.
+
+#### shadcn-vue RadioGroup primitive — v0.8.x
+
+The radio group in the v0.8.1 provision form is
+hand-rolled. The codebase does not yet have
+`RadioGroup` in `components/ui/`; the future
+primitive would carry keyboard nav (arrow keys
+cycle the group), ARIA group semantics, and
+disabled-state visuals. v0.8.x.
+
+### Operations polish (deferred from v0.5.0 / v0.7.0)
+
 #### Pre-existing `vue/max-attributes-per-line` template
 warnings — chore
 
@@ -78,8 +167,31 @@ The v0.7.0 view templates (WebhooksView, PlansView, a
 handful of dialogs) carry pre-existing eslint warnings for
 `vue/max-attributes-per-line` and
 `vue/singleline-html-element-content-newline`. They're
-auto-fixable with `pnpm lint --fix`; not in scope for any
+auto-fixable with `eslint . --fix`; not in scope for any
 release PR. v0.7.0-legacy chore.
+
+#### JSON logs in production — v0.8.x
+
+`AEGIS_ENV=production` switch is still the v0.5.x
+follow-up. The `internal/obs` package has the right
+code; the wiring in `cmd/aegis/main.go` is the
+one-liner that was deferred from v0.5.0. v0.8.x.
+
+#### Cosign re-signing on every release — v0.8.x
+
+v0.7.0 closed the `latest` tag + cosign sign/verify
+pair for the panel and agent images, but the
+post-v0.7.0 workflow contract (PRs 102/103/104/111)
+does not yet include cosign re-signing on every
+release. A future PR adds `cosign sign --yes
+$image` after the `metadata-action` step on every
+tag-push. v0.8.x.
+
+#### Smoke test on fresh VM in CI — v0.9.0
+
+`tools/scripts/smoke-local.sh` (PR #152) covers the
+local docker-compose path; a terraform + ansible +
+boot-log CI job is a separate work unit. v0.9.0.
 
 ### Out of scope (post-v1.0)
 
