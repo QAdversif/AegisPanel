@@ -19,6 +19,7 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MoreHorizontal, Plus, Server } from 'lucide-vue-next'
+import { KeyRound, KeySquare, Lock } from 'lucide-vue-next'
 import type { ColumnDef } from '@tanstack/vue-table'
 
 import { useAuthStore } from '@/stores/auth'
@@ -174,11 +175,23 @@ function startCreate(): void {
 
 function startProvision(node: Node): void {
   provisioning.value = node
+  // v0.8.x: the auth-method radio default.
+  // First-time installs (state 'new') default
+  // to 'key' (the operator pastes a private
+  // key OR a password; the form switches to
+  // 'password' on the radio). Re-provisions
+  // (state 'offline', a previously-provisioned
+  // node) default to 'stored' — the panel
+  // re-uses its own key, the operator clicks
+  // submit with no input.
+  const defaultAuth = node.state === 'offline' ? 'stored' : 'key'
   provisionForm.resetForm({
     values: {
+      authMethod: defaultAuth,
       ssh_port: undefined,
       ssh_user: '',
       ssh_private_key: '',
+      ssh_password: '',
       tofu_policy: 'reject',
       expected_fingerprint: '',
     },
@@ -189,16 +202,49 @@ function startProvision(node: Node): void {
 const provisionForm = useZodForm({
   schema: nodeProvisionSchema,
   initialValues: {
+    authMethod: 'key' as const,
     ssh_port: undefined,
     ssh_user: '',
     ssh_private_key: '',
+    ssh_password: '',
     tofu_policy: 'reject' as const,
     expected_fingerprint: '',
   },
   onSubmit: async (values) => {
     if (!provisioning.value) return
+    // v0.8.x: the UI's authMethod radio is a
+    // local form state; the Go API's wire
+    // format is the two-field XOR
+    // `ssh_private_key` / `ssh_password`. Build
+    // the wire payload from the auth method:
+    // - 'key'      -> { ssh_private_key }
+    // - 'password' -> { ssh_password }
+    // - 'stored'   -> {} (empty auth; the
+    //   Go provisioner falls back to the
+    //   encrypted panel key it stored on the
+    //   first install).
+    const wirePayload: {
+      ssh_private_key?: string
+      ssh_password?: string
+      ssh_port?: number
+      ssh_user?: string
+      tofu_policy?: 'reject' | 'accept-and-append'
+      expected_fingerprint?: string
+    } = {
+      ssh_port: values.ssh_port,
+      ssh_user: values.ssh_user,
+      tofu_policy: values.tofu_policy,
+      expected_fingerprint: values.expected_fingerprint,
+    }
+    if (values.authMethod === 'key') {
+      wirePayload.ssh_private_key = values.ssh_private_key
+    } else if (values.authMethod === 'password') {
+      wirePayload.ssh_password = values.ssh_password
+    }
+    // 'stored' path: no auth fields. The Go side
+    // falls back to the encrypted panel key.
     try {
-      const res = await provisionNode(provisioning.value.id, values)
+      const res = await provisionNode(provisioning.value.id, wirePayload as never)
       provisionOpen.value = false
       provisioning.value = null
       toast.add({
@@ -570,7 +616,94 @@ const canWrite = computed(() => {
               />
             </template>
           </FormField>
+          <!-- v0.8.x: auth-method radio. The three-way
+               picker drives the conditional rendering
+               of the key / password fields below, and
+               the wire payload built in the onSubmit
+               handler. The "stored" option is only
+               available for re-provisions (state
+               'offline'); for first-time installs (state
+               'new') the radio is disabled because the
+               panel has no key to re-use yet. -->
           <FormField
+            name="authMethod"
+            :label="t('nodes.authMethod')"
+            required
+            :hint="t('nodes.authMethodHint')"
+          >
+            <template #default="{ id, value, onBlur, hasError }">
+              <div
+                :id="id"
+                class="nodes__auth-radios"
+                :class="hasError && 'nodes__auth-radios--error'"
+                role="radiogroup"
+                :aria-label="t('nodes.authMethod')"
+                @blur="onBlur"
+              >
+                <label
+                  class="nodes__auth-radio"
+                  :class="{ 'nodes__auth-radio--active': value === 'key' }"
+                >
+                  <input
+                    type="radio"
+                    name="authMethod"
+                    value="key"
+                    :checked="value === 'key'"
+                    @change="() => {
+                      provisionForm.setFieldValue('authMethod', 'key')
+                      provisionForm.setFieldValue('ssh_private_key', '')
+                      provisionForm.setFieldValue('ssh_password', '')
+                    }"
+                  >
+                  <KeySquare class="h-4 w-4" />
+                  <span>{{ t('nodes.authMethodKey') }}</span>
+                </label>
+                <label
+                  class="nodes__auth-radio"
+                  :class="{ 'nodes__auth-radio--active': value === 'password' }"
+                >
+                  <input
+                    type="radio"
+                    name="authMethod"
+                    value="password"
+                    :checked="value === 'password'"
+                    @change="() => {
+                      provisionForm.setFieldValue('authMethod', 'password')
+                      provisionForm.setFieldValue('ssh_private_key', '')
+                      provisionForm.setFieldValue('ssh_password', '')
+                    }"
+                  >
+                  <Lock class="h-4 w-4" />
+                  <span>{{ t('nodes.authMethodPassword') }}</span>
+                </label>
+                <label
+                  class="nodes__auth-radio"
+                  :class="{
+                    'nodes__auth-radio--active': value === 'stored',
+                    'nodes__auth-radio--disabled': provisioning?.state !== 'offline',
+                  }"
+                  :title="provisioning?.state !== 'offline' ? t('nodes.authMethodStoredDisabledTitle') : ''"
+                >
+                  <input
+                    type="radio"
+                    name="authMethod"
+                    value="stored"
+                    :checked="value === 'stored'"
+                    :disabled="provisioning?.state !== 'offline'"
+                    @change="() => {
+                      provisionForm.setFieldValue('authMethod', 'stored')
+                      provisionForm.setFieldValue('ssh_private_key', '')
+                      provisionForm.setFieldValue('ssh_password', '')
+                    }"
+                  >
+                  <KeyRound class="h-4 w-4" />
+                  <span>{{ t('nodes.authMethodStored') }}</span>
+                </label>
+              </div>
+            </template>
+          </FormField>
+          <FormField
+            v-if="provisionForm.values.authMethod === 'key'"
             name="ssh_private_key"
             :label="t('nodes.sshPrivateKey')"
             required
@@ -585,6 +718,26 @@ const canWrite = computed(() => {
                 spellcheck="false"
                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                 @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_private_key', v)"
+                @blur="onBlur"
+              />
+            </template>
+          </FormField>
+          <FormField
+            v-if="provisionForm.values.authMethod === 'password'"
+            name="ssh_password"
+            :label="t('nodes.sshPassword')"
+            required
+            :hint="t('nodes.sshPasswordHint')"
+          >
+            <template #default="{ id, value, onBlur, hasError }">
+              <Input
+                :id="id"
+                type="password"
+                autocomplete="off"
+                :model-value="String(value ?? '')"
+                :class="hasError && 'border-destructive'"
+                spellcheck="false"
+                @update:model-value="(v: string) => provisionForm.setFieldValue('ssh_password', v)"
                 @blur="onBlur"
               />
             </template>
@@ -703,5 +856,53 @@ const canWrite = computed(() => {
   outline: none;
   box-shadow: 0 0 0 2px hsl(var(--ring));
   border-color: hsl(var(--ring));
+}
+
+.nodes__auth-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid hsl(var(--input));
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+}
+
+.nodes__auth-radios--error {
+  border-color: hsl(var(--destructive));
+}
+
+.nodes__auth-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  user-select: none;
+}
+
+.nodes__auth-radio:hover:not(.nodes__auth-radio--disabled) {
+  background: hsl(var(--muted));
+}
+
+.nodes__auth-radio--active {
+  background: hsl(var(--muted));
+  border-color: hsl(var(--ring));
+}
+
+.nodes__auth-radio--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nodes__auth-radio input[type='radio'] {
+  margin: 0;
+  cursor: inherit;
+}
+
+.nodes__auth-radio--disabled input[type='radio'] {
+  cursor: not-allowed;
 }
 </style>

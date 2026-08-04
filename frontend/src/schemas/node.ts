@@ -48,18 +48,57 @@ export type NodeUpdateInput = z.infer<typeof nodeUpdateSchema>
  */
 export const tofuPolicySchema = z.enum(['reject', 'accept-and-append'])
 
-/** Fields the operator sets when provisioning a node
- * (v0.3.0 BYO Node flow). Mirrors the Go
- * `bootstrap.provisionRequest` struct.
+/** AuthMethod is the v0.8.x UI discriminator for the
+ * provision form's three-way radio (key / password /
+ * stored). The value is the form's local state; the
+ * wire payload sent to the Go API does NOT include it
+ * (the wire format is the two-field XOR
+ * `ssh_private_key` / `ssh_password`, both optional).
  *
- * The `ssh_private_key` is the only required field;
- * the rest are per-call overrides. The form layer
- * also enforces the `expected_fingerprint` requirement
- * when `tofu_policy === 'reject'` (cross-field rule,
- * not a per-field rule).
+ * - `key`: operator pastes a private key (PEM). The
+ *   form maps this to `ssh_private_key` in the wire
+ *   payload.
+ * - `password`: operator pastes the VPS root
+ *   password for first-time auth. The form maps this
+ *   to `ssh_password` in the wire payload.
+ * - `stored`: the panel re-uses the SSH key it
+ *   generated on the first password-based install
+ *   (migration 0020, sealed with the operator's age
+ *   envelope, see `internal/crypto/envelope`). The
+ *   form sends an empty auth object; the Go
+ *   provisioner decrypts the stored key and uses it
+ *   for the install. The radio option is disabled
+ *   for first-time installs (state `new`); it is
+ *   enabled for re-provisions (state `offline`,
+ *   which is the only state a previously-provisioned
+ *   node can be in per the v8.x state machine).
+ */
+export const authMethodSchema = z.enum(['key', 'password', 'stored'])
+
+/** Fields the operator sets when provisioning a node.
+ * v0.8.x schema: the `authMethod` radio is the new
+ * entry point; the SSH key / password fields are
+ * rendered conditionally and validated against the
+ * selected method. The wire payload sent to the Go
+ * API is the two-field XOR `ssh_private_key` /
+ * `ssh_password` (the Go handler enforces the same
+ * XOR at the HTTP layer — see
+ * `backend/internal/bootstrap/handler.go`).
+ *
+ * The form layer also enforces the
+ * `expected_fingerprint` requirement when
+ * `tofu_policy === 'reject'` (cross-field rule, not a
+ * per-field rule).
  */
 export const nodeProvisionSchema = z
   .object({
+    authMethod: authMethodSchema,
+    // Both auth fields are optional at the schema
+    // level. The superRefine below enforces the
+    // conditional-required + XOR rules based on the
+    // selected authMethod.
+    ssh_private_key: z.string().optional(),
+    ssh_password: z.string().optional(),
     ssh_port: z
       .number()
       .int()
@@ -67,13 +106,69 @@ export const nodeProvisionSchema = z
       .max(65535, 'ssh_port must be 1..65535')
       .optional(),
     ssh_user: z.string().max(64).optional(),
-    ssh_private_key: z
-      .string()
-      .min(1, 'ssh_private_key is required (PEM, no passphrase)'),
     tofu_policy: tofuPolicySchema.optional(),
     expected_fingerprint: z.string().max(200).optional(),
   })
   .superRefine((value, ctx) => {
+    // v0.8.x: XOR + conditional-required based on
+    // the auth method. The Go handler also enforces
+    // the XOR (a defence-in-depth check at the HTTP
+    // layer); the form check is for UX (the operator
+    // gets the error in their own time, not after a
+    // 502 round-trip).
+    if (value.authMethod === 'key') {
+      if (!value.ssh_private_key || value.ssh_private_key.trim() === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_private_key'],
+          message: 'ssh_private_key is required when auth_method is "key" (PEM, no passphrase).',
+        })
+      }
+      if (value.ssh_password && value.ssh_password !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_password'],
+          message: 'ssh_password must be empty when auth_method is "key" (XOR with ssh_private_key).',
+        })
+      }
+    } else if (value.authMethod === 'password') {
+      if (!value.ssh_password || value.ssh_password === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_password'],
+          message: 'ssh_password is required when auth_method is "password" (the VPS root password).',
+        })
+      }
+      if (value.ssh_private_key && value.ssh_private_key.trim() !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_private_key'],
+          message: 'ssh_private_key must be empty when auth_method is "password" (XOR with ssh_password).',
+        })
+      }
+    } else {
+      // authMethod === 'stored': the panel re-uses
+      // its own key, so both fields must be empty.
+      // The form disables the inputs in this mode
+      // (so the operator cannot type), but the
+      // schema check is here for defence-in-depth
+      // (a custom form integration could submit
+      // stale values).
+      if (value.ssh_private_key && value.ssh_private_key.trim() !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_private_key'],
+          message: 'ssh_private_key must be empty when auth_method is "stored" (the panel re-uses its own key).',
+        })
+      }
+      if (value.ssh_password && value.ssh_password !== '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ssh_password'],
+          message: 'ssh_password must be empty when auth_method is "stored" (the panel re-uses its own key).',
+        })
+      }
+    }
     // The Go handler accepts empty / omitted `tofu_policy`
     // and treats it as `reject`. When the policy is
     // `reject`, the operator must paste the fingerprint
