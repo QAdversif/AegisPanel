@@ -139,7 +139,19 @@
     "expectedFingerprint": "Expected fingerprint (SHA256:base64)",
     "expectedFingerprintHint": "Required when the policy is \"Reject\". Get it with `ssh-keyscan -t ssh-ed25519 HOST | ssh-keygen -lf -`.",
     "provisioned": "Node provisioned — state: {state}",
-    "provisionFailed": "Could not provision the node"
+    "provisionFailed": "Could not provision the node",
+    "rotate": "Rotate panel key",
+    "rotateTitle": "Rotate panel key",
+    "rotateDescription": "Generate a fresh ed25519 keypair, push the public half to the node's authorized_keys, and store the encrypted private half on the panel. The next re-provision on this node decrypts and reuses the new key — the v0.8.x 'auto-deploy' experience becomes available retroactively on v0.3.0..v0.7.x nodes. This is the UI mirror of the v0.8.3 `aegis admin node rotate-panel-key` CLI.",
+    "rotateSshPrivateKey": "Operator's existing SSH private key",
+    "rotateSshPrivateKeyHint": "PEM, no passphrase. The panel uses this to SSH into the node, then discards it. The key must already be in the node's authorized_keys (i.e. this is the key you used to install the node).",
+    "rotateAction": "Rotate",
+    "rotateResultTitle": "Rotation succeeded",
+    "rotateResultHelp": "The new public key is now in the node's authorized_keys. The next re-provision on this node uses the panel's own key (no operator input required).",
+    "rotatePublicKeyLine": "New public key (added to authorized_keys)",
+    "rotateFingerprint": "SHA256 fingerprint",
+    "rotated": "Panel key rotated on {name}",
+    "rotateFailed": "Could not rotate the panel key"
   },
   "inbounds": {
     "title": "Inbounds",

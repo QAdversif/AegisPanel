@@ -23,8 +23,11 @@ import (
 // production path delegates to the real
 // bootstrap.Service.
 //
-// v0.3.0: the only bootstrap endpoint mounted
-// here is POST /{id}/provision. v0.5.0 will
+// v0.3.0: POST /{id}/provision. v0.8.4:
+// POST /{id}/rotate-panel-key (the deferred
+// follow-up to PR #184's `aegis admin node
+// rotate-panel-key` CLI; the admin UI gets a
+// button in NodesView for it). v0.5.0 will
 // add POST /{id}/heartbeat, POST /{id}/drain,
 // POST /{id}/undeploy (the decommissioning
 // flow).
@@ -35,6 +38,16 @@ type bootstrapProvider interface {
 	// the function value avoids the "wrap a
 	// method on a different Service" indirection.
 	HandleProvision() http.HandlerFunc
+	// HandleRotatePanelKey is the v0.8.4
+	// HTTP mirror of the v0.8.3 CLI. Same
+	// body, same auth (ScopeNodes), same
+	// 200 body (public key line + SHA256
+	// fingerprint). The handler is mounted
+	// only when the bootstrap service is
+	// wired (Phase 0 / Phase 1 dev paths
+	// with bootstrapSvc == nil get a 404
+	// here, same as /provision).
+	HandleRotatePanelKey() http.HandlerFunc
 }
 
 // Router returns a chi subrouter for /api/v1/nodes. The caller
@@ -67,8 +80,15 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler, bootst
 		// (bootstrapSvc == nil) the route is
 		// simply absent and the operator gets
 		// a 404 on /provision.
+		//
+		// v0.8.4: rotate-panel-key shares
+		// the same mounting-conditional
+		// (the handler is on the same
+		// bootstrap.Service; either both
+		// routes are live or both are 404).
 		if bootstrapSvc != nil {
 			r.Post("/provision", bootstrapSvc.HandleProvision())
+			r.Post("/rotate-panel-key", bootstrapSvc.HandleRotatePanelKey())
 		}
 	})
 	return r

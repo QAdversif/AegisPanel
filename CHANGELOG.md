@@ -5,6 +5,111 @@ All notable changes to Aegis are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added (v0.8.4 — admin UI button for rotate-panel-key)
+
+- **HTTP mirror of the v0.8.3 `aegis admin node
+  rotate-panel-key` CLI**: new endpoint
+  `POST /api/v1/nodes/{id}/rotate-panel-key`
+  that takes the operator's existing private
+  key (PEM, no passphrase) and optional
+  `ssh_port` / `ssh_user` overrides, SSHes into
+  the node, generates a fresh ed25519 keypair,
+  pushes the public half to the node's
+  `~/.ssh/authorized_keys`, and seals the
+  private half with the operator's age envelope
+  (same path the v0.8.1 password-install
+  post-install hook takes). The 200 body carries
+  the new public key line and SHA256
+  fingerprint so the operator can verify the
+  rotation in the UI. Same handler signature
+  shape as the v0.3.0 `POST /{id}/provision`
+  (mounted under the same `{id}` subrouter
+  with `auth.RequireScope(ScopeNodes)` already
+  enforced by the parent nodes router).
+- **"Rotate panel key" dropdown entry in the
+  NodesView**: visible for `online` / `offline`
+  / `draining` / `disabled`; hidden for `new`
+  (the panel cannot SSH into a never-installed
+  node because no key is in `authorized_keys`).
+  Clicking opens a dialog with the operator's
+  PEM textarea, the same `ssh_port` / `ssh_user`
+  override fields as the provision dialog, and
+  a submit button labelled "Rotate". On success
+  the dialog swaps to a read-only "rotation
+  result" card that shows the new public key
+  line + SHA256 fingerprint so the operator can
+  copy the fingerprint before closing.
+- **Backend `RotatePanelKey` refactor**: the
+  Service method now returns
+  `(RotationResult, error)` (was just `error`)
+  so the HTTP handler can surface the new
+  public key line + fingerprint in the 200
+  body. The v0.8.3 CLI's call-site
+  (`runAdminNodeRotatePanelKey`) is updated to
+  ignore the result via `_, err :=`. The shared
+  body `generateAndPushKey` (used by both
+  `RotatePanelKey` and the v0.8.1 post-install
+  hook) gets the same signature change; the
+  post-install hook discards the result via
+  `_, err :=`.
+- **OpenAPI spec + codegen**: new
+  `NodeRotatePanelKeyRequest` /
+  `NodeRotatePanelKeyResponse` schemas in
+  `docs/openapi.yaml`; the generated
+  `frontend/src/types/api.d.ts` carries the
+  new types automatically. The
+  `NodeRotatePanelKeyRequest` shape is the
+  same snake_case `ssh_private_key` /
+  `ssh_port` / `ssh_user` triple the
+  provision request uses; the response is the
+  `{ node_id, public_key_line, fingerprint }`
+  triple the UI surfaces.
+- **zod schema for the rotate form**:
+  `nodeRotatePanelKeySchema` in
+  `frontend/src/schemas/node.ts` (the
+  `ssh_private_key` field is required, the
+  overrides are optional with the same
+  1..65535 port range as the provision
+  schema).
+- **i18n strings (en + ru)**:
+  `nodes.rotate` / `nodes.rotateTitle` /
+  `nodes.rotateDescription` /
+  `nodes.rotateSshPrivateKey` /
+  `nodes.rotateSshPrivateKeyHint` /
+  `nodes.rotateAction` /
+  `nodes.rotateResultTitle` /
+  `nodes.rotateResultHelp` /
+  `nodes.rotatePublicKeyLine` /
+  `nodes.rotateFingerprint` / `nodes.rotated` /
+  `nodes.rotateFailed`. The Russian translations
+  follow the v0.8.x "звучит как оператор, а не
+  как переводчик" style.
+
+### Tests
+
+- **7 unit tests for `HandleRotatePanelKey`**
+  in
+  `backend/internal/bootstrap/handler_rotate_panel_key_test.go`:
+  200 happy path, 400 missing key, 400
+  malformed JSON, 404 node not found, 500
+  envelope not configured, 502 SSH connect
+  failure, audit shape on success. The SSH
+  client is mocked via a package-level
+  `newSSHClientForRotate` indirection in
+  `handler.go` (the default is the production
+  `NewClient`; the test helper
+  `withMockSSHClient(t, mock)` swaps it for a
+  recording `mockClient`).
+- **Existing test updates**: the v0.8.3
+  `TestRotatePanelKey_NilEnvelopeFailsClosed`
+  and `TestRotatePanelKey_NilClientFailsClosed`
+  in
+  `backend/internal/bootstrap/rotate_panel_key_test.go`
+  are updated for the new
+  `(RotationResult, error)` signature.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added (plans CRUD surface, #131, #132, #133, #134)

@@ -301,8 +301,14 @@ func runAdminNodeRotatePanelKey(ctx context.Context, args []string) {
 	// ed25519 keypair, encrypts the private half,
 	// pushes the public half via SFTP + constant
 	// shell command, and persists the ciphertext
-	// via SetSSHPrivateKeyCiphertext.
-	if err := bSvc.RotatePanelKey(ctx, row.ID, row.Name, sshClient); err != nil {
+	// via SetSSHPrivateKeyCiphertext. The
+	// returned RotationResult is discarded here:
+	// the CLI's caller is the operator's shell
+	// (no UI to surface the public key line /
+	// fingerprint to); the v0.8.4 admin UI
+	// surfaces the same fields to the operator
+	// over HTTP.
+	if _, err := bSvc.RotatePanelKey(ctx, row.ID, row.Name, sshClient); err != nil {
 		log.Fatal().Err(err).Msg("admin node rotate-panel-key: rotation failed")
 	}
 	// 10. Audit. The action is

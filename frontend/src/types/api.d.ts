@@ -667,6 +667,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{id}/rotate-panel-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the panel's persistent SSH key on a node
+         * @description Generate a fresh ed25519 keypair on the panel,
+         *     encrypt the private half with the operator's
+         *     age envelope, persist the ciphertext on the
+         *     `nodes.ssh_private_key_ciphertext` column,
+         *     and append the public half to the node's
+         *     `~/.ssh/authorized_keys`. After the call
+         *     returns, the next re-provision on the node
+         *     (via `POST /api/v1/nodes/{id}/provision`
+         *     with the `authMethod: 'stored'` path)
+         *     decrypts and reuses the new key — the
+         *     v0.8.x "auto-deploy" experience becomes
+         *     available retroactively on v0.3.0..v0.7.x
+         *     nodes.
+         *
+         *     The HTTP endpoint is the v0.8.4 UI mirror
+         *     of the v0.8.3 `aegis admin node
+         *     rotate-panel-key` CLI (PR #184); both call
+         *     the same `bootstrap.Service.RotatePanelKey`
+         *     method.
+         *
+         *     The operator's existing private key must
+         *     already be in the node's
+         *     `~/.ssh/authorized_keys` (i.e. this is the
+         *     key they used to install the node on
+         *     v0.3.0..v0.7.x). A password would only be
+         *     meaningful on a brand-new node that does
+         *     not yet have any keys — that path is the
+         *     `/nodes/{id}/provision` endpoint, not
+         *     this one.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NodeRotatePanelKeyRequest"];
+                };
+            };
+            responses: {
+                /** @description Rotation succeeded. The 200 body carries the new public key line and SHA256 fingerprint so the operator can verify what is now in the node's authorized_keys. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NodeRotatePanelKeyResponse"];
+                    };
+                };
+                /** @description Validation error (missing ssh_private_key, malformed body, invalid UUID) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Node not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Panel was booted without an envelope (AEGIS_WEBHOOKS_SECRET_AGE_*). Operator must fix the panel's env and retry. */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description SSH-side failure (Connect / Upload / Run / SetSSHPrivateKeyCiphertext) */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/inbounds": {
         parameters: {
             query?: never;
@@ -3498,6 +3618,85 @@ export interface components {
             install_error?: string;
             /** @description ISO-8601 duration string (e.g. `PT2.5S`) for the systemd is-active poll. */
             verify_latency?: string;
+        };
+        /**
+         * @description Body of `POST /api/v1/nodes/{id}/rotate-panel-key`.
+         *     The endpoint is the v0.8.4 HTTP mirror of the
+         *     v0.8.3 `aegis admin node rotate-panel-key` CLI
+         *     (PR #184); both call the same
+         *     `bootstrap.Service.RotatePanelKey` method.
+         *
+         *     The operator's existing private key must
+         *     already be in the node's
+         *     `~/.ssh/authorized_keys` (i.e. this is the key
+         *     they used to install the node on
+         *     v0.3.0..v0.7.x). The panel uses it to SSH into
+         *     the node, generates a fresh ed25519 keypair,
+         *     pushes the public half to authorized_keys, then
+         *     discards the operator's key from memory.
+         *
+         *     The endpoint is the v0.3.0..v0.7.x re-provision
+         *     escape hatch: the next time the operator runs
+         *     `POST /api/v1/nodes/{id}/provision` on this
+         *     node (with no auth input from the operator —
+         *     the `authMethod: 'stored'` path), the panel
+         *     decrypts the stored panel key and uses it for
+         *     the install. The v0.8.x "auto-deploy"
+         *     experience becomes available retroactively.
+         */
+        NodeRotatePanelKeyRequest: {
+            /**
+             * Format: password
+             * @description Operator's existing SSH private key (PEM, no
+             *     passphrase). Required. Must already be in the
+             *     node's `~/.ssh/authorized_keys`. The panel
+             *     does NOT store this; the rotation is the only
+             *     consumer.
+             */
+            ssh_private_key: string;
+            /**
+             * @description Per-call override. Zero/omitted means "use
+             *     the service-wide default (22)".
+             */
+            ssh_port?: number;
+            /**
+             * @description Per-call override. Empty/omitted means "use
+             *     the service-wide default (root)".
+             */
+            ssh_user?: string;
+        };
+        /**
+         * @description 200 body of `POST /api/v1/nodes/{id}/rotate-panel-key`.
+         *     The UI surfaces the `public_key_line` and
+         *     `fingerprint` in a "rotation result" card so the
+         *     operator can verify what is now in the node's
+         *     `~/.ssh/authorized_keys` (compare against
+         *     `ssh-add -L` on the operator's local box after
+         *     the re-provision's first contact).
+         */
+        NodeRotatePanelKeyResponse: {
+            /**
+             * Format: uuid
+             * @description The {id} segment the URL already had. Included for self-description.
+             */
+            node_id: string;
+            /**
+             * @description The OpenSSH authorized_keys line that was
+             *     uploaded and appended to
+             *     `~/.ssh/authorized_keys` on the node. Starts
+             *     with `ssh-ed25519 `, followed by the base64
+             *     payload, followed by the comment
+             *     `aegis-panel@node-<nodeName>`.
+             */
+            public_key_line: string;
+            /**
+             * @description The canonical `SHA256:base64` SHA-256
+             *     fingerprint of the public key. Same format
+             *     `ssh-keygen -lf` outputs. The operator can
+             *     compare this against `ssh-add -L` to verify
+             *     the key is on the node.
+             */
+            fingerprint: string;
         };
         NodeListResponse: {
             nodes: components["schemas"]["Node"][];
