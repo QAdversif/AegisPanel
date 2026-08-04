@@ -265,6 +265,31 @@ export interface ChangePasswordRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Credentials (v0.8.2 admin surface; data layer from v0.8.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of the `user_inbound_credentials` table.
+ * The (user_id, inbound_id) pair is unique. The
+ * `credentialValue` is an operator secret (VLESS UUID,
+ * Shadowsocks 2022-blake3 password, etc.) — the panel
+ * stores it as opaque TEXT; the sing-box renderer is
+ * authoritative for per-protocol shape validation.
+ *
+ * v0.8.2 wires the HTTP surface at /api/v1/credentials/.
+ * The data model is in `internal/credentials` + migration
+ * 0019 from v0.8.0 (PR #167).
+ */
+export interface Credential {
+  id: UUID
+  userId: UUID
+  inboundId: UUID
+  credentialValue: string
+  createdAt: ISODateTime
+  updatedAt: ISODateTime
+}
+
+// ---------------------------------------------------------------------------
 // Node provision (v0.3.0 BYO Node flow)
 // ---------------------------------------------------------------------------
 

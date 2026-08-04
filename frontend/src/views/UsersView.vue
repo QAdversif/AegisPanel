@@ -14,6 +14,7 @@
 <script setup lang="ts">
 import { h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import type { ColumnDef } from '@tanstack/vue-table'
 import { KeyRound, MoreHorizontal, RefreshCw, UserPlus, X } from 'lucide-vue-next'
 import { z } from 'zod'
@@ -55,6 +56,7 @@ import SelectContent from '@/components/ui/SelectContent.vue'
 import SelectItem from '@/components/ui/SelectItem.vue'
 
 const { t } = useI18n()
+const router = useRouter()
 const toast = useToastStore()
 
 const users = ref<User[]>([])
@@ -278,6 +280,17 @@ const columns: ColumnDef<User, unknown>[] = [
         h(DropdownMenuContent, { align: 'end' }, () => [
           h(DropdownMenuItem, { onSelect: () => startEdit(row.original) }, () => t('common.edit')),
           h(DropdownMenuItem, { onSelect: () => rotateToken(row.original) }, () => t('users.rotateToken')),
+          h(
+            DropdownMenuItem,
+            {
+              onSelect: () =>
+                router.push({
+                  name: 'credentials',
+                  query: { userId: row.original.id },
+                }),
+            },
+            () => t('credentials.viewForUser'),
+          ),
           h(DropdownMenuSeparator),
           h(
             DropdownMenuItem,

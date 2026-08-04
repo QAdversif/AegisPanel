@@ -14,4 +14,5 @@ export * from './users'
 export * from './audits'
 export * from './backups'
 export * from './webhooks'
+export * from './credentials'
 

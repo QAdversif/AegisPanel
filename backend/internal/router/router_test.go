@@ -159,7 +159,7 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	plansStore := plans.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	plansSvc := plans.NewService(plansStore)
 
-	return Build(context.Background(), nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil /* webhooksSvc */, nil)
+	return Build(context.Background(), nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil /* webhooksSvc */, nil /* credentialsSvc */, nil)
 }
 
 // contains is a small strings.Contains alias to keep

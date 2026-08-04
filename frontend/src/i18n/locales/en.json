@@ -8,9 +8,11 @@
     "users": "Users",
     "subscription": "Subscription",
     "settings": "Settings",
+    "credentials": "Credentials",
     "audits": "Audit log",
     "backups": "Backups",
     "webhooks": "Webhooks",
+    "credentials": "Credentials",
     "profile": "Profile",
     "openMenu": "Open menu",
     "soon": "Soon"
@@ -559,6 +561,44 @@
         "backup": "Backups",
         "inbound": "Inbounds"
       }
+    }
+  },
+  "credentials": {
+    "title": "Credentials",
+    "subtitle": "Per-(user, inbound) sing-box credentials. One row per (user, inbound) pair; rotate via the row menu.",
+    "newCredential": "New credential",
+    "searchPlaceholder": "Search by user, inbound, or value…",
+    "empty": "No credentials configured yet.",
+    "rotate": "Rotate",
+    "delete": "Delete",
+    "viewForUser": "View credentials for this user",
+    "filterPrefix": "filter:",
+    "filterClear": "clear",
+    "columns": {
+      "user": "User",
+      "inbound": "Inbound",
+      "value": "Value",
+      "createdAt": "Created",
+      "updatedAt": "Updated"
+    },
+    "createTitle": "Create credential",
+    "createDescription": "Add a new per-(user, inbound) credential. The (user, inbound) pair must be unique.",
+    "rotateTitle": "Rotate credential value",
+    "rotateDescription": "Replace the credential value. The (user, inbound) pair is fixed by the existing row.",
+    "deleteTitle": "Delete credential",
+    "deleteDescription": "This hard-deletes the credential. The (user, inbound) pair can be re-created via the New credential form.",
+    "loadFailed": "Could not load credentials",
+    "createFailed": "Could not create credential",
+    "rotateFailed": "Could not rotate credential",
+    "deleteFailed": "Could not delete credential",
+    "created": "Credential created",
+    "rotated": "Credential rotated",
+    "deleted": "Credential deleted",
+    "field": {
+      "userId": "User",
+      "inboundId": "Inbound",
+      "credentialValue": "Value",
+      "credentialValueHelp": "1-512 chars. The sing-box renderer validates the per-protocol shape."
     }
   }
 }

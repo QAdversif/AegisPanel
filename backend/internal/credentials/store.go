@@ -71,6 +71,15 @@ type Store interface {
 	// (the multi-user renderer's primary access
 	// pattern: "for this inbound, who's allowed?").
 	ListByInbound(ctx context.Context, inboundID uuid.UUID) ([]*Credential, error)
+
+	// ListAll returns every credential in the
+	// store, ordered by user_id then inbound_id
+	// (the cross-user admin table's primary
+	// access pattern: "what credentials exist
+	// across the panel?"). The MemoryStore walks
+	// the rows map; the PgStore issues a single
+	// SELECT with the same ordering.
+	ListAll(ctx context.Context) ([]*Credential, error)
 }
 
 // MemoryStore is the Phase 0 default. It is safe
@@ -230,6 +239,30 @@ func (s *MemoryStore) ListByInbound(_ context.Context, inboundID uuid.UUID) ([]*
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].UserID.String() != out[j].UserID.String() {
 			return out[i].UserID.String() < out[j].UserID.String()
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	return out, nil
+}
+
+// ListAll returns every credential in the store,
+// sorted by (user_id, inbound_id) ascending. The
+// MemoryStore walks the rows map (Phase 0 has 1-3
+// users; the walk is fine).
+func (s *MemoryStore) ListAll(_ context.Context) ([]*Credential, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Credential, 0, len(s.rows))
+	for _, row := range s.rows {
+		cp := *row
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UserID.String() != out[j].UserID.String() {
+			return out[i].UserID.String() < out[j].UserID.String()
+		}
+		if out[i].InboundID.String() != out[j].InboundID.String() {
+			return out[i].InboundID.String() < out[j].InboundID.String()
 		}
 		return out[i].ID.String() < out[j].ID.String()
 	})
