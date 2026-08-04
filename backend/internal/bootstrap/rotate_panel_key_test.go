@@ -47,7 +47,7 @@ func TestRotatePanelKey_NilEnvelopeFailsClosed(t *testing.T) {
 	})
 	// Pass any client — the function must
 	// reject before using it.
-	if err := s.RotatePanelKey(context.Background(), uuid.New(), "test-node", nil); err == nil {
+	if _, err := s.RotatePanelKey(context.Background(), uuid.New(), "test-node", nil); err == nil {
 		t.Fatal("RotatePanelKey with nil envelope should fail, got nil error")
 	}
 	// The DB row's ciphertext column must
@@ -70,7 +70,7 @@ func TestRotatePanelKey_NilClientFailsClosed(t *testing.T) {
 		Nodes:    store,
 		Envelope: envelopeNoop{},
 	})
-	if err := s.RotatePanelKey(context.Background(), uuid.New(), "test-node", nil); err == nil {
+	if _, err := s.RotatePanelKey(context.Background(), uuid.New(), "test-node", nil); err == nil {
 		t.Fatal("RotatePanelKey with nil client should fail, got nil error")
 	}
 	for _, r := range store.rows {
