@@ -92,6 +92,33 @@ const (
 	// GET/POST/PATCH/DELETE /api/v1/webhooks
 	// endpoints (#137) are gated by this scope.
 	ScopeWebhooks Scope = "webhooks"
+
+	// ScopeCredentials lets a principal manage the
+	// per-(user, inbound) credential surface (the
+	// `user_inbound_credentials` table from
+	// migration 0019). List / get / create / rotate /
+	// delete. Every role gets the scope so a viewer
+	// can see the credentials table the same way they
+	// can see the plan catalog — a viewer who
+	// cannot see what credentials a user has cannot
+	// answer "is this user set up correctly on this
+	// inbound?", which is the same fail-closed
+	// rationale as ScopePlans / ScopeWebhooks.
+	//
+	// The credential value is an operator secret
+	// (VLESS UUID, Shadowsocks 2022-blake3 password,
+	// etc.); the trust model is the same as the
+	// audit log, which already includes the
+	// credential value in the Before / After fields
+	// of a `credential.rotate` audit entry. Operators
+	// with `audits:read` can read the value back via
+	// the audit log; granting `credentials:read` to
+	// the same role set is the consistent shape.
+	//
+	// The v0.8.2 GET/POST/PATCH/DELETE
+	// /api/v1/credentials endpoints are gated by this
+	// scope.
+	ScopeCredentials Scope = "credentials"
 )
 
 // Scopes is a non-empty set of Scope values.

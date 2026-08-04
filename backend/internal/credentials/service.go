@@ -162,6 +162,19 @@ func (s *Service) ListByInbound(ctx context.Context, inboundID uuid.UUID) ([]*Cr
 	return s.store.ListByInbound(ctx, inboundID)
 }
 
+// ListAll returns every credential in the store,
+// ordered by (user_id, inbound_id) ascending. The
+// admin UI's cross-user table is the canonical
+// caller. The result is freshly allocated; callers
+// may mutate without affecting the store.
+//
+// Read-only: no audit entry is recorded. The
+// v0.7.x audit-log convention is "audit on
+// mutation, not on read".
+func (s *Service) ListAll(ctx context.Context) ([]*Credential, error) {
+	return s.store.ListAll(ctx)
+}
+
 // Rotate updates the credential_value of an
 // existing row, re-stamping updated_at. Returns
 // ErrNotFound if the id does not exist.

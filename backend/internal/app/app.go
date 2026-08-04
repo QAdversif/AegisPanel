@@ -490,6 +490,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		a.Auth, a.Nodes, a.Hosts, a.Inbounds,
 		a.Subs, a.Users, a.PanelCfg, a.Audits,
 		a.Plans, a.Bootstrap, a.Backups, a.Webhooks,
+		a.Credentials,
 		a.SubLimiter,
 	)
 

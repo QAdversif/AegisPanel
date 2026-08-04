@@ -1183,6 +1183,241 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /credentials:
+    get:
+      tags: [credentials]
+      summary: List credentials
+      description: |
+        Every per-(user, inbound) credential the
+        operator has configured. v0.8.2 does not
+        paginate; the table is small in practice
+        (one row per user per inbound). For a
+        cross-user admin table the canonical caller
+        is the CredentialsView; the per-user /
+        per-inbound routes below are the more
+        selective access paths the future multi-user
+        sing-box renderer will use internally.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [credentials]
+      summary: Create a credential
+      description: |
+        Create a new per-(user, inbound) credential.
+        The server generates the id and timestamps;
+        the caller supplies the (user_id, inbound_id)
+        pair and the credential_value. The
+        credential_value is an operator secret
+        (VLESS UUID, Shadowsocks 2022-blake3
+        password, etc.); the panel stores it as TEXT
+        and the sing-box renderer is authoritative
+        for per-protocol shape validation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: A credential already exists for this (user, inbound) pair
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /credentials/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [credentials]
+      summary: Get a credential
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [credentials]
+      summary: Rotate a credential
+      description: |
+        Update the credential_value of an existing
+        row. The (user_id, inbound_id) pair is fixed
+        by the existing row; PATCH only takes the new
+        credential_value. Re-stamps updated_at.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRotateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credential'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [credentials]
+      summary: Delete a credential
+      description: |
+        Hard delete. The (user_id, inbound_id) UNIQUE
+        constraint means the next Create on the same
+        pair will succeed; the panel does not
+        soft-delete credentials.
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /credentials/by-user/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [credentials]
+      summary: List credentials for a user
+      description: |
+        Every credential for the given user. The
+        "View credentials" action in the UsersView
+        dropdown hits this route.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+        '400':
+          description: Invalid userId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /credentials/by-inbound/{ibId}:
+    parameters:
+      - name: ibId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [credentials]
+      summary: List credentials for an inbound
+      description: |
+        Every credential for the given inbound. The
+        "Who can use this inbound?" panel on an
+        inbound row hits this route.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialListResponse'
+        '400':
+          description: Invalid ibId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /users:
     get:
       tags: [users]
@@ -2905,6 +3140,69 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WebhookEndpoint'
+
+    Credential:
+      type: object
+      required: [id, user_id, inbound_id, credential_value, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        inbound_id:
+          type: string
+          format: uuid
+        credential_value:
+          type: string
+          minLength: 1
+          description: |
+            Opaque per-protocol credential. The panel
+            stores it as TEXT; the sing-box renderer
+            is authoritative for per-protocol shape
+            validation (UUID format for VLESS, password
+            length for HY2 / Trojan, etc.). Operators
+            with `credentials:read` scope can read
+            this field back via GET /credentials/{id}
+            and GET /credentials/by-user/{userId}.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CredentialCreateRequest:
+      type: object
+      required: [user_id, inbound_id, credential_value]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        inbound_id:
+          type: string
+          format: uuid
+        credential_value:
+          type: string
+          minLength: 1
+
+    CredentialRotateRequest:
+      type: object
+      required: [credential_value]
+      properties:
+        credential_value:
+          type: string
+          minLength: 1
+
+    CredentialListResponse:
+      type: object
+      required: [credentials]
+      properties:
+        credentials:
+          type: array
+          items:
+            $ref: '#/components/schemas/Credential'
 
     WebhookDelivery:
       type: object

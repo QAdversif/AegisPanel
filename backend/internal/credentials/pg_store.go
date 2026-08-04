@@ -213,3 +213,37 @@ func (s *PgStore) ListByInbound(ctx context.Context, inboundID uuid.UUID) ([]*Cr
 	}
 	return out, nil
 }
+
+// ListAll returns every credential in the table,
+// ordered by (user_id, inbound_id) ascending. The
+// admin UI's cross-user table is the canonical
+// caller. The query is unfiltered; a real-world
+// deployment that grows past a few thousand rows
+// will want a paginated variant — out of scope
+// for v0.8.2.
+func (s *PgStore) ListAll(ctx context.Context) ([]*Credential, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, inbound_id, credential_value, created_at, updated_at
+		FROM user_inbound_credentials
+		ORDER BY user_id ASC, inbound_id ASC, id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("credentials: list all: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*Credential, 0)
+	for rows.Next() {
+		var c Credential
+		if err := rows.Scan(
+			&c.ID, &c.UserID, &c.InboundID,
+			&c.CredentialValue, &c.CreatedAt, &c.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("credentials: list all scan: %w", err)
+		}
+		out = append(out, &c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("credentials: list all iterate: %w", err)
+	}
+	return out, nil
+}

@@ -376,18 +376,19 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 // This is the only place where the wire format of the role enum
 // (from migration 0001) meets our internal Scope vocabulary.
 //
-//	super-admin -> admin, read, write, hosts, plans, audits
-//	operator    -> read, write, hosts, plans, audits
-//	viewer      -> read, plans, audits
+//	super-admin -> admin, read, write, hosts, plans, audits, webhooks, credentials
+//	operator    -> read, write, hosts, plans, audits, webhooks, credentials
+//	viewer      -> read, plans, audits, webhooks, credentials
 //
-// The `plans` scope is granted to every role (admin /
-// operator / viewer) because every operator-facing
-// surface that lists users (the "this user is on
-// plan X" column in the UsersView, the "0 users on
-// this plan" badge in the PlansView) reads the
-// plans catalog. A viewer who cannot see the
-// catalog cannot resolve a `plan_id` to a name —
-// the same fail-closed logic as the `audits` scope.
+// The `plans`, `webhooks`, `credentials` scopes are granted to
+// every role (admin / operator / viewer) because every
+// operator-facing surface that lists users (the "this user is
+// on plan X" column in the UsersView, the "0 users on this
+// plan" badge in the PlansView, the "user has 3 credentials"
+// column in the CredentialsView) reads the matching catalog.
+// A viewer who cannot see the catalog cannot resolve a
+// `plan_id` / `inbound_id` to a name — the same fail-closed
+// logic as the `audits` scope.
 //
 // Unknown roles get only `read` — fail-closed. The `audits` scope
 // is granted to every role because the audit log is the
@@ -397,11 +398,11 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 func scopesForRole(role string) Scopes {
 	switch role {
 	case "super-admin":
-		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits}
+		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
 	case "operator":
-		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits}
+		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
 	case "viewer":
-		return Scopes{ScopeRead, ScopePlans, ScopeWebhooks, ScopeAudits}
+		return Scopes{ScopeRead, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
 	default:
 		return Scopes{ScopeRead}
 	}

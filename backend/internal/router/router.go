@@ -20,6 +20,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/config"
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
@@ -57,6 +58,7 @@ func Build(
 	bootstrapSvc *bootstrap.Service,
 	backupsSvc *backups.Service,
 	webhooksSvc *webhooks.Service,
+	credentialsSvc *credentials.Service,
 	subLimiter *ratelimit.Limiter,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -187,6 +189,21 @@ func Build(
 		// cleanup, and (optional) scheduler live
 		// in the Service.
 		r.Mount("/backups", backups.NewHandler(backupsSvc, authSvc.Middleware()).Mount())
+
+		// Credentials CRUD — admin surface (v0.8.2).
+		// List / get / create / rotate (PATCH) / delete,
+		// plus the per-user / per-inbound cross-cut
+		// reads. The package lives in
+		// `internal/credentials` (Phase 2 multi-user
+		// sing-box render data model from PR #167; the
+		// HTTP surface lands here). Every operator
+		// role (admin / operator / viewer) gets
+		// ScopeCredentials so the credentials table
+		// is visible from every role (the operator
+		// needs to see "is user X set up correctly on
+		// inbound Y?" the same way they need to see
+		// the plan catalog).
+		r.Mount("/credentials", credentials.AdminRouter(credentialsSvc, authSvc.Middleware()))
 
 		// OpenAPI spec + minimal self-contained index page.
 		mountSwagger(r)
