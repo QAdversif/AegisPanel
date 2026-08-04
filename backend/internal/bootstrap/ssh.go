@@ -147,7 +147,20 @@ type ClientConfig struct {
 	// uses to authenticate. The
 	// corresponding public key must be in
 	// the node's ~/.ssh/authorized_keys.
+	// Mutually exclusive with Password — the
+	// operator picks one of the two on the
+	// "Add node" form.
 	PrivateKey []byte
+	// Password is the SSH login password used
+	// for first-time auth on a fresh node.
+	// The panel does NOT store this; the
+	// install is the only consumer. After the
+	// install completes the agent uses the
+	// bearer token from /etc/aegis/agent.env
+	// to authenticate with the panel, so the
+	// password is never reused.
+	// Mutually exclusive with PrivateKey.
+	Password string
 	// KnownHosts is the absolute path to the
 	// panel's known_hosts file. The file is
 	// created if TofuAcceptAndAppend is set
@@ -190,6 +203,11 @@ type sshClient struct {
 // returned client is not yet connected; the
 // caller must invoke Connect before any Run /
 // Upload call.
+//
+// The auth method is mutually exclusive: exactly
+// one of PrivateKey or Password must be set. A
+// config with both or neither is rejected with a
+// 4xx-friendly error message.
 func NewClient(cfg ClientConfig) (Client, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("bootstrap: ClientConfig.Address is required")
@@ -197,8 +215,11 @@ func NewClient(cfg ClientConfig) (Client, error) {
 	if cfg.User == "" {
 		return nil, errors.New("bootstrap: ClientConfig.User is required")
 	}
-	if len(cfg.PrivateKey) == 0 {
-		return nil, errors.New("bootstrap: ClientConfig.PrivateKey is required")
+	hasKey := len(cfg.PrivateKey) > 0
+	hasPassword := cfg.Password != ""
+	if hasKey == hasPassword {
+		// Both set or neither set: ambiguous.
+		return nil, errors.New("bootstrap: ClientConfig requires exactly one of PrivateKey or Password (not both, not neither)")
 	}
 	if cfg.KnownHosts == "" {
 		return nil, errors.New("bootstrap: ClientConfig.KnownHosts is required")
@@ -208,17 +229,35 @@ func NewClient(cfg ClientConfig) (Client, error) {
 
 // Connect dials the SSH server, runs the host-
 // key check against the known_hosts file, and
-// authenticates as the configured user with the
-// supplied private key. The function is
-// idempotent: a second call is a no-op (the
+// authenticates as the configured user. The
+// auth method is determined by ClientConfig:
+// either the supplied private key (PEM) or the
+// supplied password. NewClient enforces that
+// exactly one of the two is set, so the `Auth`
+// slice built here is unambiguous. The function
+// is idempotent: a second call is a no-op (the
 // existing connection is reused).
 func (c *sshClient) Connect(ctx context.Context) error {
 	if c.conn != nil {
 		return nil
 	}
-	signer, err := ssh.ParsePrivateKey(c.cfg.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("bootstrap: parse private key: %w", err)
+
+	var auth ssh.AuthMethod
+	if c.cfg.Password != "" {
+		// Password auth: the typical
+		// first-time-install path. The
+		// password is one-shot — the install
+		// drops a bearer-token auth file on
+		// the node so subsequent agent
+		// <-> panel traffic uses the bearer
+		// instead of the SSH password.
+		auth = ssh.Password(c.cfg.Password)
+	} else {
+		signer, err := ssh.ParsePrivateKey(c.cfg.PrivateKey)
+		if err != nil {
+			return fmt.Errorf("bootstrap: parse private key: %w", err)
+		}
+		auth = ssh.PublicKeys(signer)
 	}
 
 	// hostKeyCallback is the security-critical
@@ -252,7 +291,7 @@ func (c *sshClient) Connect(ctx context.Context) error {
 	}
 	clientConfig := &ssh.ClientConfig{
 		User:            c.cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: hostKeyCb,
 		Timeout:         timeout,
 	}

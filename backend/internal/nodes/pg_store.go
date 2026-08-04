@@ -263,6 +263,42 @@ func (s *PgStore) SetAgentBearer(ctx context.Context, id uuid.UUID, bearer strin
 	return nil
 }
 
+// SetSSHPrivateKeyCiphertext updates only the
+// ssh_private_key_ciphertext column. The bootstrap
+// provisioner calls this from inside the installer's
+// post-install hook (see
+// internal/bootstrap/installer.InstallInput.PostInstallHook)
+// so the panel's persistent SSH key for the node is sealed
+// and stored before the agent starts. The value is the raw
+// `age` ciphertext (PR #177 envelope); an empty slice
+// is the "no key yet" sentinel and clears the column.
+//
+// Implemented as a single-column UPDATE for the same
+// reason as SetAgentBearer (avoid re-sending the rest
+// of the row). Returns ErrNotFound if the id is unknown.
+func (s *PgStore) SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, ciphertext []byte) error {
+	// pgx sends a nil []byte as SQL NULL by default; we
+	// want the literal empty BYTEA so the column's
+	// NOT NULL constraint is satisfied and the
+	// "no key yet" sentinel in Go (len == 0) survives
+	// the round-trip. The explicit length check on the
+	// input means the only nil case is the "caller
+	// never set it" defensive default — treat it as
+	// empty.
+	if ciphertext == nil {
+		ciphertext = []byte{}
+	}
+	const q = `UPDATE nodes SET ssh_private_key_ciphertext = $2, updated_at = NOW() WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, id, ciphertext)
+	if err != nil {
+		return fmt.Errorf("set ssh private key ciphertext: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // --- internal: insert helpers ------------------------------------------
 
 // insertNode writes the node row. ON CONFLICT (name) surfaces
@@ -270,8 +306,9 @@ func (s *PgStore) SetAgentBearer(ctx context.Context, id uuid.UUID, bearer strin
 func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 	const q = `
 		INSERT INTO nodes (
-			id, name, region, state, address, capacity_hint, agent_bearer
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`
+			id, name, region, state, address, capacity_hint, agent_bearer,
+			ssh_private_key_ciphertext
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	_, err := tx.Exec(ctx, q,
 		n.ID,
 		n.Name,
@@ -280,6 +317,11 @@ func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 		n.Address,
 		n.CapacityHint,
 		n.AgentBearer,
+		// nil-from-Go -> SQL NULL by default in pgx;
+		// the column is NOT NULL with a default of
+		// empty bytes, so we coerce nil to an empty
+		// slice to keep the contract explicit.
+		coalesceEmptyBytes(n.SSHPrivateKeyCiphertext),
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -319,6 +361,7 @@ const nodeWithTagsSelect = `
 	SELECT
 		n.id, n.name, n.region, n.state, n.address, n.capacity_hint,
 		n.agent_bearer,
+		n.ssh_private_key_ciphertext,
 		n.created_at, n.updated_at,
 		t.tag
 	FROM nodes n
@@ -336,20 +379,22 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 	order := []key{}
 	for rows.Next() {
 		var (
-			nID           uuid.UUID
-			nName         string
-			nRegion       string
-			nState        string
-			nAddress      string
-			nCapacityHint string
-			nAgentBearer  string
-			nCreatedAt    time.Time
-			nUpdatedAt    time.Time
-			tTag          *string
+			nID                      uuid.UUID
+			nName                    string
+			nRegion                  string
+			nState                   string
+			nAddress                 string
+			nCapacityHint            string
+			nAgentBearer             string
+			nSSHPrivateKeyCiphertext []byte
+			nCreatedAt               time.Time
+			nUpdatedAt               time.Time
+			tTag                     *string
 		)
 		if err := rows.Scan(
 			&nID, &nName, &nRegion, &nState, &nAddress, &nCapacityHint,
 			&nAgentBearer,
+			&nSSHPrivateKeyCiphertext,
 			&nCreatedAt, &nUpdatedAt,
 			&tTag,
 		); err != nil {
@@ -360,15 +405,16 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 		node, ok := byID[k]
 		if !ok {
 			node = &Node{
-				ID:           nID,
-				Name:         nName,
-				Region:       nRegion,
-				State:        State(nState),
-				Address:      nAddress,
-				CapacityHint: nCapacityHint,
-				AgentBearer:  nAgentBearer,
-				CreatedAt:    nCreatedAt,
-				UpdatedAt:    nUpdatedAt,
+				ID:                      nID,
+				Name:                    nName,
+				Region:                  nRegion,
+				State:                   State(nState),
+				Address:                 nAddress,
+				CapacityHint:            nCapacityHint,
+				AgentBearer:             nAgentBearer,
+				SSHPrivateKeyCiphertext: nSSHPrivateKeyCiphertext,
+				CreatedAt:               nCreatedAt,
+				UpdatedAt:               nUpdatedAt,
 			}
 			byID[k] = node
 			order = append(order, k)
@@ -403,4 +449,19 @@ func isUniqueViolation(err error) bool {
 		return pgErr.Code == "23505"
 	}
 	return false
+}
+
+// coalesceEmptyBytes turns a nil []byte into a non-nil
+// empty []byte. The pgx driver sends nil []byte as SQL
+// NULL by default; the nodes.ssh_private_key_ciphertext
+// column is NOT NULL with a default of empty bytes, so
+// an INSERT path that wants "no key yet" must coerce
+// nil to empty. The helper is also used in the
+// single-column UPDATE path to keep the wire shape
+// consistent.
+func coalesceEmptyBytes(b []byte) []byte {
+	if b == nil {
+		return []byte{}
+	}
+	return b
 }

@@ -46,6 +46,16 @@ type Store interface {
 	// State, then sending the whole struct back). Returns
 	// ErrNotFound if the id is unknown.
 	SetAgentBearer(ctx context.Context, id uuid.UUID, bearer string) error
+	// SetSSHPrivateKeyCiphertext updates only the
+	// ssh_private_key_ciphertext column. v0.8.x added
+	// this so the bootstrap provisioner can store the
+	// panel's persistent SSH private key (sealed with
+	// the operator's age envelope, see
+	// internal/crypto/envelope PR #177) without
+	// re-sending the rest of the node row. Empty
+	// ciphertext clears the column. Returns ErrNotFound
+	// if the id is unknown.
+	SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, ciphertext []byte) error
 }
 
 // ErrNotFound is returned by Store implementations when the
@@ -242,6 +252,39 @@ func (s *MemoryStore) SetAgentBearer(_ context.Context, id uuid.UUID, bearer str
 	}
 	clone := cloneNode(existing)
 	clone.AgentBearer = bearer
+	clone.UpdatedAt = s.now().UTC()
+	s.byID[id] = clone
+	return nil
+}
+
+// SetSSHPrivateKeyCiphertext updates the
+// ssh_private_key_ciphertext field of an
+// existing node. v0.8.x: the bootstrap
+// provisioner's post-install hook calls this
+// with the freshly-generated ed25519 private
+// key sealed by the operator's age envelope.
+// Empty ciphertext clears the column (the
+// "no key yet" sentinel that the provisioner
+// reads to decide whether to use the stored
+// key or fall back to the operator's request).
+func (s *MemoryStore) SetSSHPrivateKeyCiphertext(_ context.Context, id uuid.UUID, ciphertext []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.byID[id]
+	if !ok {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	clone := cloneNode(existing)
+	// pgx maps nil BYTEA to nil; the in-memory
+	// store keeps the same convention (nil
+	// from the caller becomes nil on the
+	// clone). The provisioner never calls
+	// this with nil; the guard is for the
+	// "caller never set it" defensive case.
+	if ciphertext == nil {
+		ciphertext = []byte{}
+	}
+	clone.SSHPrivateKeyCiphertext = ciphertext
 	clone.UpdatedAt = s.now().UTC()
 	s.byID[id] = clone
 	return nil

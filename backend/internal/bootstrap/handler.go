@@ -66,8 +66,19 @@ type provisionRequest struct {
 	// SSHPrivateKey is the operator's pasted
 	// private key (PEM, no passphrase). The
 	// panel does not store this; the install
-	// is the only consumer.
-	SSHPrivateKey string `json:"ssh_private_key"`
+	// is the only consumer. Mutually
+	// exclusive with SSHPassword — exactly
+	// one of the two must be set.
+	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
+	// SSHPassword is the operator's SSH login
+	// password for first-time auth on a fresh
+	// node. The panel does not store this; the
+	// install is the only consumer. After the
+	// install completes the agent switches
+	// to bearer-token auth so the password is
+	// never reused. Mutually exclusive with
+	// SSHPrivateKey.
+	SSHPassword string `json:"ssh_password,omitempty"`
 	// TofuPolicy is the trust-on-first-use
 	// policy. "reject" is the safe default;
 	// "accept-and-append" is the v0.3.0
@@ -118,8 +129,18 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
-		if req.SSHPrivateKey == "" {
-			writeError(w, http.StatusBadRequest, "ssh_private_key is required")
+		// Exactly one auth method: key XOR password.
+		// Both set → 400 (ambiguous). Neither set
+		// → 400 (no auth). This is the same
+		// contract the SSH client enforces; the
+		// HTTP-layer check gives a clearer error
+		// to the operator than the 502 the SSH
+		// client would produce.
+		hasKey := req.SSHPrivateKey != ""
+		hasPassword := req.SSHPassword != ""
+		if hasKey == hasPassword {
+			// Both or neither: ambiguous.
+			writeError(w, http.StatusBadRequest, "exactly one of ssh_private_key or ssh_password is required")
 			return
 		}
 		// Translate the wire format into the
@@ -141,6 +162,7 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 			SSHPort:             req.SSHPort,
 			SSHUser:             req.SSHUser,
 			SSHPrivateKey:       req.SSHPrivateKey,
+			SSHPassword:         req.SSHPassword,
 			Tofu:                tp,
 			ExpectedFingerprint: req.ExpectedFingerprint,
 		}

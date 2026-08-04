@@ -3039,6 +3039,14 @@ export interface components {
             capacityHint?: string;
             tags?: string[];
         };
+        /**
+         * @description Exactly one of `ssh_private_key` or `ssh_password`
+         *     must be set. The `ssh_password` path is the
+         *     first-time-install UX: the operator pastes the
+         *     VPS root password, the panel SSHes in to install
+         *     the agent, and the agent switches to bearer-
+         *     token auth so the password is never reused.
+         */
         NodeProvisionRequest: {
             /** @description Per-call override. Zero/omitted means "use the service-wide default (22)". */
             ssh_port?: number;
@@ -3048,9 +3056,20 @@ export interface components {
              * Format: password
              * @description Operator-pasted private key (PEM, no passphrase).
              *     The panel does NOT store this; the install is
-             *     the only consumer.
+             *     the only consumer. Mutually exclusive with
+             *     `ssh_password`.
              */
-            ssh_private_key: string;
+            ssh_private_key?: string;
+            /**
+             * Format: password
+             * @description Operator's SSH login password for first-time
+             *     auth on a fresh node. The panel does NOT
+             *     store this; the install is the only consumer.
+             *     The agent switches to bearer-token auth so
+             *     the password is never reused. Mutually
+             *     exclusive with `ssh_private_key`.
+             */
+            ssh_password?: string;
             tofu_policy?: components["schemas"]["TofuPolicy"];
             /**
              * @description Operator-confirmed SHA256 fingerprint. Required
