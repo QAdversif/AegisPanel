@@ -1,14 +1,20 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.0** ships the full admin surface end-to-end:
+> services. **v0.8.1** ships the full admin surface end-to-end:
 > sing-box on every node, BYO Node bootstrap with real `aegis-agent`,
 > user / host / plan CRUD, subscription render in sing-box / Clash /
 > base64 / HTML formats, audit log, **backups** (with operator CLI),
-> **outgoing webhooks** (HMAC-signed + DLQ), and the
+> **outgoing webhooks** (HMAC-signed + DLQ), the
 > **Phase 2 multi-user sing-box render** (per-(user, inbound)
 > credentials, multi-user `users: [...]` arrays, narrowed
-> BatchedApplier fan-out, per-user sub URL). The CoreProvider
+> BatchedApplier fan-out, per-user sub URL), and the
+> **v0.8.1 auto-deploy bootstrap batch**: shared `internal/crypto/envelope`
+> package (X25519+ChaCha20-Poly1305, multi-recipient for key
+> rotation), password-based first auth for the BYO Node flow
+> with a persistent panel key that the panel generates on
+> first install and re-uses on every re-provision (the operator
+> never pastes a key after the first install). The CoreProvider
 > abstraction lets a second provider (Xray) ship in v2.0+ without
 > UI surgery. AGPL-3.0. Single-tenant.
 >
@@ -19,6 +25,30 @@
 > for the MVP strategy.
 
 ## Status
+
+**v0.8.1 — auto-deploy bootstrap batch — shipped.**
+v0.8.1 is the **password-based first auth + persistent
+panel key** milestone: the operator clicks "+ Add node",
+fills in name / region / SSH address / domain, pastes
+the VPS root password, clicks submit — the panel
+SSHes in once, installs the agent, and generates an
+ed25519 keypair that the panel re-uses on every
+subsequent re-provision. The operator never has to
+paste a key. The 4-PR batch — the shared
+`internal/crypto/envelope` package (#177, refactor),
+the `brace-expansion` CVE bump (#178, security), the
+backend password-XOR + persistent key (#179,
+feature), and the matching three-way radio in the UI
+(#180, feature) — also includes a frontend
+dependency CVE fix (`brace-expansion 5.0.8 → 5.0.9`,
+ReDoS in `expand`). The wire format gained one new
+field: `ssh_password` on the `NodeProvisionRequest`
+schema (mutually exclusive with `ssh_private_key`,
+XOR enforced in
+`backend/internal/bootstrap/handler.go`); the
+OpenAPI spec is now at `0.8.1`. The migration
+landscape is `0001..0020` (was `0001..0019` in
+v0.8.0; `0020` adds `nodes.ssh_private_key_ciphertext`).
 
 **v0.8.0 — Phase 2 multi-user sing-box render — shipped.**
 v0.8.0 is the **end-to-end multi-user** milestone: the
@@ -37,11 +67,11 @@ call-site wiring into every mutating service and a
 frontend dependency batch (TS / CSS / axios /
 vue-tsconfig / postcss). v0.8.0 is purely
 infrastructure by API surface: the OpenAPI spec stays
-at `0.7.0`, `frontend/src/types/api.d.ts` is not
-regenerated, `npm run codegen:check` passes without
-changes. The migration landscape is `0001..0019` (was
-`0001..0018` in v0.7.2; `0019` adds
-`user_inbound_credentials`). The release ladder:
+at `0.7.0` for v0.8.0, `frontend/src/types/api.d.ts` is
+regenerated only for the `ssh_password` field added
+in v0.8.1.
+
+The release ladder:
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
@@ -58,7 +88,9 @@ changes. The migration landscape is `0001..0019` (was
 | `v0.7.1` | **shipped** | Webhook call-site wiring, sops+age envelope on `webhook_endpoints.secret`, background retry worker, events multi-select, shared zod schema, plus the post-v0.7.0 Go+frontend dependency batch (#141–#144) and the docs sync (#145) |
 | `v0.7.2` | **shipped** | Audit batch closeout: God-object `main.go` extracted into `internal/app.Build` (#156); real BatchedApplier FlushFn + Enqueue from user/inbound services (#157); end-to-end integration test against a real Postgres (#158) |
 | `v0.8.0` | **shipped** | Phase 2 multi-user sing-box render end-to-end (#167 data model, #168 renderer, #169 builder + BatchedApplier narrow, #170 subscription per-user render); audit-log call-site wiring into every mutating service (#166); frontend dependency batch — TS / CSS / axios / vue-tsconfig / postcss (#159, #161, #163, #165) |
-| `v0.8.x` | planned | HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/` mount + `ScopeCredentials` + OpenAPI + Credentials tab in the user detail page); inbound-templates work (per-tenant `Params` defaults); cosign re-signing on every release; JSON logs in production (`AEGIS_ENV=production` one-liner) |
+| `v0.8.1` | **shipped** | Auto-deploy bootstrap batch: shared `internal/crypto/envelope` package (#177 refactor); `brace-expansion` 5.0.8 → 5.0.9 CVE (#178 chore); password-based first auth + persistent node SSH key (#179 feat); three-way radio in the provision UI (#180 feat). Migration 0020 (`nodes.ssh_private_key_ciphertext` BYTEA). OpenAPI spec bumped to 0.8.1. |
+| `v0.8.2` | planned | Server-side `/me` fix (auth.Store.GetByID + PgStore, closes the v0.8.0 `auth.me === null` 500 on pg backend); HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/` mount + `ScopeCredentials` + OpenAPI + Credentials tab in the user detail page) |
+| `v0.8.x` | planned | BatchedApplier decrypt-and-use for the stored panel key; re-provision path for v0.3.0..v0.7.x nodes (CLI `aegis admin node rotate-panel-key <id>`); Host → node mapping in the Builder-side filter; inbound-templates work (per-tenant `Params` defaults); "show me the stored public key" debug surface; merged "Add node + Provision" dialog; shadcn-vue RadioGroup primitive; cosign re-signing on every release; JSON logs in production (`AEGIS_ENV=production` one-liner) |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release |
 

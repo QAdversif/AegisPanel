@@ -918,7 +918,73 @@ What this PR does NOT ship (deferred to v0.8.x follow-ups):
 - **Smoke test on fresh VM in CI** — v0.9.0 candidate. `tools/scripts/smoke-local.sh` (PR #152) covers the local docker-compose path; a terraform + ansible + boot-log CI job is a separate work unit.
 - **`internal/cabinet` (doc.go-only) end-user surface** — the per-user sub URL is the per-user cabinet for v0.8.0. A separate end-user-facing cabinet (login UI, sub URL fetch, traffic stats, plan change) is v1.2+.
 
+## [0.8.1] - 2026-08-04
+
+v0.8.1 is the **auto-deploy bootstrap batch**: a
+shared age-encryption envelope package, a
+frontend dependency CVE fix, password-based first
+auth for the BYO Node flow with persistent panel
+key reuse, and the matching three-way radio in the
+admin UI. Net effect: an operator clicks "+ Add node",
+fills in name / region / SSH address / domain,
+pastes the VPS root password, clicks submit — the
+panel SSHes in once, installs the agent, and
+generates an ed25519 keypair that the panel
+re-uses on every subsequent re-provision. The
+operator never has to paste a key.
+
+The four PRs:
+
+- **#177** `refactor(crypto): extract internal/crypto/envelope from webhooks/secret` — the v0.7.x age cipher (`SecretCipher` interface, `AgeSecretCipher`, `NoopSecretCipher`) was webhook-specific. v0.8.1 lifts it into a shared `internal/crypto/envelope` package so any future at-rest secret can share the same age boundary and the same `AEGIS_*_SECRET_AGE_*` env vars. The webhooks `PgStore` now imports `envelope.SecretCipher` instead of declaring its own interface. The bootstrap service will use the same cipher in #179. Pure refactor: byte-for-byte identical output for every input, no schema change, no env change. 9 files changed, +578 / -536.
+- **#178** `chore(frontend-deps): bump brace-expansion 5.0.8 → 5.0.9` (CVE GHSA-rgw5-rvv9-x895, ReDoS in `expand`). `package.json` `overrides` block: `^5.0.8` → `^5.0.9`. Lockfile + integrity hash updated. 2 files, +4/-4. One-line security fix; dev-only (the `expand` function is reached through `glob` → `vitest` / `eslint` tooling, not the production browser bundle).
+- **#179** `feat(bootstrap): password-based first auth + persistent node SSH key` — the BYO Node flow. v0.3.0 required the operator to paste a PEM private key on the provision form. v0.8.1 adds two new modes. **First-install via password**: the operator pastes the VPS root password; the panel SSHes in once, installs the agent, and the agent switches to bearer-token auth (password is one-shot, never stored). **Persistent panel key**: on a successful password install, the panel generates an ed25519 keypair, encrypts the private half with the operator's age envelope, stores the ciphertext in a new `nodes.ssh_private_key_ciphertext` column (migration 0020), and pushes the public half to `$HOME/.ssh/authorized_keys` on the node. The next re-provision decrypts the stored key and uses it for the install — the operator never pastes anything. The wire format is the two-field XOR `ssh_private_key` / `ssh_password` (mutually exclusive, both optional; the Go provisioner picks the auth method by precedence: stored key > request key > request password). 13 files changed, +1117 / -57. Migration 0020 (BYTEA column, default empty bytes — the "no key yet" sentinel).
+- **#180** `feat(ui): password / stored-key radio for the node provision form` — the matching UI. The provision dialog gets a three-way radio (key / password / stored) at the top. Conditional rendering: the key or password field appears below the radio based on the selected method. XOR + conditional-required validation in the zod schema's `superRefine`. The "Stored panel key" option is disabled for first-time installs (state `new`); it is enabled for re-provisions (state `offline`). The form's default auth method is "Stored panel key" for state `offline` (a re-provision is literally one click — no input). New i18n strings in en + ru. 4 files changed, +324 / -12.
+
+What this means for operators:
+
+- The BYO Node flow is now "auto-deploy": the operator does not need to paste a private key on every re-provision. The panel generates a keypair on first install, encrypts the private half with the age envelope, and re-uses the key for every subsequent install.
+- The first-time install path is "paste the VPS root password" instead of "generate a key, copy it to the node, paste it in the form". The operator's mental model is "the panel does the rest" — the password is one-shot and never stored.
+- A v0.3.0..v0.7.x node that was provisioned before this PR has an empty `nodes.ssh_private_key_ciphertext` and no panel key on the agent. Re-provisioning such a node on v0.8.1 takes the "operator-supplied key" path (the operator pastes their existing PEM) until a follow-up CLI command (`aegis admin node rotate-panel-key <id>`) lands; deferred.
+
+What this PR does NOT ship (deferred to v0.8.2/v0.8.3):
+
+- **BatchedApplier decrypt-and-use path for the stored panel key** — the applier reads `nodes.ssh_private_key_ciphertext` and decrypts via the envelope to authenticate POST /v1/apply. v0.8.x.
+- **Re-provision path for v0.3.0..v0.7.x nodes** — a CLI command + UI button that generates a fresh panel key for an existing node (uses the operator's current key as the bootstrap credential, then rotates). v0.8.x.
+- **Host → node mapping in the Builder-side filter** — the `user.HostsAllowlist` filter is on the BatchedApplier fan-out (post-#169). The Builder-side filter on the rendered config (so a user's render does not include credentials for inbounds on hosts the user cannot see) needs the host-to-inbound mapping to be modelled; v0.8.x.
+- **"Show me the stored public key" debug surface** — the operator can paste a private key, but there is no "what is the panel's key on this node right now" debug view. The public-key fingerprint would be safe to display; deferred.
+- **Merged "Add node + Provision" dialog** — the 2-step shape (Create, then Provision) is preserved. A merged dialog with the auth method radio pre-selected per state is a UX follow-up; v0.8.x.
+- **shadcn-vue RadioGroup primitive** — the radio group in #180 is hand-rolled. The codebase does not yet have `RadioGroup` in `components/ui/`; adding the primitive is a separate task.
+- **Cosign sign + verify for our Docker images on every release** — the initial sign + verify pair shipped in v0.7.0; the post-v0.7.0 workflow contract does not yet include re-signing. v0.8.x.
+- **JSON logs in production** — `AEGIS_ENV=production` switch is still the v0.5.x follow-up. The `internal/obs` package has the right code; the wiring in `cmd/aegis/main.go` is the one-liner that was deferred from v0.5.0. v0.8.x.
+- **Smoke test on fresh VM in CI** — v0.9.0 candidate. `tools/scripts/smoke-local.sh` covers the local docker-compose path; a terraform + ansible + boot-log CI job is a separate work unit.
+- **`internal/cabinet` (doc.go-only) end-user surface** — the per-user sub URL is the per-user cabinet for v0.8.0. A separate end-user-facing cabinet (login UI, sub URL fetch, traffic stats, plan change) is v1.2+.
+
 ## [Unreleased]
+
+The next-up work is captured in [`docs/ROADMAP.md`](docs/ROADMAP.md). The
+detailed per-PR notes that used to live in this section have been
+migrated to the matching tagged release sections:
+
+- v0.5.0 content (`#119`-`#126`) — moved to `[0.5.0] - 2026-07-30` below
+- v0.4.0-post content (`#102`, `#103`, `#104`, `#111`) — folded into `[0.4.0]`
+- v0.7.x Go+frontend dep batch (`#141`-`#144`) — duplicate of the
+  `[0.7.1]` section; removed
+
+## [0.5.0] - 2026-07-30
+
+Eight-PR operations-grade polish batch. Closes the
+"v0.5.0 is the smallest surface that the soft
+launch needs" target from the v0.4.0 release
+notes. The release is purely additive: no API
+surface change, no operator-facing configuration
+change, no migration. The `secrets via sops+age`
+indirection, the `backups` package + UI + CLI, the
+`pre-pr.sh` local gate, and the
+`install_singbox` runtime SHA-256 lookup are the
+four pillars; the operator guide + security
+policy + quickstart docs land the soft-launch
+documentation contract; the container-wiring PR
+binds #119 into the panel + agent systemd units.
 
 ### Added (operator guide + security policy + quickstart docs, #126)
 
@@ -1599,6 +1665,97 @@ What this PR does NOT ship (deferred to v0.8.x follow-ups):
     (the new doc) and `docs/guide/quickstart.md`
     with the sops+age flow.
 
+## [0.4.0] - 2026-07-26
+
+**Tag:** `v0.4.0` on this commit. v0.4.0 ships two parallel
+work streams:
+
+1. **v0.4.0-mvp-batched** (PRs #92 / #93 / #94) — the
+   `BatchedApplier` + real apply transport + the
+   `install_singbox` Ansible role. The end-to-end
+   panel → aegis-agent → sing-box config write → reload
+   flow ships green. Closes the v0.4.0-a / b / c
+   sub-PRs.
+2. **v0.4.0-d Path C** (PRs #95 / #96 / #97 / #99 / #100) —
+   the user-CRUD surface moves from `internal/subscription`
+   into a dedicated `internal/users` package. The
+   subscription package is now a pure render
+   orchestrator: zero user-CRUD surface. The d-r-series
+   cuts roughly 800 lines out of subscription and
+   consolidates the wire format.
+
+### Added (v0.4.0-mvp-batched, #92 / #93 / #94)
+
+- **`internal/cores` `BatchedApplier`** — per-node delta
+  queue with `CancelReplace` semantics (an `add_user`
+  followed by a `remove_user` for the same `UserID`
+  within the window is a no-op). 20s window, 1000 max
+  queue. `FlushFn` callback. The `cmd/aegis-agent` /
+  apply transport is wired through the new
+  `Provider.Configure(nodes, httpClient)` pattern. Closes #92.
+- **`cmd/aegis-agent` real `/v1/apply` handler** —
+  `writeAtomic` (write to temp + fsync + `os.Rename`),
+  `runReload` (subprocess via `exec.CommandContext`,
+  no shell — `strings.Fields(reloadCmd)`), and
+  `applyEnvelope` / `applyResponse` with `reloaded: bool`,
+  plus `reload_took_ms: int64`. Closes #93.
+- **`deploy/ansible/roles/install_singbox/`** — pins
+  sing-box 1.14.0-beta.2, hard-coded SHA-256
+  `f68715815741e59f25e32904cabcd5924a0461a910d8e9c9612512b957709ef4`.
+  Playbook order: `bootstrap` → `install_caddy` →
+  `install_fail2ban` → `install_singbox` →
+  `install_agent` → `setup_decoy` (install_singbox
+  comes before install_agent because the agent's env
+  file references `/etc/sing-box/config.json`). Closes #94.
+
+### Added (v0.4.0-d, #95 / #96 / #97 / #99 / #100)
+
+- **`internal/users` data layer** — the new home for the
+  end-user CRUD surface (User + Status enum + Create /
+  Update / Delete / RotateSubToken + MemoryStore +
+  PgStore). 32-byte / 64-hex-char `sub_token` (d.1
+  bumped from 16/32 for higher entropy). Closes #95.
+- **`users.User` wire-format compat** with
+  `subscription.User` — both Go types have identical
+  JSON shape (snake_case fields, `[]uuid.UUID` for
+  hosts allow/block lists). Makes the d.r2 → d.r3
+  move possible without render-code churn. Closes #96.
+- **Drop subscription-side user-CRUD** — `Store`,
+  `MemoryStore`, `PgStore` no longer carry the 7
+  user-CRUD methods. The 4 Service-level thin
+  wrappers (`GetUserBySubToken` / `RotateSubToken` /
+  `CreateUser` / `ListUsers`) carry the work
+  temporarily. Closes #97.
+- **Move `admin_handler.go` to `users`** — the
+  user-CRUD admin surface (mounted at `/api/v1/users`)
+  lives in `internal/users/admin_handler.go` now. The
+  Service-level thin wrappers are gone; the render
+  handler consults `*users.Service` directly for the
+  sub_token lookup. Closes #99.
+- **Cleanup pass + roadmap** — `DefaultSubTokenRotationGrace`
+  is now a public package constant on `users` (was a
+  magic-number literal). `docs/ROADMAP.md` documents
+  the v0.4.0-d Path C status, v0.5.0 polish, v0.6.0 plans,
+  v0.7.0 webhooks, v1.0.0-mvp-soft-launch GA, and the 9
+  open-gap packages. `.markdownlint.json` disables
+  `MD060` (the default "aligned" table style is fragile
+  under PR review). Closes #100.
+
+### Behaviour changes (v0.4.0-d)
+
+- **`sub_token` is now 64 hex chars (32 bytes)**, not
+  32 hex chars (16 bytes). The d.1 design bumped from
+  16 bytes to 32 bytes of entropy. Existing fixtures
+  in `internal/users/*_test.go` and the integration
+  tests updated.
+- **`RotateSubToken` grace semantics changed** —
+  `grace <= 0` no longer invalidates the prev token
+  immediately. The d.1 `users.Service.RotateSubToken`
+  maps `grace <= 0` to the canonical 24h default
+  (matching the 3X-UI convention). The pre-existing
+  test that asserted the d.0 behaviour was rewritten
+  as a documentation test.
+
 ### Changed (repo hygiene, post-Phase 1)
 
 - **`chore(repo): gitignore the operator deploy
@@ -1711,187 +1868,6 @@ or the next release.
   are kept. Both event paths now produce the
   same `[version, short, latest]` tag list.
   Closes #111.
-
-### Changed (Go+frontend dependency batch, post-v0.7.0, #141–#144)
-
-Four sequential PRs bumped every dependency that was on
-its previous major / minor track. Each PR was a self-contained
-unit so a single regression was independently revertable.
-All 24 CI jobs green on every PR; no code regressions on
-the frontend side; one pre-existing prop-name bug in
-`WebhooksView.vue` caught and fixed (see PR #143 below).
-
-- **`chore(deps): bump Go minors` (#141)** — `prometheus
-  client_golang 1.20.5 → 1.24.1`, `caarlos0/env/v11
-  11.2.2 → 11.4.1`, `zerolog 1.33.0 → 1.35.1`. 3
-  explicit + 7 indirect minor bumps. Local `go build`
-  / `go test` / `gofmt` / `golangci-lint v2` all clean.
-  0 source code changes. 2 files: `backend/go.mod`,
-  `backend/go.sum`.
-- **`chore(deps): bump pinia to 4.0.2 and add
-  @vue/devtools-api` (#142)** — `pinia 3.0.4 → 4.0.2`,
-  added `@vue/devtools-api ^8.2.1` (pinia 4 peer
-  dep; was transitive before). Hit the pnpm-store
-  artifact conflict footgun: `node_modules/.pnpm/`
-  from a previous pnpm run made `npm install` skip
-  lockfile regeneration. Fix: `mavis-trash
-  node_modules` before `npm install` (documented in
-  the project memory). 0 source code changes (the
-  stores already use the new `defineStore('name',
-  () => {...})` form). 2 files: `frontend/package.json`,
-  `frontend/package-lock.json`.
-- **`chore(deps-dev): bump vue-tsc to 3.3.8 and fix
-  WebhooksView DataTable props` (#143)** —
-  `vue-tsc 2.1.10 → 3.3.8`. vue-tsc 3 caught a
-  pre-existing prop-name bug in
-  `frontend/src/views/WebhooksView.vue` (PR #139):
-  the view was calling `DataTable` with `:rows` and
-  `:empty-message` instead of `:data` and
-  `empty-key`. Three prop renames in one file as a
-  no-op fix (same rendered text); without it,
-  vue-tsc 3 fails the strict type-check. The
-  `DataTable` component itself (`frontend/src/components/
-  DataTable.vue`) was correct; the view was the
-  only caller that drifted. 3 source-code lines
-  changed across 1 file. 3 files total:
-  `frontend/package.json`, `frontend/package-lock.json`,
-  `frontend/src/views/WebhooksView.vue`.
-- **`chore(deps): bump vue-i18n 10.0.5 to 11.4.8`
-  (#144)** — `vue-i18n 10.0.5 → 11.4.8`. 0 source
-  code changes: the codebase already used the
-  Composition API with `legacy: false` (set in
-  `frontend/src/i18n/index.ts`), and vue-i18n 11's
-  breaking change is the Legacy API removal, which
-  we never used. 2 files: `frontend/package.json`,
-  `frontend/package-lock.json`.
-
-**Net diff across the 4 PRs:** 13 files, +302/-204, 1
-source file changed (`WebhooksView.vue`, 3 prop
-renames as a no-op fix for a pre-existing bug from
-PR #139). 0 source code changes on the Go side.
-
-**Per-PR CI time:** 7-12 minutes (dominated by the
-backend `go test -count=1 -tags=integration ./...`
-step at ~4-5 min × 2 runs per PR).
-
-**Why this worked without code regressions on the
-frontend side:**
-
-- Pinia 4 is "technically breaking only" (ESM-only +
-  the `@vue/devtools-api` peer dep). The stores use
-  the Options API for `defineStore('name', () => {...})`,
-  which is unchanged in v4.
-- vue-tsc 3 dropped Vue 2 + `vue-class-component`
-  support; the codebase uses neither.
-- vue-i18n 11 deprecates the Legacy API mode only;
-  the codebase already used the Composition API
-  with `legacy: false` exclusively.
-
-**Bonus bug caught by the batch:** the
-`WebhooksView.vue` prop-name drift from PR #139 was
-latent since August 2025. vue-tsc 2 did not enforce
-the prop names; vue-tsc 3 does. The fix is a no-op
-at runtime (same rendered text), but it was a real
-lint hole that is now closed.
-
-**Footgun avoided by the 4-PR split (vs a single
-mega-PR):** batching all 3 frontend majors into one
-PR would have been a multi-hour debugging exercise
-if anything broke. The 4-PR split kept each bump
-independently revertable and let us catch the
-`WebhooksView` bug in isolation (not bundled with
-the vue-i18n 11 noise).
-
-## [0.4.0] - 2026-07-26
-
-**Tag:** `v0.4.0` on this commit. v0.4.0 ships two parallel
-work streams:
-
-1. **v0.4.0-mvp-batched** (PRs #92 / #93 / #94) — the
-   `BatchedApplier` + real apply transport + the
-   `install_singbox` Ansible role. The end-to-end
-   panel → aegis-agent → sing-box config write → reload
-   flow ships green. Closes the v0.4.0-a / b / c
-   sub-PRs.
-2. **v0.4.0-d Path C** (PRs #95 / #96 / #97 / #99 / #100) —
-   the user-CRUD surface moves from `internal/subscription`
-   into a dedicated `internal/users` package. The
-   subscription package is now a pure render
-   orchestrator: zero user-CRUD surface. The d-r-series
-   cuts roughly 800 lines out of subscription and
-   consolidates the wire format.
-
-### Added (v0.4.0-mvp-batched, #92 / #93 / #94)
-
-- **`internal/cores` `BatchedApplier`** — per-node delta
-  queue with `CancelReplace` semantics (an `add_user`
-  followed by a `remove_user` for the same `UserID`
-  within the window is a no-op). 20s window, 1000 max
-  queue. `FlushFn` callback. The `cmd/aegis-agent` /
-  apply transport is wired through the new
-  `Provider.Configure(nodes, httpClient)` pattern. Closes #92.
-- **`cmd/aegis-agent` real `/v1/apply` handler** —
-  `writeAtomic` (write to temp + fsync + `os.Rename`),
-  `runReload` (subprocess via `exec.CommandContext`,
-  no shell — `strings.Fields(reloadCmd)`), and
-  `applyEnvelope` / `applyResponse` with `reloaded: bool`,
-  plus `reload_took_ms: int64`. Closes #93.
-- **`deploy/ansible/roles/install_singbox/`** — pins
-  sing-box 1.14.0-beta.2, hard-coded SHA-256
-  `f68715815741e59f25e32904cabcd5924a0461a910d8e9c9612512b957709ef4`.
-  Playbook order: `bootstrap` → `install_caddy` →
-  `install_fail2ban` → `install_singbox` →
-  `install_agent` → `setup_decoy` (install_singbox
-  comes before install_agent because the agent's env
-  file references `/etc/sing-box/config.json`). Closes #94.
-
-### Added (v0.4.0-d, #95 / #96 / #97 / #99 / #100)
-
-- **`internal/users` data layer** — the new home for the
-  end-user CRUD surface (User + Status enum + Create /
-  Update / Delete / RotateSubToken + MemoryStore +
-  PgStore). 32-byte / 64-hex-char `sub_token` (d.1
-  bumped from 16/32 for higher entropy). Closes #95.
-- **`users.User` wire-format compat** with
-  `subscription.User` — both Go types have identical
-  JSON shape (snake_case fields, `[]uuid.UUID` for
-  hosts allow/block lists). Makes the d.r2 → d.r3
-  move possible without render-code churn. Closes #96.
-- **Drop subscription-side user-CRUD** — `Store`,
-  `MemoryStore`, `PgStore` no longer carry the 7
-  user-CRUD methods. The 4 Service-level thin
-  wrappers (`GetUserBySubToken` / `RotateSubToken` /
-  `CreateUser` / `ListUsers`) carry the work
-  temporarily. Closes #97.
-- **Move `admin_handler.go` to `users`** — the
-  user-CRUD admin surface (mounted at `/api/v1/users`)
-  lives in `internal/users/admin_handler.go` now. The
-  Service-level thin wrappers are gone; the render
-  handler consults `*users.Service` directly for the
-  sub_token lookup. Closes #99.
-- **Cleanup pass + roadmap** — `DefaultSubTokenRotationGrace`
-  is now a public package constant on `users` (was a
-  magic-number literal). `docs/ROADMAP.md` documents
-  the v0.4.0-d Path C status, v0.5.0 polish, v0.6.0 plans,
-  v0.7.0 webhooks, v1.0.0-mvp-soft-launch GA, and the 9
-  open-gap packages. `.markdownlint.json` disables
-  `MD060` (the default "aligned" table style is fragile
-  under PR review). Closes #100.
-
-### Behaviour changes (v0.4.0-d)
-
-- **`sub_token` is now 64 hex chars (32 bytes)**, not
-  32 hex chars (16 bytes). The d.1 design bumped from
-  16 bytes to 32 bytes of entropy. Existing fixtures
-  in `internal/users/*_test.go` and the integration
-  tests updated.
-- **`RotateSubToken` grace semantics changed** —
-  `grace <= 0` no longer invalidates the prev token
-  immediately. The d.1 `users.Service.RotateSubToken`
-  maps `grace <= 0` to the canonical 24h default
-  (matching the 3X-UI convention). The pre-existing
-  test that asserted the d.0 behaviour was rewritten
-  as a documentation test.
 
 ## [0.3.0-mvp-byo-node] - 2026-07-23
 
