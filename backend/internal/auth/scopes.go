@@ -204,4 +204,24 @@ type Store interface {
 	// the CLI). v0.3 splits the two error types if the
 	// audit log UI needs a "user not found" 404.
 	LookupByUsername(ctx context.Context, username string) (*User, error)
+
+	// GetByID returns the user with the given ID, or
+	// ErrUnauthorised if no such user exists or the user
+	// is disabled. The "not found" / "disabled" collapse
+	// matches LookupUser: a /me 401 should be
+	// indistinguishable from a /me 404 in the wire
+	// response (only "no claims" is a true 401). The
+	// collapsed error is mapped to 401 by the HTTP
+	// middleware. Used by Service.Me and the refresh
+	// path: the JWT claims' Subject is the user's ID,
+	// not the username, so this is the canonical
+	// "resolve a token back to a user" call.
+	//
+	// Added in v0.8.2 to fix the /me 500 on the pg
+	// backend. Pre-v0.8.2, Service.lookupByID used a
+	// type-asserted walk on MemoryStore, which fell
+	// through to "only supported for MemoryStore" on
+	// PgStore. The interface method makes the call
+	// site a no-op regardless of the underlying store.
+	GetByID(ctx context.Context, id string) (*User, error)
 }
