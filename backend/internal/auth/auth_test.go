@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // newTestService returns a Service backed by an in-memory store
@@ -326,5 +328,68 @@ func TestChangePassword(t *testing.T) {
 	// New password must work.
 	if _, err := svc.Login(context.Background(), "admin", newPassword); err != nil {
 		t.Fatalf("new password does not work after ChangePassword: %v", err)
+	}
+}
+
+// TestMemoryStore_GetByID exercises the MemoryStore
+// implementation of Store.GetByID directly. v0.8.2
+// lifts the walk from Service.lookupByID into
+// MemoryStore; the test pins the contract that a
+// known ID returns the matching user and a missing
+// ID returns ErrUnauthorised.
+func TestMemoryStore_GetByID(t *testing.T) {
+	store := NewMemoryStore().WithUser(&User{
+		ID:       "u-1",
+		Username: "admin",
+		Scopes:   Scopes{ScopeAdmin},
+	})
+	u, err := store.GetByID(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if u.ID != "u-1" || u.Username != "admin" {
+		t.Fatalf("got %+v, want u-1/admin", u)
+	}
+	if _, err := store.GetByID(context.Background(), "u-does-not-exist"); !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("missing id: got %v, want ErrUnauthorised", err)
+	}
+}
+
+// TestService_Me_LookupByID exercises the canonical
+// /me call path: the Service takes a Claims whose
+// Subject is a user ID, resolves it through the
+// Store, and returns the matching *User. Pre-v0.8.2
+// this test passed only on MemoryStore (because
+// Service.lookupByID type-asserted to *MemoryStore);
+// the v0.8.2 fix makes the call store-agnostic. The
+// MemoryStore-side test is the cheap regression; the
+// matching PgStore coverage lives in
+// pg_store_integration_test.go (TestPgStore_MeStyleLookup).
+func TestService_Me_LookupByID(t *testing.T) {
+	svc := newTestService(t)
+	claims := &Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "u-1"}}
+	u, err := svc.Me(context.Background(), claims)
+	if err != nil {
+		t.Fatalf("me: %v", err)
+	}
+	if u.ID != "u-1" || u.Username != "admin" {
+		t.Fatalf("got %+v, want u-1/admin", u)
+	}
+}
+
+// TestService_Me_LookupByID_Unknown confirms the
+// ErrUnauthorised collapse: a Claims whose Subject
+// does not match a row returns ErrUnauthorised, NOT
+// a generic "lookup failed" error. The handler maps
+// ErrUnauthorised to 401; a generic error would map
+// to 500. The collapse is the contract that keeps
+// the /me wire response indistinguishable from a
+// "no claims" /me 401.
+func TestService_Me_LookupByID_Unknown(t *testing.T) {
+	svc := newTestService(t)
+	claims := &Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "u-does-not-exist"}}
+	_, err := svc.Me(context.Background(), claims)
+	if !errors.Is(err, ErrUnauthorised) {
+		t.Fatalf("me: got %v, want ErrUnauthorised", err)
 	}
 }

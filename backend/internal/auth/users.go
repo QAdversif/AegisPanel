@@ -203,6 +203,26 @@ func (m *MemoryStore) LookupByUsername(ctx context.Context, username string) (*U
 	return m.LookupUser(ctx, username)
 }
 
+// GetByID implements Store. Walks the username map
+// to find the user with the given ID. Phase 0 only
+// has 1-3 users; this is fine. The same "not found"
+// collapse as LookupUser applies (ErrUnauthorised on
+// miss). The user struct is returned by reference; the
+// caller is expected NOT to mutate it (the canonical
+// callers — Service.Me and Service.Refresh — pass it
+// to VerifyPassword which is a const method, then to
+// issuePair which reads the immutable fields).
+func (m *MemoryStore) GetByID(_ context.Context, id string) (*User, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, u := range m.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, ErrUnauthorised
+}
+
 // ListUsers implements Store. Returns a copy of every
 // User the store knows about, sorted by username for
 // deterministic output.
