@@ -65,11 +65,7 @@
 package bootstrap
 
 import (
-	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -78,7 +74,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/ssh"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
@@ -377,7 +372,7 @@ func (s *Service) Provision(
 		// the rotation step is a no-op;
 		// the password remains one-shot).
 		if s.envelope != nil {
-			postInstallHook = s.buildPersistentSSHKeyHook(ctx, row.ID, row.Name)
+			postInstallHook = s.buildPersistentSSHKeyHook(row.ID, row.Name)
 		}
 	}
 	// 2. Run the installer. The result is
@@ -549,171 +544,23 @@ func claimsFromClaims(c *auth.Claims) string {
 // post-install hook (the function shape
 // expected by InstallInput.PostInstallHook)
 // that runs at the end of a successful
-// password-based install. The hook:
+// password-based install. The hook delegates
+// to Service.generateAndPushKey (the shared
+// body) and wraps the error with the
+// "post-install-hook:" prefix the provisioner
+// state machine keys on for the failure stage.
 //
-//  1. Generates a fresh ed25519 keypair on
-//     the panel side.
-//  2. Marshals the private key to OpenSSH
-//     PEM and seals it with the operator's
-//     age envelope (see
-//     internal/crypto/envelope, PR #177).
-//  3. Persists the ciphertext via
-//     SetSSHPrivateKeyCiphertext so the
-//     next re-provision can decrypt and
-//     reuse the same key without the
-//     operator re-pasting a password.
-//  4. Uploads the public key to a temp
-//     path on the node via SFTP and then
-//     runs a constant shell command (no
-//     string interpolation) that copies
-//     the key into
-//     $HOME/.ssh/authorized_keys with the
-//     correct mode. The constant command
-//     keeps the gosec G204 (sub-shell
-//     injection) check happy: the command
-//     is built at compile time and never
-//     touches operator-controlled bytes.
-//
-// The hook runs while the SSH client is
-// still connected, so no second dial is
-// needed. A failure at any step fails the
-// install at the `post-install-hook` stage
-// (recorded in the audit log by the
-// provisioner) and the agent is left
-// un-initialised — the operator's "retry"
-// button restarts the install with the same
-// password and a new keypair is generated.
-//
-// nodeName is folded into the SSH key
-// comment ("aegis-panel@node-<name>") so
-// the operator's `ssh-add -L` output is
-// self-documenting in a multi-node fleet.
+// The "what this does" docstring lives on
+// generateAndPushKey in rotate_panel_key.go;
+// this wrapper exists only to keep the
+// post-install hook's call site stable.
 func (s *Service) buildPersistentSSHKeyHook(
-	_ context.Context,
 	nodeID uuid.UUID,
 	nodeName string,
 ) func(ctx context.Context, c Client) error {
 	return func(ctx context.Context, c Client) error {
-		// 1. Generate ed25519 keypair.
-		pub, priv, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return fmt.Errorf("post-install-hook: ed25519.GenerateKey: %w", err)
-		}
-		// 2. Marshal private to OpenSSH PEM.
-		// The comment is informational only
-		// (the SSH client never sends it back
-		// to the server); it shows up in
-		// `ssh-add -L` and in the agent's
-		// debug logs.
-		privPEMBlock, err := ssh.MarshalPrivateKey(priv, "aegis-panel@node-"+nodeName)
-		if err != nil {
-			return fmt.Errorf("post-install-hook: ssh.MarshalPrivateKey: %w", err)
-		}
-		privPEM := pem.EncodeToMemory(privPEMBlock)
-		// 3. Marshal public to authorized_keys
-		// line. ssh.MarshalAuthorizedKey returns
-		// "<key-type> <base64> <comment>\n" —
-		// the trailing newline is trimmed so
-		// the per-line `grep -qxF` idempotency
-		// check on the remote side matches the
-		// line shape we upload.
-		sshPub, err := ssh.NewPublicKey(pub)
-		if err != nil {
-			return fmt.Errorf("post-install-hook: ssh.NewPublicKey: %w", err)
-		}
-		pubLine := bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub))
-		// 4. Encrypt private key.
-		cipher, err := s.envelope.Encrypt(privPEM)
-		if err != nil {
-			return fmt.Errorf("post-install-hook: envelope encrypt: %w", err)
-		}
-		// 5. Persist ciphertext. The hook runs
-		// BEFORE the post-install verify, so a
-		// SetSSHPrivateKeyCiphertext error
-		// here does not leave the agent in a
-		// half-installed state — the verify
-		// probe is the next step and would
-		// fail anyway.
-		if err := s.nodes.SetSSHPrivateKeyCiphertext(ctx, nodeID, cipher); err != nil {
-			return fmt.Errorf("post-install-hook: persist ciphertext: %w", err)
-		}
-		// 6. Push public key. We upload the
-		// single line to a fixed temp path
-		// on the node via SFTP (the bytes
-		// are written verbatim, so there
-		// is no shell-quoting concern), then
-		// run a CONSTANT shell command (no
-		// string interpolation) that ensures
-		// $HOME/.ssh exists with mode 0700,
-		// creates authorized_keys with mode
-		// 0600 if it does not exist,
-		// idempotently appends the uploaded
-		// line, and removes the temp file.
-		// The `grep -qxF` check makes the
-		// append idempotent on retry: a key
-		// that is already in the file is
-		// left untouched.
-		//
-		// The fixed path is safe because the
-		// provisioner state machine forbids
-		// concurrent provisions of the same
-		// node (a node is `new` -> `online`
-		// or `offline`; the state machine
-		// rejects a re-provision from
-		// `online`). On retry from `offline`
-		// the previous temp file is left
-		// behind but the `rm -f` at the end
-		// of the new run cleans it up.
-		//
-		// The remote command is a constant
-		// string — the public key is in a
-		// file, not interpolated. gosec G204
-		// (sub-shell injection) is satisfied
-		// because the only `Run` argument
-		// here is a compile-time string
-		// literal.
-		const remotePubKeyPath = "/tmp/.aegis-pubkey"
-		// Upload the public key to a local
-		// temp file first, then SFTP it onto
-		// the node. The local file is the
-		// panel-side source-of-truth for the
-		// bytes; we clean it up below.
-		localTmp, err := os.CreateTemp("", "aegis-pubkey-*.pub")
-		if err != nil {
-			return fmt.Errorf("post-install-hook: local temp: %w", err)
-		}
-		localPath := localTmp.Name()
-		defer func() { _ = os.Remove(localPath) }()
-		if _, err := localTmp.Write(pubLine); err != nil {
-			_ = localTmp.Close()
-			return fmt.Errorf("post-install-hook: local write: %w", err)
-		}
-		if err := localTmp.Close(); err != nil {
-			return fmt.Errorf("post-install-hook: local close: %w", err)
-		}
-		if err := c.Upload(ctx, localPath, remotePubKeyPath, 0o600); err != nil {
-			return fmt.Errorf("post-install-hook: sftp upload: %w", err)
-		}
-		// The remote command is a constant
-		// string — the public key is in a
-		// file, not interpolated. gosec G204
-		// (sub-shell injection) is satisfied
-		// because the only `Run` argument
-		// here is a compile-time string
-		// literal.
-		const cmd = "set -e\n" +
-			"install -d -m 0700 \"$HOME/.ssh\"\n" +
-			"touch \"$HOME/.ssh/authorized_keys\"\n" +
-			"chmod 0600 \"$HOME/.ssh/authorized_keys\"\n" +
-			"PUBKEY_FILE=\"/tmp/.aegis-pubkey\"\n" +
-			"if [ -f \"$PUBKEY_FILE\" ]; then\n" +
-			"  if ! grep -qxF \"$(cat \"$PUBKEY_FILE\")\" \"$HOME/.ssh/authorized_keys\" 2>/dev/null; then\n" +
-			"    cat \"$PUBKEY_FILE\" >> \"$HOME/.ssh/authorized_keys\"\n" +
-			"  fi\n" +
-			"  rm -f \"$PUBKEY_FILE\"\n" +
-			"fi\n"
-		if _, err := c.Run(ctx, cmd); err != nil {
-			return fmt.Errorf("post-install-hook: append authorized_keys: %w", err)
+		if err := s.generateAndPushKey(ctx, nodeID, nodeName, c, s.envelope); err != nil {
+			return fmt.Errorf("post-install-hook: %w", err)
 		}
 		return nil
 	}

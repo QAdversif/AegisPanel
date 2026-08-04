@@ -319,6 +319,14 @@ func runAdmin(args []string) {
 		runAdminPasswd(ctx, svc, args[1:])
 	case "list":
 		runAdminList(ctx, svc)
+	case "node":
+		// v0.8.3: the node subcommand namespace
+		// ships the first subcommand
+		// (`rotate-panel-key`) for the v0.3.0..v0.7.x
+		// re-provision path. The implementation
+		// lives in admin_node.go; the dispatcher
+		// here is the routing shim.
+		runAdminNode(ctx, args[1:])
 	default:
 		adminUsage()
 		os.Exit(2)
@@ -550,14 +558,16 @@ func promptPassword(prompt string) (string, error) {
 }
 
 func adminUsage() {
-	fmt.Fprintln(os.Stderr, "usage: aegis admin <add|passwd|list> [args]")
+	fmt.Fprintln(os.Stderr, "usage: aegis admin <add|passwd|list|node> [args]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  aegis admin add     <username> --email <email> [--role <role>]")
 	fmt.Fprintln(os.Stderr, "  aegis admin passwd  <username>")
 	fmt.Fprintln(os.Stderr, "  aegis admin list")
+	fmt.Fprintln(os.Stderr, "  aegis admin node    <rotate-panel-key>")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "The store is selected from AEGIS_AUTH_BACKEND (memory | pg).")
-	fmt.Fprintln(os.Stderr, "The pg path requires AEGIS_POSTGRES_DSN.")
+	fmt.Fprintln(os.Stderr, "The auth store is selected from AEGIS_AUTH_BACKEND (memory | pg).")
+	fmt.Fprintln(os.Stderr, "The auth pg path requires AEGIS_POSTGRES_DSN.")
+	fmt.Fprintln(os.Stderr, "The node subcommand requires AEGIS_POSTGRES_DSN (no memory path).")
 }
 
 // singboxWiring is the v0.5.0 glue that connects the
