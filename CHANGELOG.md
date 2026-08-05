@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (v0.8.6 — JSON logs in production, hardened)
+
+- **Config guard for `AEGIS_ENV` + `pg` backends.**
+  `Config.validate()` now refuses to boot when
+  `AEGIS_ENV` is the `development` default AND any
+  `AEGIS_*_BACKEND` is set to `pg`. The rule exists
+  to convert a silent misconfiguration into a loud
+  boot-time error: a pg-backed install is
+  production-shaped by definition, the colourised
+  `ConsoleWriter` is opaque to a log shipper, and
+  a panel that boots without an explicit
+  `AEGIS_ENV=production` is leaving every log line
+  un-parseable. The error names the env var the
+  operator must set (`AEGIS_ENV=production` or
+  `AEGIS_ENV=staging`) and notes that a memory-only
+  dev install does not need the flag. The pure-memory
+  dev path (`go run ./cmd/aegis` with no env setup)
+  is unaffected. The shipped panel image bakes
+  `AEGIS_ENV=production` into the Dockerfile
+  (existing behaviour); the guard fires only on a
+  container that overrides the env to `development`
+  via an env-file entry — exactly the
+  silent-misconfig shape the rule is meant to
+  catch.
+- **`Config.usesAnyPgBackend()` helper** —
+  hard-OR across the eleven `AEGIS_*_BACKEND` fields
+  (`Auth` / `Hosts` / `Nodes` / `Inbounds` /
+  `Subscription` / `Users` / `Plans` / `Webhooks` /
+  `Panelcfg` / `Audits` / `Credentials`). A single
+  pg surface is enough to classify the install as
+  "production-shaped" for the log-format guard.
+- **7 unit tests** in
+  `backend/internal/config/config_test.go` (new file):
+  `TestValidate_AllMemory_DevelopmentEnv_Passes`
+  (the pure-dev happy path), `TestValidate_DevelopmentEnv_WithAuthPg_Refused` /
+  `TestValidate_DevelopmentEnv_WithAuditsPg_Refused`
+  (single-pg-backend refusal), `TestValidate_StagingEnv_WithPg_Passes` /
+  `TestValidate_ProductionEnv_WithPg_Passes` (explicit
+  env values bypass the guard), `TestValidate_InvalidEnv_StillRefused`
+  (the pre-existing env-var switch keeps working),
+  `TestValidate_DevelopmentEnv_WithEveryPg_Refused`
+  (all-pg + dev default is the headline refusal
+  shape), and `TestUsesAnyPgBackend_ExhaustiveSweep`
+  (12 sub-tests that flip each backend to `pg` in
+  turn and assert the helper reports `true` —
+  catches a future regression where a new
+  `*Backend` field is added to `Config` but the
+  helper is forgotten).
+- **Operator guide** — `docs/operator-guide.md` Logs
+  section now documents the v0.8.6 guard explicitly,
+  including the boot-time error message, the
+  reasoning (pg + colourised writer is a silent
+  misconfig), and the three-env-values
+  matrix (`production` baked by the Dockerfile,
+  `staging` for pre-prod drills, `development` for
+  memory-only dev).
+
+### Tests
+
+- **`backend/internal/config/config_test.go`** —
+  8 top-level test functions, 18 sub-tests total
+  (counting the 12 backend permutations inside
+  `TestUsesAnyPgBackend_ExhaustiveSweep`). All
+  pass on `go test ./internal/config/`. The
+  pre-existing `internal/obs` and `internal/app`
+  test suites are unaffected (the memory-backend
+  dev path they exercise is exactly the path
+  the guard explicitly does NOT cover).
+
+### Security shape
+
+- The guard fails closed: a pg-backed install
+  with the development default cannot boot.
+  The previous behaviour was to boot successfully
+  and emit colourised, un-parseable log lines —
+  a silent failure mode for any operator running
+  a log shipper downstream.
+- The pure-memory dev path is unchanged.
+- The error message is loud and actionable
+  (names the env var + the two fix values)
+  so an operator who hits it on a fresh deploy
+  knows exactly what to set.
+
+## [0.8.5] - 2026-08-05
+
 ### Added (v0.8.5 — "Show stored key" debug surface in NodesView)
 
 - **New endpoint** `GET /api/v1/nodes/{id}/stored-key`
