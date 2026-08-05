@@ -15,6 +15,7 @@ import type {
   NodeProvisionResponse,
   NodeRotatePanelKeyRequest,
   NodeRotatePanelKeyResponse,
+  NodeStoredKey,
   UUID,
 } from "@/types";
 
@@ -123,5 +124,49 @@ export async function rotateNodePanelKey(
     `/api/v1/nodes/${id}/rotate-panel-key`,
     req,
   );
+  return data;
+}
+
+/**
+ * Read the node's stored panel SSH key surface
+ * (v0.8.5). Wraps
+ * `GET /api/v1/nodes/{id}/stored-key`.
+ *
+ * The endpoint decrypts
+ * `nodes.ssh_private_key_ciphertext` via the
+ * operator's age envelope, derives the public-key
+ * line + SHA-256 fingerprint, and returns the
+ * public surface. The private key never leaves
+ * the panel process.
+ *
+ * The response is always 200 (not 404) — the
+ * `has_stored_key` boolean distinguishes the
+ * "row has a stored key" (true) from the "row
+ * exists but no key yet" (false) case. `new`
+ * nodes that have never been installed via the
+ * v0.8.1+ path return `has_stored_key: false`;
+ * the UI surfaces a "no stored key yet" hint in
+ * that case.
+ *
+ * Throws on 400 (malformed UUID), 404 (node not
+ * found), 500 (panel has no envelope), 502
+ * (stored ciphertext is unreadable — the age
+ * identity has been rotated out of the
+ * operator's reach, or the column was written
+ * with a different envelope version).
+ *
+ * # Audit log
+ *
+ * Every call records a `node.stored-key.read`
+ * audit row with the operator's id from the
+ * JWT claims + the node id. The row is the
+ * "who looked at this row at time T" trail;
+ * the fingerprint is in the response body
+ * (not the audit row) so the operator can
+ * correlate the audit row with the read they
+ * performed.
+ */
+export async function getStoredNodeKey(id: UUID): Promise<NodeStoredKey> {
+  const { data } = await api.get<NodeStoredKey>(`/api/v1/nodes/${id}/stored-key`);
   return data;
 }
