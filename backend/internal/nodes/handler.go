@@ -101,6 +101,30 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler, bootst
 			r.Post("/provision", bootstrapSvc.HandleProvision())
 			r.Post("/rotate-panel-key", bootstrapSvc.HandleRotatePanelKey())
 		}
+		// v0.8.7: refresh-agent-bearer
+		// (operator-side recovery path for
+		// the agent bearer). The handler
+		// lives on `nodes.Service` (not
+		// on the bootstrap service)
+		// because the work — decrypt
+		// stored key + SSH + read
+		// agent.env + update
+		// `nodes.agent_bearer` — is
+		// fundamentally a node-row
+		// operation. The bootstrap
+		// service is for install /
+		// rotate flows; the refresh
+		// flow is for "the agent I
+		// installed has a stale
+		// bearer; give me the current
+		// one". The route is always
+		// mounted (no `bootstrapSvc != nil`
+		// gate): the Service is
+		// guaranteed to be wired
+		// (this Router is called with
+		// a non-nil `svc` per the
+		// function signature).
+		r.Post("/refresh-agent-bearer", svc.handleRefreshAgentBearer())
 	})
 	return r
 }

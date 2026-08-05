@@ -157,6 +157,39 @@ export interface NodeRotatePanelKeyResponse {
   fingerprint: string;
 }
 
+// NodeRefreshAgentBearerRequest is the v0.8.7
+// request body for
+// `POST /api/v1/nodes/{id}/refresh-agent-bearer`.
+// The body is optional; the field defaults are
+// the service-wide `AEGIS_AGENT_SSH_USER` for
+// `ssh_user`, the node's stored `Address` for
+// the host + port, and 30s for `timeout`. The
+// Go-side handler accepts an empty body; the
+// UI's dialog sends `{}` (no fields set) by
+// default. A future PR can wire the dialog
+// to a real form for the override case.
+export interface NodeRefreshAgentBearerRequest {
+  ssh_port?: number;
+  ssh_user?: string;
+}
+
+// NodeRefreshAgentBearerResponse is the v0.8.7
+// 200 body. The `bearer` field is the new
+// agent bearer (the value the panel will use
+// for subsequent `POST /v1/apply` calls to
+// the agent); the operator can verify it on
+// the node by `cat`-ing /etc/aegis/agent.env.
+// The `key_fingerprint` is the SHA-256 of the
+// public key derived from the stored private
+// key (same string `ssh-keygen -lf` reports),
+// so the operator can verify the refresh used
+// the key they expect.
+export interface NodeRefreshAgentBearerResponse {
+  node_id: UUID;
+  bearer: string;
+  key_fingerprint: string;
+}
+
 // NodeStoredKey is the v0.8.5 read-side mirror
 // of the v0.8.1 persistent panel SSH key
 // feature. The panel decrypts

@@ -7,12 +7,23 @@
 // v0.8.4 adds rotateNodePanelKey (the HTTP mirror
 // of the v0.8.3 `aegis admin node rotate-panel-key`
 // CLI; backed by `internal/bootstrap.HandleRotatePanelKey`).
+//
+// v0.8.7 adds refreshNodeAgentBearer (the
+// operator-side recovery path for the agent
+// bearer; the panel decrypts the stored
+// panel SSH key, SSHes into the node,
+// reads /etc/aegis/agent.env, parses
+// AEGIS_AGENT_BEARER, and updates
+// nodes.agent_bearer; backed by
+// `internal/nodes.Service.RefreshAgentBearer`).
 
 import type {
   Node,
   NodeCreateRequest as NodeCreateRequestBase,
   NodeProvisionRequest,
   NodeProvisionResponse,
+  NodeRefreshAgentBearerRequest,
+  NodeRefreshAgentBearerResponse,
   NodeRotatePanelKeyRequest,
   NodeRotatePanelKeyResponse,
   NodeStoredKey,
@@ -122,6 +133,30 @@ export async function rotateNodePanelKey(
 ): Promise<NodeRotatePanelKeyResponse> {
   const { data } = await api.post<NodeRotatePanelKeyResponse>(
     `/api/v1/nodes/${id}/rotate-panel-key`,
+    req,
+  );
+  return data;
+}
+
+// v0.8.7 adds refreshNodeAgentBearer (the
+// operator-side recovery path for the
+// agent bearer; the panel decrypts the
+// stored panel SSH key, SSHes into the
+// node, reads /etc/aegis/agent.env,
+// parses AEGIS_AGENT_BEARER, and updates
+// nodes.agent_bearer).
+/**
+ * Throws on 400 (malformed body), 404
+ * (node not found), 409 (no stored key —
+ * rotate-panel-key first), 500 (panel
+ * wiring missing), 502 (SSH-side failure).
+ */
+export async function refreshNodeAgentBearer(
+  id: UUID,
+  req: NodeRefreshAgentBearerRequest,
+): Promise<NodeRefreshAgentBearerResponse> {
+  const { data } = await api.post<NodeRefreshAgentBearerResponse>(
+    `/api/v1/nodes/${id}/refresh-agent-bearer`,
     req,
   );
   return data;

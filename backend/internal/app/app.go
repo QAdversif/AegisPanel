@@ -331,6 +331,23 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	// the panel main does, so the production
 	// shape is identical on both sides.
 	a.Nodes.WithEnvelope(cipher)
+	// v0.8.7: wire the v0.8.7
+	// refresh-agent-bearer dependencies.
+	// The handler refuses to run when
+	// the SSH client factory is nil
+	// (returns 500 "SSH client
+	// factory is not configured"), so
+	// the production wiring must call
+	// this setter at boot. The same
+	// `bootstrap.NewClient` is used by
+	// the v0.3.0 install path and the
+	// v0.8.4 rotate-panel-key handler;
+	// sharing the constructor means a
+	// single round of TOFU + known_hosts
+	// logic serves every SSH path.
+	a.Nodes.WithSSHClientFactory(bootstrap.NewClient)
+	a.Nodes.WithKnownHosts(cfg.AgentKnownHosts)
+	a.Nodes.WithSSHUser(cfg.AgentSSHUser)
 
 	// 10. Wire the v0.7.x outbound event surface
 	//     into every mutating service. The setter
