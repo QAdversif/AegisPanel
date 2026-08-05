@@ -412,5 +412,48 @@ func (c *Config) validate() error {
 	if len(c.JWTSecret) < 32 {
 		return fmt.Errorf("AEGIS_JWT_SECRET must be at least 32 characters")
 	}
+	// v0.8.6 ops guard: a panel that talks to a real
+	// PostgreSQL for any of its services is, by
+	// definition, not a "I forgot to set AEGIS_ENV"
+	// dev-mode boot. The development default
+	// (`envDefault:"development"`) is a colourised
+	// ConsoleWriter that a log shipper cannot parse,
+	// so a pg-backed install that runs without an
+	// explicit env value is silently producing
+	// un-parseable logs. Force the operator to make
+	// the choice: `AEGIS_ENV=production` for the
+	// shipped panel image, `AEGIS_ENV=staging` for
+	// pre-prod drills. A pure-memory dev install
+	// (the test fixture, the `go run ./cmd/aegis`
+	// first-boot exploration) still boots fine.
+	if c.Env == "development" && c.usesAnyPgBackend() {
+		return fmt.Errorf(
+			"AEGIS_ENV=development is not allowed when any AEGIS_*_BACKEND=pg " +
+				"(set AEGIS_ENV=production or AEGIS_ENV=staging to confirm logging intent; " +
+				"a memory-only dev install does not need this flag)")
+	}
 	return nil
+}
+
+// usesAnyPgBackend reports whether the panel is configured
+// to talk to a real PostgreSQL for at least one of its
+// persistence surfaces. The function is intentionally a
+// hard OR across every `*Backend` field — a single pg
+// surface (e.g. AEGIS_AUDITS_BACKEND=pg) is enough to
+// classify the install as "production-shaped" for the
+// purpose of the v0.8.6 log-format guard. The function
+// has no opinion on BatchedApplier / retry-worker flags;
+// those are runtime toggles, not persistence choices.
+func (c *Config) usesAnyPgBackend() bool {
+	return c.AuthBackend == "pg" ||
+		c.HostsBackend == "pg" ||
+		c.NodesBackend == "pg" ||
+		c.InboundsBackend == "pg" ||
+		c.SubscriptionBackend == "pg" ||
+		c.UsersBackend == "pg" ||
+		c.PlansBackend == "pg" ||
+		c.WebhooksBackend == "pg" ||
+		c.PanelcfgBackend == "pg" ||
+		c.AuditsBackend == "pg" ||
+		c.CredentialsBackend == "pg"
 }

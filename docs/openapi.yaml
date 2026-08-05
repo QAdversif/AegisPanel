@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aegis Panel API
-  version: 0.8.1
+  version: 0.8.6
   description: |
     Aegis — self-hosted VPN control panel. Multi-core (sing-box / Xray /
     Hysteria 2), BYO Node, Cascade Topology, MCP-driven, decoy sites,

@@ -170,13 +170,6 @@ handful of dialogs) carry pre-existing eslint warnings for
 auto-fixable with `eslint . --fix`; not in scope for any
 release PR. v0.7.0-legacy chore.
 
-#### JSON logs in production — v0.8.x
-
-`AEGIS_ENV=production` switch is still the v0.5.x
-follow-up. The `internal/obs` package has the right
-code; the wiring in `cmd/aegis/main.go` is the
-one-liner that was deferred from v0.5.0. v0.8.x.
-
 #### Cosign re-signing on every release — v0.8.x
 
 v0.7.0 closed the `latest` tag + cosign sign/verify
@@ -199,11 +192,16 @@ These items are tracked in `docs/ROADMAP.md` and
 `docs/README.md` for context. None block v0.8.0 or
 the v1.0.0-mvp-soft-launch.
 
-- **JSON logs in production** — `AEGIS_ENV=production`
-  switch is still the v0.5.x follow-up. The
-  `internal/obs` package has the right code; the
-  wiring in `cmd/aegis/main.go` is the one-liner that
-  was deferred from v0.5.0. v0.8.x.
+- **JSON logs in production** — closed in v0.8.6
+  (config-level guard for the `AEGIS_ENV=development`
+  with a pg backend, the silent-misconfig shape; see
+  `Config.validate()` and `usesAnyPgBackend()` in
+  `backend/internal/config/config.go` and the
+  `config_test.go` 8-function / 18-subtest suite).
+  The obs-package wiring itself has been in place
+  since v0.5.0-era; the v0.8.6 PR is the guard
+  that converts the silent-misconfig failure mode
+  into a loud boot-time error.
 - **Cosign re-signing on every release** — v0.7.0
   closed the initial sign + verify pair; the
   post-v0.7.0 workflow contract (PRs 102/103/104/111)
