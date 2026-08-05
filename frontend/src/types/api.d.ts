@@ -787,6 +787,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{id}/stored-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read the node's stored panel SSH key surface
+         * @description v0.8.5: the read-side mirror of the
+         *     v0.8.1 persistent panel SSH key
+         *     feature. The endpoint decrypts
+         *     `nodes.ssh_private_key_ciphertext`
+         *     via the operator's age envelope,
+         *     derives the public-key line +
+         *     SHA-256 fingerprint, and returns the
+         *     public surface. The private key
+         *     never leaves the panel process.
+         *
+         *     The response is always 200 (not
+         *     404) — the `has_stored_key` boolean
+         *     distinguishes the "row has a
+         *     stored key" (true) from the "row
+         *     exists but no key yet" (false)
+         *     case. `new` nodes that have never
+         *     been installed via the v0.8.1+
+         *     path return `has_stored_key:
+         *     false`; the UI surfaces a "no
+         *     stored key yet" hint in that case.
+         *
+         *     Every call records a
+         *     `node.stored-key.read` audit row
+         *     with the operator's id from the
+         *     JWT claims + the node id. The
+         *     fingerprint is in the response
+         *     body (not the audit row) so the
+         *     operator can correlate the audit
+         *     row with the read they performed.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Stored key surface (or "no key yet" if has_stored_key is false). */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NodeStoredKey"];
+                    };
+                };
+                /** @description Validation error (malformed UUID) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Node not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Panel was booted without an envelope (AEGIS_WEBHOOKS_SECRET_AGE_*). Operator must fix the panel's env and retry. */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Stored ciphertext is unreadable (decrypt failed — the age identity has been rotated out of the operator's reach, or the column was written with a different envelope version) */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/inbounds": {
         parameters: {
             query?: never;
@@ -3697,6 +3813,85 @@ export interface components {
              *     the key is on the node.
              */
             fingerprint: string;
+        };
+        /**
+         * @description 200 body of `GET /api/v1/nodes/{id}/stored-key`.
+         *     The panel decrypts
+         *     `nodes.ssh_private_key_ciphertext` via the
+         *     operator's age envelope, derives the public-key
+         *     line + SHA-256 fingerprint, and returns the
+         *     public surface. The private key never leaves
+         *     the panel process.
+         *
+         *     `has_stored_key` is false for `new` nodes
+         *     that have never been installed via the
+         *     v0.8.1+ path; the UI surfaces a "no
+         *     stored key yet" hint in that case. The
+         *     `key_updated_at` field is the row's
+         *     `updated_at` — the ciphertext column has
+         *     no independent timestamp, so the
+         *     row-level `updated_at` is the operator's
+         *     "is this the key I think it is" sanity
+         *     check.
+         *
+         *     The OpenSSH key comment
+         *     (`aegis-panel@node-<nodeName>`) is NOT
+         *     a separate field — it is the third
+         *     whitespace-separated token of
+         *     `public_key_line` (the OpenSSH
+         *     authorized_keys format).
+         */
+        NodeStoredKey: {
+            /**
+             * @description True if the row has a stored
+             *     ciphertext. False for `new` nodes
+             *     that have never been installed via
+             *     the v0.8.1+ path; the UI surfaces a
+             *     "no stored key yet" hint in that
+             *     case.
+             */
+            has_stored_key: boolean;
+            /**
+             * @description The OpenSSH authorized_keys line
+             *     derived from the stored ed25519
+             *     private key. Starts with
+             *     `ssh-ed25519 `, followed by the
+             *     base64 payload, followed by the
+             *     comment `aegis-panel@node-<nodeName>`.
+             *     Omitted when `has_stored_key` is
+             *     false.
+             */
+            public_key_line?: string;
+            /**
+             * @description The canonical `SHA256:base64`
+             *     SHA-256 fingerprint of the public
+             *     key. Same format `ssh-keygen -lf`
+             *     outputs. Omitted when
+             *     `has_stored_key` is false.
+             */
+            fingerprint?: string;
+            /**
+             * @description The SSH key type
+             *     (`ssh-ed25519` today; the
+             *     provisioner is hard-coded to
+             *     ed25519 in v0.8.1, but the field
+             *     is in the wire shape so a future
+             *     RSA / ECDSA path does not require a
+             *     UI change). Omitted when
+             *     `has_stored_key` is false.
+             */
+            algorithm?: string;
+            /**
+             * Format: date-time
+             * @description The row's `updated_at` timestamp
+             *     (RFC 3339). The ciphertext column
+             *     has no independent timestamp, so
+             *     the row-level `updated_at` is the
+             *     operator's "is this the key I think
+             *     it is" sanity check. Omitted when
+             *     `has_stored_key` is false.
+             */
+            key_updated_at?: string;
         };
         NodeListResponse: {
             nodes: components["schemas"]["Node"][];

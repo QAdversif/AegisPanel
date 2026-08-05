@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 )
@@ -73,6 +74,16 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler, bootst
 		r.Get("/", svc.handleGet())
 		r.Put("/", svc.handleUpdate())
 		r.Delete("/", svc.handleDelete())
+		// v0.8.5: operator-side debug surface
+		// for the v0.8.1 persistent panel SSH
+		// key. The endpoint decrypts the
+		// stored ciphertext via the age
+		// envelope and returns the public-key
+		// line + SHA-256 fingerprint. See
+		// `handleGetStoredKey` above for
+		// the security shape and error
+		// mapping.
+		r.Get("/stored-key", svc.handleGetStoredKey())
 		// v0.3.0: BYO-Node bootstrap. The
 		// handler is mounted only when the
 		// bootstrap service is wired; in the
@@ -234,6 +245,126 @@ func (s *Service) handleGet() http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, n)
 	}
+}
+
+// handleGetStoredKey returns the v0.8.5
+// operator-side debug surface for the
+// node's stored panel SSH key. The
+// endpoint decrypts `nodes.ssh_private_key_ciphertext`
+// via the service's age envelope, derives
+// the public-key line + SHA-256 fingerprint,
+// and returns the public surface. The
+// private key never leaves the panel
+// process.
+//
+// The endpoint is mounted on the same
+// `/api/v1/nodes/{id}` subrouter as the
+// regular CRUD endpoints; the route is
+// `GET /api/v1/nodes/{id}/stored-key`.
+// The `ScopeNodes` enforcement from the
+// parent router is the only auth gate
+// (no separate scope is needed — the
+// stored-key read is the same trust
+// boundary as the node CRUD).
+//
+// # Error mapping
+//
+//   - 200: stored key (or no-key) is read
+//   - 400: malformed UUID
+//   - 404: node row not found
+//   - 500: panel booted without an envelope
+//     (the same fail-closed shape as
+//     `POST /{id}/rotate-panel-key`; the
+//     operator must set
+//     `AEGIS_WEBHOOKS_SECRET_AGE_*` and
+//     restart the panel to use this
+//     surface)
+//   - 502: stored ciphertext is unreadable
+//     (decrypt failed — the age identity has
+//     been rotated out of the operator's
+//     reach, or the column was written with
+//     a different envelope version)
+//
+// # Audit log
+//
+// The read is recorded as
+// `node.stored-key.read` with the actor
+// from the request claims + the node's id
+// and name in the `After` map. The
+// fingerprint is NOT recorded (the audit
+// row is per-server, and a per-fingerprint
+// row would be a 100x write-amplification
+// for a read that may happen frequently).
+// The fingerprint is in the HTTP response
+// body so the operator can correlate the
+// audit row with the read they performed
+// (the audit log UI shows the timestamp +
+// node id, the operator's screen shows the
+// same timestamp + fingerprint).
+func (s *Service) handleGetStoredKey() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseID(w, r)
+		if !ok {
+			return
+		}
+		sk, err := s.GetStoredKey(r.Context(), id)
+		if err != nil {
+			// Differentiate "node not found"
+			// (404) from "envelope not
+			// configured" (500) from "decrypt
+			// failed" (502). The shape mirrors
+			// the v0.8.4 rotate-panel-key
+			// handler so the operator's mental
+			// model is the same across the
+			// two surfaces.
+			if errors.Is(err, ErrNotFound) {
+				writeError(w, http.StatusNotFound, "node not found")
+				return
+			}
+			msg := err.Error()
+			switch {
+			case contains(msg, "envelope is not configured"):
+				writeError(w, http.StatusInternalServerError, msg)
+			case contains(msg, "decrypt stored SSH key"), contains(msg, "parse stored SSH key"):
+				writeError(w, http.StatusBadGateway, msg)
+			default:
+				writeError(w, http.StatusInternalServerError, msg)
+			}
+			return
+		}
+		// Audit. After-the-read ordering: the
+		// decrypt already happened (we are
+		// in the success path now); the audit
+		// row records the fact of the read.
+		// The pattern matches the v0.8.4
+		// rotate-panel-key handler.
+		if s.audits != nil {
+			audits.RecordFromRequest(s.audits, r, audits.Entry{
+				Action:       "node.stored-key.read",
+				ResourceType: "node",
+				ResourceID:   id.String(),
+				After: map[string]any{
+					"has_stored_key": sk.HasStoredKey,
+				},
+			})
+		}
+		writeJSON(w, http.StatusOK, sk)
+	}
+}
+
+// contains is a tiny strings.Contains shim
+// so the error-mapping switch above reads as
+// a one-liner per branch. The standard
+// library's strings.Contains is the right
+// tool, but a local helper keeps the call
+// sites tidy.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) handleCreate() http.HandlerFunc {

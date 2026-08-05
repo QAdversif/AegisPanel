@@ -157,6 +157,39 @@ export interface NodeRotatePanelKeyResponse {
   fingerprint: string;
 }
 
+// NodeStoredKey is the v0.8.5 read-side mirror
+// of the v0.8.1 persistent panel SSH key
+// feature. The panel decrypts
+// `nodes.ssh_private_key_ciphertext` via the
+// age envelope, derives the public-key line
+// + SHA-256 fingerprint, and returns the
+// public surface. The private key never
+// leaves the panel process.
+//
+// `has_stored_key` is false for `new` nodes
+// that have never been installed via the
+// v0.8.1+ path; the UI surfaces a "no stored
+// key yet" hint. The `key_updated_at` field
+// is the row's `updated_at` — the ciphertext
+// column has no independent timestamp, so
+// the row-level `updated_at` is the operator's
+// "is this the key I think it is" sanity
+// check.
+//
+// The OpenSSH key comment
+// (`aegis-panel@node-<nodeName>`) is NOT a
+// separate field — it is the third
+// whitespace-separated token of
+// `public_key_line` (the OpenSSH
+// authorized_keys format).
+export interface NodeStoredKey {
+  has_stored_key: boolean;
+  public_key_line?: string;
+  fingerprint?: string;
+  algorithm?: string;
+  key_updated_at?: ISODateTime;
+}
+
 // ---------------------------------------------------------------------------
 // Inbounds
 // ---------------------------------------------------------------------------

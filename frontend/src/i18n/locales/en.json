@@ -151,7 +151,17 @@
     "rotatePublicKeyLine": "New public key (added to authorized_keys)",
     "rotateFingerprint": "SHA256 fingerprint",
     "rotated": "Panel key rotated on {name}",
-    "rotateFailed": "Could not rotate the panel key"
+    "rotateFailed": "Could not rotate the panel key",
+    "inspect": "Show stored key",
+    "inspectTitle": "Show stored panel key",
+    "inspectDescription": "Read-side mirror of the v0.8.1 persistent key feature. The panel decrypts `nodes.ssh_private_key_ciphertext` via the age envelope, derives the public-key line + SHA-256 fingerprint, and returns the public surface. The private key never leaves the panel process. The read is recorded in the audit log as `node.stored-key.read`.",
+    "inspectLoading": "Loading stored key…",
+    "inspectNoKey": "This node has no stored panel key yet.",
+    "inspectNoKeyHint": "The first password-based install (v0.8.1+) generates one; the v0.8.3 CLI `aegis admin node rotate-panel-key <node-uuid>` back-fills legacy v0.3.0..v0.7.x nodes.",
+    "inspectSurfaceTitle": "Stored key",
+    "inspectSurfaceHelp": "The private key stays in the panel process; only the public surface is shown. Compare the SHA256 fingerprint against `ssh-keygen -lf /etc/aegis/authorized_keys` on the node to verify the key is what the panel has on file.",
+    "inspectKeyUpdatedAt": "Row last updated",
+    "inspectFailed": "Could not load the stored key"
   },
   "inbounds": {
     "title": "Inbounds",
