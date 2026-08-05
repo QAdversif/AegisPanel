@@ -369,6 +369,42 @@ The panel uses zerolog with two output modes:
 - **Production** (`AEGIS_ENV=production`): JSON to stdout, one
   record per line. Pipe into your log shipper.
 
+**v0.8.6 ops guard.** The shipped panel image bakes
+`AEGIS_ENV=production` into the Dockerfile so the JSON
+writer is the default out of the box. Two values override
+that:
+
+- `AEGIS_ENV=staging` — same JSON writer, useful for
+  pre-prod drills where you want a "production-shaped"
+  log stream but a non-prod colourised ANSI prompt for
+  local debugging.
+- `AEGIS_ENV=development` — the colourised writer.
+
+The panel **refuses to boot** when `AEGIS_ENV` is the
+default (`development`) AND any `AEGIS_*_BACKEND` is set
+to `pg`. The rule exists because a pg-backed install is
+production-shaped by definition: an operator who flips
+`AEGIS_AUTH_BACKEND=pg` (or any of the eleven backend
+flags) is signalling that the panel talks to a real
+database, and a log shipper downstream is the
+intended consumer of the panel's stderr. A
+human-readable ConsoleWriter in that shape is a silent
+misconfiguration — the panel is up, the requests are
+flowing, but every log line is opaque to the shipper.
+The guard converts that silent failure into a loud
+boot-time error and tells the operator exactly which
+env var to set:
+
+```
+AEGIS_ENV=development is not allowed when any AEGIS_*_BACKEND=pg
+(set AEGIS_ENV=production or AEGIS_ENV=staging to confirm
+logging intent; a memory-only dev install does not need this flag)
+```
+
+The pure-memory dev path (`go run ./cmd/aegis` with no
+env-var setup) is unaffected — the `development` writer
+is exactly what a memory-only dev install wants.
+
 ## Common pitfalls
 
 - **`/etc/aegis/secrets.env` is bind-mounted read-only.** If you
