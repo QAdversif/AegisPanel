@@ -244,3 +244,28 @@ export const nodeRotatePanelKeySchema = z.object({
 });
 
 export type NodeRotatePanelKeyInput = z.infer<typeof nodeRotatePanelKeySchema>;
+
+// v0.8.7: refreshNodeAgentBearer is the
+// operator-side recovery path for the
+// agent bearer. The body is optional;
+// the panel fills in defaults from the
+// node's stored `Address` and the
+// service-wide `cfg.AgentSSHUser`. The
+// schema is `strict()` so unknown
+// fields (e.g. an operator who pastes
+// the v0.8.4 rotate-panel-key shape)
+// fail loudly rather than silently
+// dropping the extra fields.
+export const nodeRefreshAgentBearerSchema = z
+  .object({
+    ssh_port: z
+      .number()
+      .int()
+      .min(1, "ssh_port must be 1..65535")
+      .max(65535, "ssh_port must be 1..65535")
+      .optional(),
+    ssh_user: z.string().max(64).optional(),
+  })
+  .strict();
+
+export type NodeRefreshAgentBearerInput = z.infer<typeof nodeRefreshAgentBearerSchema>;
