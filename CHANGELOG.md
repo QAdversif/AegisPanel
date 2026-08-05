@@ -7,6 +7,213 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (v0.8.7 — refresh-agent-bearer: Service + HTTP + UI)
+
+- **`nodes.Service.RefreshAgentBearer` + `GetStoredKeyForUse`**
+  (the v0.8.7 Service-layer foundation). The
+  two methods are the **use-side** mirror
+  of the v0.8.5 `GetStoredKey` (which is
+  the read-side / debug surface). The
+  flow: `GetStoredKeyForUse` decrypts
+  the stored panel SSH key via the
+  operator's age envelope and returns
+  the OpenSSH PEM private key bytes
+  (caller's responsibility to zero
+  after use). `RefreshAgentBearer` is
+  the high-level recovery path: it
+  opens an SSH session using the
+  stored key + the panel's
+  `known_hosts` (TofuPolicy=Reject;
+  host must already be trusted from
+  a prior v0.3.0 / v0.8.4 install),
+  reads `/etc/aegis/agent.env` on
+  the node, parses
+  `AEGIS_AGENT_BEARER=...`, persists
+  the new bearer to
+  `nodes.agent_bearer`, and records
+  an audit row
+  `node.agent-bearer.refresh`. The
+  recovery fixes the "agent
+  regenerated its bearer
+  out-of-band" case (operator
+  restarted the agent, wiped
+  `/etc/aegis/agent.env`, rotated
+  secrets manually, etc.).
+- **Wiring setters**:
+  `WithSSHClientFactory(fn)`,
+  `WithKnownHosts(path)`,
+  `WithSSHUser(user)`. Same
+  nil-safe pattern as
+  `WithWebhooks` / `WithAudits` /
+  `WithEnvelope`. The
+  `RefreshAgentBearer` call returns
+  500 with a specific error message
+  ("SSH client factory is not
+  configured" / "known_hosts path
+  is not configured") when the
+  corresponding wiring is missing —
+  same fail-closed shape as the
+  v0.8.6 JSON logs guard.
+- **HTTP endpoint**
+  `POST /api/v1/nodes/{id}/refresh-agent-bearer`.
+  Mounted on the existing nodes
+  router (always-on, no
+  `bootstrapSvc != nil` gate;
+  refresh is a node-row operation,
+  not a bootstrap flow). The
+  handler enforces the existing
+  `auth.RequireScope(auth.ScopeNodes)`
+  from the parent router and accepts
+  an optional body
+  (`ssh_port` / `ssh_user` per-call
+  overrides; service-level defaults
+  fill in any omitted field). Error
+  mapping: 400 malformed body, 404
+  node not found, 409 no stored key
+  (with a "rotate-panel-key first"
+  hint in the body), 500 wiring /
+  envelope missing, 502 SSH connect
+  / run / agent.env parse failure.
+  200 body: `{ node_id, bearer,
+  key_fingerprint }` (the new
+  bearer + the SHA-256 fingerprint
+  of the stored panel key, same
+  `ssh-keygen -lf` shape).
+- **Frontend dropdown entry** "Refresh
+  agent bearer" in the NodesView
+  per-row menu. State gate mirrors
+  the v0.8.4 rotate-panel-key entry
+  (hidden for `new`; the no-stored-
+  key HTTP path returns 409 with a
+  "rotate-panel-key first" hint for
+  rows that have a state but no
+  stored key). The dialog is
+  confirm-only: the panel fires the
+  POST on dialog open, the success
+  card carries the new bearer + the
+  stored-key fingerprint for
+  at-a-glance verification. The
+  operator can `cat
+  /etc/aegis/agent.env` on the node
+  to cross-check the new bearer.
+- **Audit row**
+  `node.agent-bearer.refresh` recorded
+  via `audits.RecordFromContext`
+  AFTER the `SetAgentBearer` call
+  (after-the-fact ordering, same as
+  the v0.8.5 `node.stored-key.read`).
+  The audit `After` map carries
+  `node_name`, `address`, `ssh_user`,
+  `key_fingerprint` (SHA-256 of the
+  stored key), and
+  `agent_bearer_bytes` (length only).
+  The bearer itself is NOT in the
+  audit row (per-server, would be
+  100x write-amplification for a
+  value that already lives in the
+  encrypted `agent.env` on the
+  node). The fingerprint in the
+  audit row is the operator's
+  "which key was used" sanity check
+  — the same value surfaces in the
+  HTTP 200 body.
+- **OpenAPI**:
+  `/nodes/{id}/refresh-agent-bearer`
+  endpoint plus the
+  `NodeRefreshAgentBearerRequest`
+  and `NodeRefreshAgentBearerResponse`
+  schemas in `docs/openapi.yaml`;
+  `npm run codegen` auto-regen of
+  `frontend/src/types/api.d.ts`.
+- **i18n strings (en + ru)**: 9 new
+  strings per locale
+  (`nodes.refresh` /
+  `nodes.refreshTitle` /
+  `nodes.refreshDescription` /
+  `nodes.refreshLoading` /
+  `nodes.refreshBearer` /
+  `nodes.refreshFingerprint` /
+  `nodes.refreshResultTitle` /
+  `nodes.refreshResultHelp` /
+  `nodes.refreshed` /
+  `nodes.refreshFailed`).
+
+### Tests
+
+- **30 Service unit tests** in
+  `backend/internal/nodes/refresh_bearer_test.go`:
+  4 `GetStoredKeyForUse`, 6
+  `parseAgentEnvBearer` (with 4
+  sub-tests for forbidden chars),
+  4 `resolveSSHAddress`, 13
+  `RefreshAgentBearer`, plus 3
+  fixture / cross-check tests.
+- **11 HTTP handler tests** in
+  `backend/internal/nodes/handler_refresh_bearer_test.go`:
+  happy path with full audit +
+  SSH lifecycle assertion, all
+  error-mapping cases (400/404/409/
+  500/502), body overrides,
+  known_hosts setter regression
+  check, and a private-key
+  round-trip sanity check.
+
+### Security shape
+
+- The decrypted private key lives
+  in the `GetStoredKeyForUse` stack
+  frame for the duration of the
+  call. The `RefreshAgentBearer`
+  Service method passes the bytes
+  to the SSH client factory
+  immediately; the function
+  returns before the SSH handshake
+  begins. The bytes are NOT cached
+  on the Service.
+- The SSH `Run` output (the
+  `agent.env` file) is parsed for
+  the `AEGIS_AGENT_BEARER` value
+  only; the rest of the file is
+  discarded. The parser is
+  defensive: a missing key, empty
+  value, shell-metacharacters, or
+  over-long value all fail with a
+  specific error.
+- The audit row carries
+  `key_fingerprint` (SHA-256 of
+  the stored key, public
+  information) and
+  `agent_bearer_bytes` (length
+  only). The bearer itself is NOT
+  in the audit row, the log lines,
+  or the response body outside of
+  the `bearer` field.
+- TofuPolicy=Reject is enforced in
+  the factory. The host must
+  already be in the panel's
+  `known_hosts`. A MITM attempt on
+  a refresh fails at the
+  `known_hosts` check.
+
+### Deferred to v0.8.x follow-up
+
+- **BatchedApplier
+  decrypt-and-use integration**.
+  The v0.8.7 PR is the foundation
+  (Service + HTTP + UI); the
+  BatchedApplier's sing-box
+  `FlushFn` does NOT yet call
+  `RefreshAgentBearer` on a 401
+  from `POST /v1/apply`. That
+  integration is a v0.8.x follow-
+  up: it requires changes in
+  `internal/cores/singbox/apply.go`
+  and the wiring helper in
+  `cmd/aegis/main.go`. The work is
+  purely additive on top of v0.8.7.
+
+## [0.8.6] - 2026-08-05
+
 ### Added (v0.8.6 — JSON logs in production, hardened)
 
 - **Config guard for `AEGIS_ENV` + `pg` backends.**

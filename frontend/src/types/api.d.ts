@@ -903,6 +903,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/nodes/{id}/refresh-agent-bearer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh the agent bearer from the node
+         * @description v0.8.7: operator-side recovery path for
+         *     the agent bearer. The flow:
+         *
+         *     1. The panel reads the node's stored
+         *        panel SSH key (the v0.8.1
+         *        persistent key, decrypted via the
+         *        operator's age envelope).
+         *     2. Opens an SSH session to the node
+         *        using the stored key + the
+         *        panel's `known_hosts` file
+         *        (TofuPolicy=Reject; the host must
+         *        already be trusted from a prior
+         *        v0.3.0 / v0.8.4 install).
+         *     3. Runs `cat /etc/aegis/agent.env`
+         *        and parses the
+         *        `AEGIS_AGENT_BEARER=...` line.
+         *     4. Persists the new bearer to
+         *        `nodes.agent_bearer`.
+         *     5. Records a `node.agent-bearer.refresh`
+         *        audit row with the operator's id +
+         *        the node id + the SSH key
+         *        fingerprint (the bearer itself is
+         *        NOT in the audit row — same
+         *        shape as the v0.8.5
+         *        `node.stored-key.read`).
+         *
+         *     The recovery fixes the "agent
+         *     regenerated its bearer out-of-band"
+         *     case: operator restarted the agent,
+         *     wiped `/etc/aegis/agent.env`, rotated
+         *     secrets manually, etc. The next
+         *     `BatchedApplier` apply call uses the
+         *     refreshed bearer; the v0.8.x follow-up
+         *     PRs wire this into a 401 → auto-refresh
+         *     recovery loop (the v0.8.7 PR is the
+         *     Service + HTTP + UI surface; the
+         *     BatchedApplier integration is a
+         *     separate work unit).
+         *
+         *     # Body
+         *     Optional. The `ssh_port` and
+         *     `ssh_user` fields are per-call
+         *     overrides; the service-level defaults
+         *     (and the node's stored `Address`) fill
+         *     in any omitted field.
+         *
+         *     # Errors
+         *       - `400` malformed UUID or body
+         *       - `404` node not found
+         *       - `409` no stored key (the operator
+         *         must `rotate-panel-key` first)
+         *       - `500` panel wiring missing (SSH
+         *         factory, known_hosts path, or age
+         *         envelope not configured)
+         *       - `502` SSH connect / run / agent.env
+         *         parse failure
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["NodeRefreshAgentBearerRequest"];
+                };
+            };
+            responses: {
+                /** @description Agent bearer refreshed. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NodeRefreshAgentBearerResponse"];
+                    };
+                };
+                /** @description Validation error (malformed UUID or malformed body) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Node not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description No stored panel SSH key (rotate-panel-key first) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Panel wiring missing (SSH client factory, known_hosts path, or age envelope not configured) */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description SSH connect / run / agent.env parse failure */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/inbounds": {
         parameters: {
             query?: never;
@@ -3892,6 +4048,70 @@ export interface components {
              *     `has_stored_key` is false.
              */
             key_updated_at?: string;
+        };
+        /**
+         * @description v0.8.7 request body of
+         *     `POST /api/v1/nodes/{id}/refresh-agent-bearer`.
+         *     The body is optional; the field
+         *     defaults are the service-wide
+         *     `AEGIS_AGENT_SSH_USER` for `ssh_user`,
+         *     the node's stored `Address` for the
+         *     host + port, and 30s for `timeout`.
+         */
+        NodeRefreshAgentBearerRequest: {
+            /**
+             * @description Per-call SSH port override. Zero
+             *     (omitted) means "use the node's
+             *     stored Address (port component)".
+             */
+            ssh_port?: number;
+            /**
+             * @description Per-call SSH user override. Empty
+             *     (omitted) means "use the
+             *     service-wide default
+             *     (cfg.AgentSSHUser)".
+             */
+            ssh_user?: string;
+        };
+        /**
+         * @description v0.8.7 200 body of
+         *     `POST /api/v1/nodes/{id}/refresh-agent-bearer`.
+         *     The `bearer` field is the new agent
+         *     bearer (what the panel will use for
+         *     subsequent `POST /v1/apply` calls to
+         *     the agent); the operator can verify it
+         *     on the node by `cat`-ing
+         *     `/etc/aegis/agent.env`. The
+         *     `key_fingerprint` is the SHA-256 of
+         *     the public key derived from the stored
+         *     private key (same string `ssh-keygen
+         *     -lf` reports), so the operator can
+         *     verify the refresh used the key they
+         *     expect.
+         */
+        NodeRefreshAgentBearerResponse: {
+            /**
+             * Format: uuid
+             * @description The node UUID (the path's `{id}` echoed back).
+             */
+            node_id: string;
+            /**
+             * @description The new agent bearer (the
+             *     `AEGIS_AGENT_BEARER` value from
+             *     `/etc/aegis/agent.env` on the
+             *     node). The panel writes this to
+             *     `nodes.agent_bearer` for use in
+             *     subsequent `POST /v1/apply` calls.
+             */
+            bearer: string;
+            /**
+             * @description The canonical `SHA256:base64`
+             *     SHA-256 fingerprint of the public
+             *     key derived from the stored
+             *     private key. Same string
+             *     `ssh-keygen -lf` reports.
+             */
+            key_fingerprint: string;
         };
         NodeListResponse: {
             nodes: components["schemas"]["Node"][];

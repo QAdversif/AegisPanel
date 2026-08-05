@@ -161,7 +161,17 @@
     "inspectSurfaceTitle": "Stored key",
     "inspectSurfaceHelp": "The private key stays in the panel process; only the public surface is shown. Compare the SHA256 fingerprint against `ssh-keygen -lf /etc/aegis/authorized_keys` on the node to verify the key is what the panel has on file.",
     "inspectKeyUpdatedAt": "Row last updated",
-    "inspectFailed": "Could not load the stored key"
+    "inspectFailed": "Could not load the stored key",
+    "refresh": "Refresh agent bearer",
+    "refreshTitle": "Refresh agent bearer",
+    "refreshDescription": "Operator-side recovery path for the agent bearer. The panel decrypts the stored panel SSH key, SSHes into the node, reads /etc/aegis/agent.env, parses AEGIS_AGENT_BEARER, and updates nodes.agent_bearer. Use this when the agent's bearer is out of sync with the panel (e.g. after a manual agent restart that wiped /etc/aegis/agent.env).",
+    "refreshLoading": "Reading /etc/aegis/agent.env on the node…",
+    "refreshBearer": "New agent bearer",
+    "refreshFingerprint": "Stored panel key fingerprint",
+    "refreshResultTitle": "Agent bearer refreshed",
+    "refreshResultHelp": "The new bearer is what the panel will use for subsequent POST /v1/apply calls. You can verify it on the node by running `cat /etc/aegis/agent.env` — the AEGIS_AGENT_BEARER line should match. The fingerprint proves the refresh used the panel key the panel has on file.",
+    "refreshed": "Agent bearer refreshed on {name}",
+    "refreshFailed": "Could not refresh the agent bearer"
   },
   "inbounds": {
     "title": "Inbounds",

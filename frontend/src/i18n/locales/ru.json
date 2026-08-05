@@ -160,7 +160,17 @@
     "inspectSurfaceTitle": "Сохранённый ключ",
     "inspectSurfaceHelp": "Приватный ключ остаётся в процессе панели; показывается только публичная часть. Сравните SHA256-отпечаток с `ssh-keygen -lf /etc/aegis/authorized_keys` на ноде, чтобы убедиться, что ключ совпадает.",
     "inspectKeyUpdatedAt": "Строка обновлена",
-    "inspectFailed": "Не удалось загрузить сохранённый ключ"
+    "inspectFailed": "Не удалось загрузить сохранённый ключ",
+    "refresh": "Обновить bearer агента",
+    "refreshTitle": "Обновить bearer агента",
+    "refreshDescription": "Операторский recovery-путь для bearer'а агента. Панель расшифровывает сохранённый SSH-ключ, идёт по SSH на ноду, читает /etc/aegis/agent.env, парсит AEGIS_AGENT_BEARER и обновляет nodes.agent_bearer. Используйте, когда bearer агента рассинхронизирован с панелью (например, после ручного перезапуска агента, который стёр /etc/aegis/agent.env).",
+    "refreshLoading": "Читаю /etc/aegis/agent.env на ноде…",
+    "refreshBearer": "Новый bearer агента",
+    "refreshFingerprint": "Fingerprint сохранённого ключа панели",
+    "refreshResultTitle": "Bearer агента обновлён",
+    "refreshResultHelp": "Новый bearer — это то, что панель будет использовать для следующих POST /v1/apply. Проверить на ноде можно через `cat /etc/aegis/agent.env` — строка AEGIS_AGENT_BEARER должна совпадать. Fingerprint подтверждает, что refresh использовал именно тот ключ панели, который панель хранит.",
+    "refreshed": "Bearer агента обновлён на {name}",
+    "refreshFailed": "Не удалось обновить bearer агента"
   },
   "inbounds": {
     "title": "Инбаунды",

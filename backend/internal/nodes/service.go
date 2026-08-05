@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
+	"github.com/QAdversif/AegisPanel/internal/bootstrap"
 	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
@@ -26,6 +27,20 @@ type Service struct {
 	webhooks *webhooks.Service     // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 	audits   *audits.Service       // v0.7.x deferred call-site: every mutating method records an audit_log row after the row is committed.
 	envelope envelope.SecretCipher // v0.8.5: nil-safe; the GetStoredKey method returns an error when nil.
+	// v0.8.7: SSH client factory + known_hosts
+	// path + service-wide default SSH user
+	// for `RefreshAgentBearer`. All three
+	// are nil-safe; the method returns an
+	// error when the factory is nil so the
+	// production wiring in `internal/app/app.go`
+	// must call `WithSSHClientFactory` at
+	// boot. The pattern matches
+	// `WithWebhooks` / `WithAudits` /
+	// `WithEnvelope` (nil-safe setter, error
+	// in the consumer).
+	sshClientFactory func(bootstrap.ClientConfig) (bootstrap.Client, error)
+	knownHosts       string
+	sshUser          string
 }
 
 // NewService wires a Service around the given store. The clock
