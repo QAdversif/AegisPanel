@@ -35,7 +35,7 @@
 import { computed, h, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { MoreHorizontal, Plus, Server } from "lucide-vue-next";
-import { KeyRound, KeySquare, Lock, RefreshCw } from "lucide-vue-next";
+import { KeyRound, KeySquare, Lock, RefreshCw, Eye } from "lucide-vue-next";
 import type { ColumnDef } from "@tanstack/vue-table";
 
 import { useAuthStore } from "@/stores/auth";
@@ -44,12 +44,19 @@ import { toApiError } from "@/api/client";
 import {
   createNode,
   deleteNode,
+  getStoredNodeKey,
   listNodes,
   provisionNode,
   rotateNodePanelKey,
   updateNode,
 } from "@/api/services";
-import type { Node, NodeRotatePanelKeyResponse, NodeState } from "@/types";
+import type {
+  Node,
+  NodeRotatePanelKeyResponse,
+  NodeState,
+  NodeStoredKey,
+  UUID,
+} from "@/types";
 import {
   nodeCreateSchema,
   nodeProvisionSchema,
@@ -109,6 +116,25 @@ const provisionOpen = ref(false);
 const rotating = ref<Node | null>(null);
 const rotateOpen = ref(false);
 const rotationResult = ref<NodeRotatePanelKeyResponse | null>(null);
+
+// v0.8.5: stored-key dialog. The "inspecting"
+// node is the one whose stored panel SSH key
+// the operator wants to verify. The dialog
+// stays open until the user closes it; the
+// `inspection` ref holds the loaded
+// `NodeStoredKey` surface (or `null` while
+// loading / on error). The `inspectionLoading`
+// ref drives the dialog's spinner; the
+// `inspectionError` ref drives the error
+// toast. The shape mirrors the rotate-panel-key
+// dialog's lifecycle for visual consistency
+// (both dialogs surface a read-only public-key
+// surface to the operator).
+const inspecting = ref<Node | null>(null);
+const inspectOpen = ref(false);
+const inspection = ref<NodeStoredKey | null>(null);
+const inspectionLoading = ref(false);
+const inspectionError = ref<string | null>(null);
 
 // Only `new` and `offline` are provisionable per
 // ARCHITECTURE §8.3. The dropdown hides the entry
@@ -381,6 +407,51 @@ function closeRotateDialog(): void {
   rotationResult.value = null;
 }
 
+// --- Inspect stored key (v0.8.5) ----------------------------------------
+
+function startInspect(node: Node): void {
+  inspecting.value = node;
+  inspection.value = null;
+  inspectionError.value = null;
+  inspectionLoading.value = true;
+  inspectOpen.value = true;
+  // Fire-and-forget the GET. The dialog's
+  // spinner is driven by `inspectionLoading`;
+  // the result (or error) lands in the
+  // `inspection` / `inspectionError` refs.
+  // The pattern matches `getCredentialsByUser`
+  // in CredentialsView.vue — a one-shot fetch
+  // on dialog open, no polling, no
+  // refetch-on-error (the operator can close
+  // and re-open to retry).
+  void loadStoredKey(node.id);
+}
+
+async function loadStoredKey(id: UUID): Promise<void> {
+  try {
+    const sk = await getStoredNodeKey(id);
+    inspection.value = sk;
+  } catch (error) {
+    const apiErr = toApiError(error);
+    inspectionError.value = apiErr.message;
+    toast.add({
+      title: t("nodes.inspectFailed"),
+      description: apiErr.message,
+      variant: "destructive",
+    });
+  } finally {
+    inspectionLoading.value = false;
+  }
+}
+
+function closeInspectDialog(): void {
+  inspectOpen.value = false;
+  inspecting.value = null;
+  inspection.value = null;
+  inspectionError.value = null;
+  inspectionLoading.value = false;
+}
+
 // --- Delete -----------------------------------------------------------------
 
 async function confirmDelete(node: Node): Promise<void> {
@@ -471,6 +542,20 @@ const columns: ColumnDef<Node, unknown>[] = [
                 () => t("nodes.rotate"),
               )
             : null,
+          // v0.8.5: show-stored-key. Visible for
+          // ANY state (including `new` — the
+          // dialog surfaces a "no stored key
+          // yet" hint for the un-installed case).
+          // The endpoint is a read, not a write,
+          // so there's no state-machine
+          // enforcement; the operator can audit
+          // their fleet's stored-key surface at
+          // any time.
+          h(
+            DropdownMenuItem,
+            { onSelect: () => startInspect(row.original) },
+            () => t("nodes.inspect"),
+          ),
           h(
             DropdownMenuItem,
             { onSelect: () => confirmDelete(row.original) },
@@ -1133,6 +1218,134 @@ const canWrite = computed(() => {
         </div>
       </DialogContent>
     </Dialog>
+
+    <!-- Inspect stored key dialog (v0.8.5) -->
+    <Dialog v-model:open="inspectOpen">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            <Eye class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.inspectTitle") }}
+          </DialogTitle>
+          <DialogDescription>{{ t("nodes.inspectDescription") }}</DialogDescription>
+        </DialogHeader>
+        <p class="nodes__provision-target">
+          <strong>{{ inspecting?.name }}</strong>
+          ({{ inspecting?.address }})
+          — {{ inspecting ? t(`nodes.states.${inspecting.state}`) : "" }}
+        </p>
+        <!-- Loading state. The dialog opens
+             immediately (so the user can see
+             the target node); the GET fires
+             on open. The spinner is the
+             only content until the response
+             lands. -->
+        <div
+          v-if="inspectionLoading"
+          class="nodes__inspection-loading"
+        >
+          {{ t("nodes.inspectLoading") }}
+        </div>
+        <!-- "No stored key" state. The row
+             exists but the ciphertext column
+             is empty (`new` nodes, or legacy
+             v0.3.0..v0.7.x nodes that have not
+             been back-filled with the v0.8.3
+             CLI). The dialog shows a hint about
+             how to populate the column. -->
+        <div
+          v-else-if="inspection && !inspection.has_stored_key"
+          class="nodes__inspection-empty"
+        >
+          <p>{{ t("nodes.inspectNoKey") }}</p>
+          <p class="nodes__inspection-empty-hint">
+            {{ t("nodes.inspectNoKeyHint") }}
+          </p>
+        </div>
+        <!-- Error state. The toast was
+             already shown by the handler; the
+             dialog shows a brief inline
+             error so the user knows the
+             dialog content is in a failed
+             state. -->
+        <div
+          v-else-if="inspectionError"
+          class="nodes__inspection-error"
+        >
+          {{ inspectionError }}
+        </div>
+        <!-- Success state. The dialog surfaces
+             the public-key line + fingerprint
+             so the operator can copy the
+             fingerprint (compare against
+             `ssh-add -L` on the operator's
+             local box after the re-provision's
+             first contact). -->
+        <div
+          v-else-if="inspection && inspection.has_stored_key"
+          class="nodes__rotation-result"
+        >
+          <h3 class="nodes__rotation-result-title">
+            <KeyRound class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.inspectSurfaceTitle") }}
+          </h3>
+          <p class="nodes__rotation-result-help">
+            {{ t("nodes.inspectSurfaceHelp") }}
+          </p>
+          <FormField
+            name="inspect-public-key"
+            :label="t('nodes.rotatePublicKeyLine')"
+          >
+            <template #default="{ id }">
+              <Textarea
+                :id="id"
+                :model-value="inspection.public_key_line ?? ''"
+                :rows="4"
+                readonly
+                spellcheck="false"
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <FormField
+            name="inspect-fingerprint"
+            :label="t('nodes.rotateFingerprint')"
+          >
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                :model-value="inspection.fingerprint ?? ''"
+                readonly
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <FormField
+            v-if="inspection.key_updated_at"
+            name="inspect-key-updated-at"
+            :label="t('nodes.inspectKeyUpdatedAt')"
+          >
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                :model-value="inspection.key_updated_at"
+                readonly
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            @click="closeInspectDialog"
+          >
+            {{ t("common.close") }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
@@ -1258,5 +1471,46 @@ const canWrite = computed(() => {
   font-size: 0.85rem;
   color: hsl(var(--muted-foreground));
   margin: 0;
+}
+
+/* v0.8.5: inspect-stored-key dialog states.
+   The dialog has four states: loading,
+   no-stored-key, error, success. The
+   loading + error states are inline
+   paragraphs; the no-stored-key state is
+   a paragraph + a hint paragraph; the
+   success state reuses the rotation-result
+   styles above. */
+.nodes__inspection-loading,
+.nodes__inspection-empty,
+.nodes__inspection-error {
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+}
+
+.nodes__inspection-loading {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  text-align: center;
+}
+
+.nodes__inspection-empty {
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.nodes__inspection-empty-hint {
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+  opacity: 0.8;
+}
+
+.nodes__inspection-error {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+  font-family: monospace;
+  font-size: 0.8rem;
 }
 </style>

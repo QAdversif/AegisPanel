@@ -150,7 +150,17 @@
     "rotatePublicKeyLine": "Новый публичный ключ (добавлен в authorized_keys)",
     "rotateFingerprint": "SHA256-отпечаток",
     "rotated": "Ключ панели сменён на {name}",
-    "rotateFailed": "Не удалось сменить ключ панели"
+    "rotateFailed": "Не удалось сменить ключ панели",
+    "inspect": "Показать сохранённый ключ",
+    "inspectTitle": "Показать сохранённый ключ панели",
+    "inspectDescription": "Read-зеркало фичи v0.8.1 (persistent key). Панель расшифровывает `nodes.ssh_private_key_ciphertext` через age-конверт, получает public-key строку и SHA256-отпечаток. Приватный ключ не покидает процесс панели. Чтение пишется в audit log как `node.stored-key.read`.",
+    "inspectLoading": "Загружаем сохранённый ключ…",
+    "inspectNoKey": "У этой ноды пока нет сохранённого ключа панели.",
+    "inspectNoKeyHint": "Первая установка через пароль (v0.8.1+) сгенерирует его; v0.8.3 CLI `aegis admin node rotate-panel-key <node-uuid>` бэкфиллит legacy v0.3.0..v0.7.x ноды.",
+    "inspectSurfaceTitle": "Сохранённый ключ",
+    "inspectSurfaceHelp": "Приватный ключ остаётся в процессе панели; показывается только публичная часть. Сравните SHA256-отпечаток с `ssh-keygen -lf /etc/aegis/authorized_keys` на ноде, чтобы убедиться, что ключ совпадает.",
+    "inspectKeyUpdatedAt": "Строка обновлена",
+    "inspectFailed": "Не удалось загрузить сохранённый ключ"
   },
   "inbounds": {
     "title": "Инбаунды",
