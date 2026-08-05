@@ -47,11 +47,13 @@ import {
   getStoredNodeKey,
   listNodes,
   provisionNode,
+  refreshNodeAgentBearer,
   rotateNodePanelKey,
   updateNode,
 } from "@/api/services";
 import type {
   Node,
+  NodeRefreshAgentBearerResponse,
   NodeRotatePanelKeyResponse,
   NodeState,
   NodeStoredKey,
@@ -136,6 +138,27 @@ const inspection = ref<NodeStoredKey | null>(null);
 const inspectionLoading = ref(false);
 const inspectionError = ref<string | null>(null);
 
+// v0.8.7: refresh-agent-bearer dialog. The
+// "refreshing" node is the one whose agent
+// bearer the panel will re-fetch from the
+// node. The dialog is a confirm-only flow
+// (no per-call body fields are required;
+// the ssh_port / ssh_user overrides are
+// optional and the panel uses the node's
+// stored Address + the service-wide
+// AgentSSHUser when the body is empty).
+// The success card carries the new bearer
+// + the SHA-256 fingerprint of the stored
+// panel key, so the operator can verify
+// the refresh used the key they expect
+// (same verification pattern as the
+// v0.8.4 rotate-panel-key success card).
+const refreshing = ref<Node | null>(null);
+const refreshOpen = ref(false);
+const refreshResult = ref<NodeRefreshAgentBearerResponse | null>(null);
+const refreshError = ref<string | null>(null);
+const refreshLoading = ref(false);
+
 // Only `new` and `offline` are provisionable per
 // ARCHITECTURE §8.3. The dropdown hides the entry
 // for the other three so the operator does not
@@ -154,6 +177,29 @@ function isProvisionable(state: NodeState): boolean {
 // in, generates a new key, appends the public
 // half to authorized_keys.
 function isRotatable(state: NodeState): boolean {
+  return state !== "new";
+}
+
+// v0.8.7: refresh-agent-bearer is the
+// operator-side recovery path for the
+// agent bearer. Same state gate as
+// rotate-panel-key: hidden for `new`
+// (no stored key to decrypt; the
+// operator must install first). The
+// action is independent of the panel
+// key's existence — the node COULD
+// have a stored key even if its
+// state is `new` (e.g. a v0.8.3
+// rotate-panel-key CLI ran on a
+// never-online node), but the
+// no-stored-key HTTP path returns 409
+// with a "rotate-panel-key first"
+// hint. Keeping the gate `!== "new"`
+// matches the rotate-panel-key gate
+// and avoids the operator seeing
+// "Refresh agent bearer" on a never-
+// installed row.
+function isRefreshable(state: NodeState): boolean {
   return state !== "new";
 }
 
@@ -407,6 +453,72 @@ function closeRotateDialog(): void {
   rotationResult.value = null;
 }
 
+// --- Refresh agent bearer (v0.8.7) -------------------------------------
+
+// v0.8.7: the refresh-agent-bearer flow is
+// confirm-only (no per-call body fields are
+// required). The dialog opens with a
+// "this will SSH into the node and read
+// /etc/aegis/agent.env" description; the
+// operator clicks the confirm button and
+// the panel does the rest. The success
+// card carries the new bearer + the
+// stored-key fingerprint for at-a-glance
+// verification.
+//
+// The body the panel sends is empty by
+// default (the panel uses the node's
+// stored Address + the service-wide
+// AgentSSHUser). A future PR can add
+// per-call ssh_port / ssh_user override
+// fields to the dialog; the schema is
+// already in place (`nodeRefreshAgentBearerSchema`).
+function startRefresh(node: Node): void {
+  refreshing.value = node;
+  refreshResult.value = null;
+  refreshError.value = null;
+  refreshOpen.value = true;
+  refreshLoading.value = true;
+  // Fire-and-forget. The dialog shows a
+  // spinner while the SSH + cat runs;
+  // the success card lands when the
+  // Service returns. The catch path
+  // surfaces a toast and keeps the
+  // dialog open with the error
+  // message so the operator can
+  // diagnose (502 with a specific
+  // "SSH connect" / "read agent.env" /
+  // "parse agent.env" message is the
+  // most common failure mode).
+  refreshNodeAgentBearer(node.id, {})
+    .then((res) => {
+      refreshResult.value = res;
+      refreshLoading.value = false;
+      toast.add({
+        title: t("nodes.refreshed", { name: node.name }),
+        variant: "success",
+      });
+    })
+    .catch((error: unknown) => {
+      const apiErr = toApiError(error);
+      refreshError.value = apiErr.message;
+      refreshLoading.value = false;
+      toast.add({
+        title: t("nodes.refreshFailed"),
+        description: apiErr.message,
+        variant: "destructive",
+      });
+    });
+}
+
+function closeRefreshDialog(): void {
+  refreshOpen.value = false;
+  refreshing.value = null;
+  refreshResult.value = null;
+  refreshError.value = null;
+  refreshLoading.value = false;
+}
+
 // --- Inspect stored key (v0.8.5) ----------------------------------------
 
 function startInspect(node: Node): void {
@@ -540,6 +652,25 @@ const columns: ColumnDef<Node, unknown>[] = [
                 DropdownMenuItem,
                 { onSelect: () => startRotate(row.original) },
                 () => t("nodes.rotate"),
+              )
+            : null,
+          // v0.8.7: refresh-agent-bearer. Same
+          // state gate as rotate-panel-key
+          // (hidden for `new`; the no-stored-
+          // key HTTP path returns 409 with a
+          // "rotate-panel-key first" hint for
+          // rows that have a state but no
+          // stored key). The action calls
+          // `POST /api/v1/nodes/{id}/refresh-
+          // agent-bearer`, the response carries
+          // the new bearer + the SHA-256
+          // fingerprint of the stored panel
+          // key.
+          isRefreshable(row.original.state)
+            ? h(
+                DropdownMenuItem,
+                { onSelect: () => startRefresh(row.original) },
+                () => t("nodes.refresh"),
               )
             : null,
           // v0.8.5: show-stored-key. Visible for
@@ -1344,6 +1475,113 @@ const canWrite = computed(() => {
             {{ t("common.close") }}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Refresh agent bearer dialog (v0.8.7) -->
+    <Dialog v-model:open="refreshOpen">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.refreshTitle") }}
+          </DialogTitle>
+          <DialogDescription>{{
+            t("nodes.refreshDescription")
+          }}</DialogDescription>
+        </DialogHeader>
+        <p class="nodes__provision-target">
+          <strong>{{ refreshing?.name }}</strong>
+          ({{ refreshing?.address }})
+          — {{ refreshing ? t(`nodes.states.${refreshing.state}`) : "" }}
+        </p>
+        <!-- Loading state. The dialog
+             opens immediately (so the
+             user can see the target
+             node); the POST fires on
+             open. The spinner is the
+             only content until the
+             response lands. The shape
+             mirrors the inspect dialog's
+             loading surface for visual
+             consistency. -->
+        <div
+          v-if="refreshLoading && !refreshResult && !refreshError"
+          class="nodes__refresh-loading"
+        >
+          {{ t("nodes.refreshLoading") }}
+        </div>
+        <!-- Error state. The 409
+             "no stored key" case carries
+             a "rotate-panel-key first"
+             hint from the panel; the
+             operator sees the full error
+             message verbatim. The 502
+             cases (SSH connect / run /
+             agent.env parse) carry a
+             specific stage name (the
+             panel's error message starts
+             with the failing stage). -->
+        <div
+          v-else-if="refreshError"
+          class="nodes__refresh-error"
+        >
+          {{ refreshError }}
+        </div>
+        <!-- Success card. Renders
+             after a 200 response. The
+             dialog stays open so the
+             operator can copy the
+             new bearer before closing.
+             The new bearer is the
+             AEGIS_AGENT_BEARER value
+             from /etc/aegis/agent.env
+             on the node; the
+             fingerprint is the
+             SHA-256 of the stored
+             panel key (proves "the
+             refresh used the key I
+             expect"). -->
+        <div v-else class="nodes__refresh-result">
+          <h3 class="nodes__refresh-result-title">
+            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
+            {{ t("nodes.refreshResultTitle") }}
+          </h3>
+          <p class="nodes__refresh-result-help">
+            {{ t("nodes.refreshResultHelp") }}
+          </p>
+          <FormField
+            name="refresh-bearer"
+            :label="t('nodes.refreshBearer')"
+          >
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                :model-value="refreshResult?.bearer ?? ''"
+                readonly
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <FormField
+            name="refresh-fingerprint"
+            :label="t('nodes.refreshFingerprint')"
+          >
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                :model-value="refreshResult?.key_fingerprint ?? ''"
+                readonly
+                @update:model-value="() => {}"
+              />
+            </template>
+          </FormField>
+          <DialogFooter>
+            <Button type="button" @click="closeRefreshDialog">
+              {{ t("common.close") }}
+            </Button>
+          </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   </section>

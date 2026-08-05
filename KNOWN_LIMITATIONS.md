@@ -251,7 +251,7 @@ the v1.0.0-mvp-soft-launch.
 | `WebhooksView.vue` + sidebar nav + i18n en/ru + `Webhook` lucide icon + one-time secret display widget | PR #139 |
 | Cosign sign + verify for our Docker images (panel + agent) — fixes the post-`v0.4.0` supply-chain gap | PR #129 + #130 |
 | `latest` tag on tag-push for non-prerelease versions (post-`v0.5.0` follow-up) | PR #127 |
-| JSON logs in production via `AEGIS_ENV=production` (post-`v0.5.0` follow-up) | PR #128 |
+| JSON logs in production via `AEGIS_ENV=production` (post-`v0.5.0` follow-up) | PR #128 / closed in v0.8.6 (#187) |
 
 ## Closed in v0.6.0
 
