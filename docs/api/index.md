@@ -8,6 +8,22 @@ The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
 in the repo root.
 
+**v0.8.5** adds `GET /api/v1/nodes/{id}/stored-key`,
+the read-side mirror of the v0.8.1 persistent panel SSH
+key feature. The panel decrypts
+`nodes.ssh_private_key_ciphertext` via the operator's
+age envelope, derives the public-key line + SHA-256
+fingerprint, and returns the public surface. The private
+key never leaves the panel process. The 200 body carries
+`{ has_stored_key, public_key_line, fingerprint,
+algorithm, key_updated_at }`; `has_stored_key: false` for
+`new` nodes (or legacy v0.3.0..v0.7.x nodes that have not
+been back-filled with the v0.8.3 CLI). The NodesView's
+per-row dropdown gets a "Show stored key" entry (visible
+for any state). The read is recorded in the audit log
+as `node.stored-key.read` (the "who looked at this row
+at time T" trail).
+
 **v0.8.4** adds `POST /api/v1/nodes/{id}/rotate-panel-key`,
 the HTTP mirror of the v0.8.3
 `aegis admin node rotate-panel-key` CLI (PR #184). The
@@ -97,7 +113,7 @@ layer / docs changes). The headline groups:
 | Group         | Endpoints                                                                                                   |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
 | `auth`        | `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`, `POST /auth/change-password`                    |
-| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) |
+| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) + `GET /nodes/{id}/stored-key` (v0.8.5; the read-side debug surface for the v0.8.1 persistent key — panel decrypts the stored ciphertext via the age envelope and returns the public-key line + SHA-256 fingerprint) |
 | `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}`                                                                     |
 | `hosts`       | CRUD on `/hosts/{id}`                                                                                       |
 | `plans`       | CRUD on `/plans/{id}` (v0.6.0) вЂ” the operator-facing tariff catalog                                          |
@@ -136,7 +152,11 @@ The following endpoints are documented in
   the HTTP mirror
   (`POST /api/v1/nodes/{id}/rotate-panel-key`); the
   CLI is now the operator-side fallback, the UI
-  button is the primary path.
+  button is the primary path. v0.8.5 ships
+  the read-side mirror
+  (`GET /api/v1/nodes/{id}/stored-key`) so the
+  operator can audit the stored ciphertext without
+  rotating it.
 
 ## See also
 

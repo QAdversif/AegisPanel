@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
 
@@ -22,8 +23,9 @@ import (
 type Service struct {
 	store    Store
 	now      func() time.Time
-	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
-	audits   *audits.Service   // v0.7.x deferred call-site: every mutating method records an audit_log row after the row is committed.
+	webhooks *webhooks.Service     // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
+	audits   *audits.Service       // v0.7.x deferred call-site: every mutating method records an audit_log row after the row is committed.
+	envelope envelope.SecretCipher // v0.8.5: nil-safe; the GetStoredKey method returns an error when nil.
 }
 
 // NewService wires a Service around the given store. The clock
@@ -43,6 +45,19 @@ func (s *Service) WithWebhooks(svc *webhooks.Service) *Service {
 // nil-safe pattern as WithWebhooks.
 func (s *Service) WithAudits(svc *audits.Service) *Service {
 	s.audits = svc
+	return s
+}
+
+// WithEnvelope installs the age cipher used by
+// GetStoredKey to decrypt `ssh_private_key_ciphertext`.
+// The setter is nil-safe (a nil cipher disables
+// the stored-key read path, matching the
+// `WithAudits` / `WithWebhooks` pattern). The
+// production wiring in `internal/app/app.go`
+// installs the same envelope the webhooks
+// Store uses.
+func (s *Service) WithEnvelope(cipher envelope.SecretCipher) *Service {
+	s.envelope = cipher
 	return s
 }
 

@@ -496,6 +496,85 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /nodes/{id}/stored-key:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [nodes]
+      summary: Read the node's stored panel SSH key surface
+      description: |
+        v0.8.5: the read-side mirror of the
+        v0.8.1 persistent panel SSH key
+        feature. The endpoint decrypts
+        `nodes.ssh_private_key_ciphertext`
+        via the operator's age envelope,
+        derives the public-key line +
+        SHA-256 fingerprint, and returns the
+        public surface. The private key
+        never leaves the panel process.
+
+        The response is always 200 (not
+        404) — the `has_stored_key` boolean
+        distinguishes the "row has a
+        stored key" (true) from the "row
+        exists but no key yet" (false)
+        case. `new` nodes that have never
+        been installed via the v0.8.1+
+        path return `has_stored_key:
+        false`; the UI surfaces a "no
+        stored key yet" hint in that case.
+
+        Every call records a
+        `node.stored-key.read` audit row
+        with the operator's id from the
+        JWT claims + the node id. The
+        fingerprint is in the response
+        body (not the audit row) so the
+        operator can correlate the audit
+        row with the read they performed.
+      responses:
+        '200':
+          description: Stored key surface (or "no key yet" if has_stored_key is false).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeStoredKey'
+        '400':
+          description: Validation error (malformed UUID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Panel was booted without an envelope (AEGIS_WEBHOOKS_SECRET_AGE_*). Operator must fix the panel's env and retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Stored ciphertext is unreadable (decrypt failed — the age identity has been rotated out of the operator's reach, or the column was written with a different envelope version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /nodes/{nodeId}/inbounds:
     parameters:
       - name: nodeId
@@ -2448,6 +2527,87 @@ components:
             `ssh-keygen -lf` outputs. The operator can
             compare this against `ssh-add -L` to verify
             the key is on the node.
+
+    NodeStoredKey:
+      type: object
+      description: |
+        200 body of `GET /api/v1/nodes/{id}/stored-key`.
+        The panel decrypts
+        `nodes.ssh_private_key_ciphertext` via the
+        operator's age envelope, derives the public-key
+        line + SHA-256 fingerprint, and returns the
+        public surface. The private key never leaves
+        the panel process.
+
+        `has_stored_key` is false for `new` nodes
+        that have never been installed via the
+        v0.8.1+ path; the UI surfaces a "no
+        stored key yet" hint in that case. The
+        `key_updated_at` field is the row's
+        `updated_at` — the ciphertext column has
+        no independent timestamp, so the
+        row-level `updated_at` is the operator's
+        "is this the key I think it is" sanity
+        check.
+
+        The OpenSSH key comment
+        (`aegis-panel@node-<nodeName>`) is NOT
+        a separate field — it is the third
+        whitespace-separated token of
+        `public_key_line` (the OpenSSH
+        authorized_keys format).
+      required: [has_stored_key]
+      properties:
+        has_stored_key:
+          type: boolean
+          description: |
+            True if the row has a stored
+            ciphertext. False for `new` nodes
+            that have never been installed via
+            the v0.8.1+ path; the UI surfaces a
+            "no stored key yet" hint in that
+            case.
+        public_key_line:
+          type: string
+          description: |
+            The OpenSSH authorized_keys line
+            derived from the stored ed25519
+            private key. Starts with
+            `ssh-ed25519 `, followed by the
+            base64 payload, followed by the
+            comment `aegis-panel@node-<nodeName>`.
+            Omitted when `has_stored_key` is
+            false.
+        fingerprint:
+          type: string
+          description: |
+            The canonical `SHA256:base64`
+            SHA-256 fingerprint of the public
+            key. Same format `ssh-keygen -lf`
+            outputs. Omitted when
+            `has_stored_key` is false.
+        algorithm:
+          type: string
+          description: |
+            The SSH key type
+            (`ssh-ed25519` today; the
+            provisioner is hard-coded to
+            ed25519 in v0.8.1, but the field
+            is in the wire shape so a future
+            RSA / ECDSA path does not require a
+            UI change). Omitted when
+            `has_stored_key` is false.
+        key_updated_at:
+          type: string
+          format: date-time
+          description: |
+            The row's `updated_at` timestamp
+            (RFC 3339). The ciphertext column
+            has no independent timestamp, so
+            the row-level `updated_at` is the
+            operator's "is this the key I think
+            it is" sanity check. Omitted when
+            `has_stored_key` is false.
 
     NodeListResponse:
       type: object

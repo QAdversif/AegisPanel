@@ -7,7 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added (v0.8.4 — admin UI button for rotate-panel-key)
+### Added (v0.8.5 — "Show stored key" debug surface in NodesView)
+
+- **New endpoint** `GET /api/v1/nodes/{id}/stored-key`
+  that decrypts
+  `nodes.ssh_private_key_ciphertext` via the
+  operator's age envelope, derives the
+  public-key line + SHA-256 fingerprint, and
+  returns the public surface. The private key
+  never leaves the panel process. The 200
+  body shape is `{ has_stored_key, public_key_line,
+  fingerprint, algorithm, key_updated_at }`;
+  `has_stored_key: false` for `new` nodes
+  (or legacy v0.3.0..v0.7.x nodes that have
+  not been back-filled with the v0.8.3 CLI).
+  Same `ScopeNodes` enforcement as the rest
+  of the nodes CRUD; the read is gated by the
+  same trust boundary as the v0.8.1
+  persistent key feature.
+- **"Show stored key" dropdown entry in the
+  NodesView** per row, with an `Eye` icon.
+  Visible for ANY state (the entry is a
+  read, not a write, so the state machine
+  does not gate it). Clicking opens a
+  dialog that fires the GET on open, shows a
+  spinner, then either surfaces the public
+  surface (with copy-friendly public key
+  line + fingerprint + last-updated
+  timestamp) or a "no stored key yet" hint
+  for the un-installed case.
+- **`nodes.Service.WithEnvelope` setter** —
+  the v0.8.1 envelope (the same age cipher
+  the webhooks Store uses) is now wired into
+  the nodes Service so the stored-key read
+  can decrypt the column. The setter is
+  nil-safe (a nil cipher disables the
+  stored-key read path, same fail-closed
+  shape as the v0.8.4 rotate-panel-key
+  handler). `internal/app/app.go` wires it
+  from the same `cipher` variable the
+  webhooks Store uses.
+- **`StoredKey` type + wire shape** — the
+  field set is intentionally minimal: the
+  public key line (which already embeds the
+  OpenSSH key comment as the third
+  whitespace-separated token), the
+  fingerprint, the algorithm, and the
+  row's `updated_at`. The OpenSSH key
+  comment is NOT a separate field; the
+  `golang.org/x/crypto/ssh` v1.5 parser's
+  public API does not surface the comment
+  on the returned `crypto.PrivateKey`, so
+  pulling it would require either a custom
+  OpenSSH-wire parser or shelling out to
+  `ssh-keygen -l`. Neither is worth the
+  complexity: the comment is parseable
+  from `public_key_line` via
+  `line.split(' ', 3)`.
+- **Audit log** — every read records a
+  `node.stored-key.read` row with the
+  operator's id from the JWT claims + the
+  node id. The fingerprint is NOT in the
+  audit row (per-server, would be a 100x
+  write-amplification for a read that may
+  happen frequently); the fingerprint is
+  in the response body so the operator can
+  correlate the audit row with the read
+  they performed (the audit log UI shows
+  timestamp + node id, the operator's
+  screen shows the same timestamp +
+  fingerprint).
+- **OpenAPI spec + codegen** — new
+  `NodeStoredKey` schema in
+  `docs/openapi.yaml`; the generated
+  `frontend/src/types/api.d.ts` carries the
+  new type automatically.
+- **zod-style validation** — no new schema
+  needed (the endpoint takes no body, the
+  `{id}` is a UUID the chi router validates).
+- **i18n strings (en + ru)** — 9 new strings
+  per locale
+  (`nodes.inspect` / `nodes.inspectTitle` /
+  `nodes.inspectDescription` /
+  `nodes.inspectLoading` /
+  `nodes.inspectNoKey` /
+  `nodes.inspectNoKeyHint` /
+  `nodes.inspectSurfaceTitle` /
+  `nodes.inspectSurfaceHelp` /
+  `nodes.inspectKeyUpdatedAt` /
+  `nodes.inspectFailed`).
+
+### Tests
+
+- **10 unit tests for `GetStoredKey` +
+  `handleGetStoredKey`** in
+  `backend/internal/nodes/stored_key_test.go`:
+  - 4 Service tests: happy path
+    (round-trip: real ed25519 key →
+    encrypt → persist → decrypt → derive
+    public key → all fields populated,
+    fingerprint starts with `SHA256:`),
+    row-without-ciphertext (HasStoredKey:
+    false, no decrypt attempt), nil-envelope
+    (fail-closed, no row mutation), and
+    node-not-found (the underlying
+    `ErrNotFound` propagates)
+  - 6 HTTP handler tests: 200 happy path
+    (correct body shape + audit row
+    recorded with the right shape),
+    200-no-stored-key (audit row still
+    recorded), 400 malformed UUID, 404
+    node not found, 500 envelope not
+    configured, 502 decrypt failure
+    (simulated by storing random non-PEM
+    bytes; the parser fails with "not a
+    PEM block" → handler maps to 502)
+
+### Security shape
+
+- The endpoint exposes the public key
+  (which is already in the node's
+  `~/.ssh/authorized_keys`) and the
+  fingerprint (a one-way hash). Neither is
+  a secret; the public key adds no new
+  attack surface (any operator with shell
+  on the node can `cat authorized_keys`
+  and see the same line), and the
+  fingerprint is irreversible.
+- The private key stays in the panel
+  process only for the duration of the
+  decrypt; the response carries no
+  private-key material. The audit log
+  records every decrypt (the
+  `node.stored-key.read` action) so the
+  operator can see who looked at the
+  stored key in the audit UI.
+- A nil envelope returns 500 (server
+  config); the same fail-closed shape
+  the v0.8.4 rotate-panel-key handler
+  uses. The operator must set
+  `AEGIS_WEBHOOKS_SECRET_AGE_*` and
+  restart the panel.
+
+## [0.8.4] - 2026-08-04
+
+### Added (admin UI button for rotate-panel-key)
 
 - **HTTP mirror of the v0.8.3 `aegis admin node
   rotate-panel-key` CLI**: new endpoint
@@ -109,6 +253,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `backend/internal/bootstrap/rotate_panel_key_test.go`
   are updated for the new
   `(RotationResult, error)` signature.
+
+## [0.8.3] - 2026-08-04
+
+### Added (operator-side CLI for rotate-panel-key)
+
+- **`aegis admin node rotate-panel-key
+  <node-uuid> --key <path>`**: operator-side
+  CLI for the v0.3.0..v0.7.x re-provision
+  path. Generates a fresh ed25519 keypair,
+  pushes the public half to the node's
+  `authorized_keys`, seals the private half
+  with the operator's age envelope, and
+  persists the ciphertext to the row. After
+  the call, the next re-provision on the node
+  decrypts and reuses the new key — the
+  v0.8.x "auto-deploy" experience becomes
+  available retroactively on v0.3.0..v0.7.x
+  nodes. v0.8.4 ships the HTTP mirror
+  (`POST /api/v1/nodes/{id}/rotate-panel-key`);
+  the CLI is now the operator-side fallback
+  (e.g. scripted batch rotation), the UI
+  button is the primary path.
 
 ## [0.6.0] - 2026-07-31
 

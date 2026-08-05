@@ -316,6 +316,22 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 	a.Webhooks = webhooks.NewService(webhooksStore)
 
+	// v0.8.5: wire the same age envelope the
+	// webhooks Store uses into the nodes
+	// Service. The `nodes.stored-key.read`
+	// endpoint decrypts
+	// `nodes.ssh_private_key_ciphertext` via
+	// this envelope; without it, the handler
+	// returns 500 ("envelope is not
+	// configured"). The memory-mode fallback
+	// (`envelope.NewNoopSecretCipher`) is the
+	// dev / unencrypted case; the rotate-
+	// panel-key CLI uses the same
+	// `AEGIS_WEBHOOKS_SECRET_AGE_*` env vars
+	// the panel main does, so the production
+	// shape is identical on both sides.
+	a.Nodes.WithEnvelope(cipher)
+
 	// 10. Wire the v0.7.x outbound event surface
 	//     into every mutating service. The setter
 	//     is preferred over a constructor argument
