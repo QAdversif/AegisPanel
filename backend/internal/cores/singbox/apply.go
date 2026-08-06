@@ -72,8 +72,51 @@ var ErrApplyNotConfigured = errors.New("singbox: apply: provider not configured 
 // here (not in nodes) to keep the dependency direction
 // pointed the right way: the panel wires an adapter that
 // implements this interface in terms of nodes.Service.
+//
+// # Bearer rotation support (v0.8.8)
+//
+// `RefreshBearer` is the panel-initiated
+// recovery path for a stale agent
+// bearer. The v0.8.7 PR added the
+// operator-side `POST
+// /api/v1/nodes/{id}/refresh-agent-bearer`
+// endpoint + the `nodes.Service.RefreshAgentBearer`
+// method. v0.8.8 wires that same
+// method into the Apply path: when
+// the agent returns 401 (the panel's
+// stored bearer no longer matches the
+// agent's), the Apply path calls
+// `RefreshBearer` to re-fetch the
+// current bearer from the node, then
+// retries the POST once with the new
+// bearer. The retry is bounded (one
+// attempt; a second 401 surfaces the
+// error to the BatchedApplier caller
+// without looping). The race
+// between two BatchedApplier
+// goroutines refreshing the same node
+// is benign (both reads return the
+// same agent.env value; the DB write
+// is idempotent at the row level).
 type NodeResolver interface {
 	Resolve(ctx context.Context, id uuid.UUID) (address, bearer string, err error)
+	// RefreshBearer triggers a panel-side
+	// recovery for a stale agent bearer.
+	// The method SSHes into the node
+	// (using the stored panel SSH key
+	// from the v0.8.1 persistent-key
+	// feature), reads
+	// `/etc/aegis/agent.env`, and
+	// updates `nodes.agent_bearer`.
+	// Returns the new bearer value
+	// (the result is also written to
+	// the DB; the return value lets
+	// the Apply path retry without a
+	// second Resolve call when only
+	// the bearer changed). The
+	// adapter is responsible for
+	// wrapping `nodes.Service.RefreshAgentBearer`.
+	RefreshBearer(ctx context.Context, id uuid.UUID) (newBearer string, err error)
 }
 
 // httpClient is the contract singbox.Apply needs from the
@@ -113,6 +156,52 @@ func (p *Provider) Configure(nodes NodeResolver, client httpClient) {
 // callers that explicitly want the "not wired" path can
 // still detect it via errors.Is) but no longer returned
 // from this method.
+//
+// # v0.8.8: 401 → auto-refresh → retry (one attempt)
+//
+// When the agent returns 401 (the panel's
+// stored bearer no longer matches), the
+// Apply path:
+//  1. Calls `RefreshBearer` on the
+//     resolver (which SSHes into the
+//     node, reads agent.env, and
+//     updates `nodes.agent_bearer`).
+//  2. Re-POSTs with the NEW bearer
+//     returned by the refresh (one
+//     retry attempt; no loop).
+//  3. If the retry succeeds, returns
+//     nil (the recovery is invisible
+//     to the BatchedApplier caller).
+//  4. If the retry fails (any
+//     non-2xx), returns the retry's
+//     error — the original 401 is
+//     preserved as the wrapped error
+//     when the retry also returns 401.
+//
+// The retry is bounded to one
+// attempt to prevent an infinite
+// loop when the agent and the panel
+// are stuck in a state where neither
+// knows the right bearer (e.g. the
+// operator wiped /etc/aegis/agent.env
+// on the node and the panel's stored
+// key is also gone). The caller (the
+// BatchedApplier) sees the error and
+// the per-delta retry worker can
+// decide what to do.
+//
+// The auto-refresh records the
+// `node.agent-bearer.refresh` audit
+// row via the v0.8.7
+// `nodes.Service.RefreshAgentBearer`.
+// The audit row's `ActorID` is empty
+// for auto-refresh (the BatchedApplier
+// goroutine has no `auth.Claims` in
+// context); the v0.8.7
+// operator-initiated path has a
+// non-empty `ActorID`. The shape
+// distinguishes the two callers in
+// the audit UI.
 func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 	if p.nodes == nil || p.client == nil {
 		return fmt.Errorf("singbox apply: provider not configured (call singbox.Configure first): %w", ErrApplyNotConfigured)
@@ -133,23 +222,115 @@ func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 		return fmt.Errorf("singbox apply: marshal envelope: %w", err)
 	}
 	url := "http://" + addr + "/v1/apply"
+	// First attempt with the panel's
+	// current bearer.
+	status, respBody, postErr := p.postApply(ctx, url, body, bearer)
+	if postErr != nil {
+		return postErr
+	}
+	if status == http.StatusUnauthorized {
+		// v0.8.8: the panel's stored
+		// bearer is stale. Try to
+		// refresh it via the
+		// resolver. RefreshBearer
+		// returns the new bearer
+		// (already written to
+		// `nodes.agent_bearer`); we
+		// use the return value to
+		// retry without a second
+		// Resolve call.
+		newBearer, refreshErr := p.nodes.RefreshBearer(ctx, id)
+		if refreshErr != nil {
+			// Refresh failed
+			// (no stored
+			// key, SSH
+			// failure,
+			// agent.env
+			// parse
+			// failure,
+			// etc.).
+			// Surface
+			// the
+			// original
+			// 401
+			// with
+			// the
+			// refresh
+			// error
+			// wrapped
+			// so the
+			// operator
+			// sees
+			// both
+			// signals.
+			return fmt.Errorf("singbox apply: agent %s returned 401 (stale bearer); auto-refresh failed: %w", url, refreshErr)
+		}
+		// Second attempt with the
+		// new bearer. One retry
+		// only — if the agent
+		// also rejects this
+		// bearer, the panel and
+		// the agent are in an
+		// unrecoverable state
+		// and the operator must
+		// intervene (e.g. SSH
+		// in manually and re-run
+		// `aegis admin node
+		// rotate-panel-key`).
+		status2, respBody2, postErr2 := p.postApply(ctx, url, body, newBearer)
+		if postErr2 != nil {
+			return postErr2
+		}
+		if status2 == http.StatusUnauthorized {
+			respBody2, _ := io.ReadAll(respBody2)
+			return fmt.Errorf("singbox apply: agent %s returned 401 on retry with refreshed bearer: %s", url, truncateBody(respBody2, 512))
+		}
+		if status2 < 200 || status2 >= 300 {
+			respBody2, _ := io.ReadAll(respBody2)
+			return fmt.Errorf("singbox apply: agent %s returned %d on retry: %s", url, status2, truncateBody(respBody2, 512))
+		}
+		// Retry succeeded. The
+		// recovery is invisible
+		// to the BatchedApplier
+		// caller (return nil
+		// matches the
+		// no-recovery happy
+		// path).
+		_ = respBody
+		return nil
+	}
+	if status < 200 || status >= 300 {
+		respBody, _ := io.ReadAll(respBody)
+		return fmt.Errorf("singbox apply: agent %s returned %d: %s",
+			url, status, truncateBody(respBody, 512))
+	}
+	return nil
+}
+
+// postApply fires a single POST /v1/apply with the
+// supplied bearer. The function returns the HTTP
+// status code, the raw response body (for the error
+// wrapper to read on a non-2xx), and any transport
+// error. The body is not consumed here so the caller
+// can re-derive the truncated error message; the
+// caller is responsible for the `io.ReadAll` on the
+// non-2xx path. The split is intentional: the existing
+// v0.4.0-v0.8.7 single-attempt path wanted the body
+// only on error; the v0.8.8 retry path needs the
+// status BEFORE the body read so the 401 branch can
+// fire before the body is consumed.
+func (p *Provider) postApply(ctx context.Context, url string, body []byte, bearer string) (int, io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("singbox apply: build request: %w", err)
+		return 0, nil, fmt.Errorf("singbox apply: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("singbox apply: POST %s: %w", url, err)
+		return 0, nil, fmt.Errorf("singbox apply: POST %s: %w", url, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("singbox apply: agent %s returned %d: %s",
-			url, resp.StatusCode, truncateBody(respBody, 512))
-	}
-	return nil
+	return resp.StatusCode, resp.Body, nil
 }
 
 // applyEnvelope is the JSON body the aegis-agent expects on
