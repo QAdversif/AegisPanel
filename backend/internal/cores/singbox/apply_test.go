@@ -20,6 +20,24 @@ import (
 // fakeNodeResolver returns a fixed (address, bearer) pair
 // for any UUID. Tests use it to drive Apply without
 // touching the real nodes package.
+//
+// v0.8.8: the fake also implements
+// `RefreshBearer` for the 401 →
+// auto-refresh → retry path. The
+// `refreshedBearer` field, if
+// non-empty, is returned from
+// `RefreshBearer` and updates the
+// `bearer` field on the first call
+// (so a single resolver instance
+// can model "the agent rotated the
+// bearer" without a second Resolve
+// call). The `refreshCalls` atomic
+// counter records the number of
+// refresh invocations for assertion.
+// The `refreshFailWith` field, if
+// non-nil, makes `RefreshBearer`
+// return that error (used to test
+// the "refresh failed" error path).
 type fakeNodeResolver struct {
 	addr   string
 	bearer string
@@ -28,6 +46,28 @@ type fakeNodeResolver struct {
 	failWith error
 	// calls records the number of Resolve invocations.
 	calls atomic.Int32
+
+	// refreshCalls records the number of
+	// RefreshBearer invocations.
+	refreshCalls atomic.Int32
+	// refreshedBearer, if non-empty, is
+	// returned from RefreshBearer. The
+	// fake also mutates `bearer` to
+	// this value on the first refresh
+	// so subsequent Resolve calls
+	// return the new bearer (the
+	// production `nodes.Service`
+	// would do the same — the
+	// `SetAgentBearer` call inside
+	// `RefreshAgentBearer` updates
+	// the row).
+	refreshedBearer string
+	// refreshFailWith, if non-nil,
+	// makes RefreshBearer return the
+	// error. When set, the
+	// `refreshedBearer` field is
+	// ignored.
+	refreshFailWith error
 }
 
 func (f *fakeNodeResolver) Resolve(_ context.Context, _ uuid.UUID) (string, string, error) {
@@ -36,6 +76,31 @@ func (f *fakeNodeResolver) Resolve(_ context.Context, _ uuid.UUID) (string, stri
 		return "", "", f.failWith
 	}
 	return f.addr, f.bearer, nil
+}
+
+// RefreshBearer implements the v0.8.8
+// extension to singbox.NodeResolver.
+// The fake's behaviour matches the
+// production `nodes.Service.RefreshAgentBearer`:
+// on success, the new bearer is written
+// to the row (here, the fake's `bearer`
+// field) AND returned to the caller.
+// On failure, the configured error is
+// returned.
+func (f *fakeNodeResolver) RefreshBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	f.refreshCalls.Add(1)
+	if f.refreshFailWith != nil {
+		return "", f.refreshFailWith
+	}
+	// First-call semantics: write the
+	// new bearer to the row so
+	// subsequent Resolve calls return
+	// it. Subsequent calls leave the
+	// field unchanged (idempotent).
+	if f.refreshedBearer != "" {
+		f.bearer = f.refreshedBearer
+	}
+	return f.refreshedBearer, nil
 }
 
 // TestApply_HappyPath verifies the v0.4.0 happy path:
@@ -236,5 +301,362 @@ func TestApply_ContextCanceled(t *testing.T) {
 	err := p.Apply(ctx, uuid.New().String(), []byte(`{}`))
 	if err == nil {
 		t.Fatal("Apply with cancelled ctx should fail")
+	}
+}
+
+// ============================================================================
+// v0.8.8: 401 → auto-refresh → retry tests
+// ============================================================================
+
+// TestApply_401_AutoRefresh_RetrySucceeds is the
+// v0.8.8 happy path for the auto-refresh:
+// the agent returns 401 on the first
+// POST, the resolver's RefreshBearer
+// returns a new bearer, the second
+// POST succeeds. Apply returns nil
+// (the recovery is invisible to the
+// BatchedApplier caller).
+func TestApply_401_AutoRefresh_RetrySucceeds(t *testing.T) {
+	const oldBearer = "stale-bearer"
+	const newBearer = "fresh-bearer-abc"
+	var (
+		hits       atomic.Int32
+		firstAuth  atomic.Value // string
+		secondAuth atomic.Value // string
+	)
+	firstAuth.Store("")
+	secondAuth.Store("")
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		auth := r.Header.Get("Authorization")
+		if n == 1 {
+			firstAuth.Store(auth)
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		// n == 2: the retry. The auth
+		// header MUST be the new
+		// bearer (proves the retry
+		// used the refreshed
+		// bearer, not the old one).
+		secondAuth.Store(auth)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accepted": true,
+		})
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          oldBearer,
+		refreshedBearer: newBearer,
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	nodeID := uuid.New().String()
+	err := p.Apply(context.Background(), nodeID, []byte(`{"rendered":true}`))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// Two POSTs (one 401, one 200).
+	if h := hits.Load(); h != 2 {
+		t.Errorf("agent hits: want 2, got %d", h)
+	}
+	// First POST used the OLD bearer.
+	if got, _ := firstAuth.Load().(string); got != "Bearer "+oldBearer {
+		t.Errorf("first POST Authorization: want %q, got %q", "Bearer "+oldBearer, got)
+	}
+	// Second POST used the NEW bearer.
+	if got, _ := secondAuth.Load().(string); got != "Bearer "+newBearer {
+		t.Errorf("second POST Authorization: want %q, got %q", "Bearer "+newBearer, got)
+	}
+	// Refresh was called exactly once.
+	if rc := resolver.refreshCalls.Load(); rc != 1 {
+		t.Errorf("RefreshBearer calls: want 1, got %d", rc)
+	}
+	// Resolve was called exactly once
+	// (the retry uses the bearer
+	// returned from RefreshBearer,
+	// not a second Resolve call).
+	if rc := resolver.calls.Load(); rc != 1 {
+		t.Errorf("Resolve calls: want 1, got %d", rc)
+	}
+	// The fake's `bearer` field was
+	// updated to the new bearer
+	// (proves the adapter-style
+	// row-mutation is modelled).
+	if resolver.bearer != newBearer {
+		t.Errorf("resolver.bearer after refresh: want %q, got %q", newBearer, resolver.bearer)
+	}
+}
+
+// TestApply_401_RefreshFails_OriginalErrorPropagated
+// verifies that when the auto-refresh
+// itself fails, the original 401 is
+// preserved as the error context and
+// the refresh error is wrapped. The
+// BatchedApplier caller sees a
+// combined message that includes both
+// signals.
+func TestApply_401_RefreshFails_OriginalErrorPropagated(t *testing.T) {
+	const oldBearer = "stale-bearer"
+	refreshErr := errors.New("agent unreachable for refresh")
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          oldBearer,
+		refreshFailWith: refreshErr,
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error when both POST and refresh fail")
+	}
+	// The error must mention the 401
+	// (the original signal) AND the
+	// refresh failure (the root
+	// cause).
+	msg := err.Error()
+	if !strings.Contains(msg, "401") {
+		t.Errorf("error must mention 401, got %q", msg)
+	}
+	if !strings.Contains(msg, "auto-refresh failed") {
+		t.Errorf("error must mention auto-refresh, got %q", msg)
+	}
+	if !errors.Is(err, refreshErr) {
+		t.Errorf("error must wrap the refresh error %v, got %v", refreshErr, err)
+	}
+	// Only one POST (the failing
+	// 401). The retry did NOT fire
+	// because the refresh failed
+	// before the retry.
+	if h := hits.Load(); h != 1 {
+		t.Errorf("agent hits: want 1, got %d", h)
+	}
+	if rc := resolver.refreshCalls.Load(); rc != 1 {
+		t.Errorf("RefreshBearer calls: want 1, got %d", rc)
+	}
+}
+
+// TestApply_401_RetryAlsoFails_Propagates401OnRetry
+// is the "panel and agent are in an
+// unrecoverable state" case: the
+// refresh succeeds, the new bearer
+// is also rejected by the agent with
+// another 401. The Apply path
+// returns the retry's 401 error;
+// the BatchedApplier caller sees the
+// second 401 (not the first) because
+// that's the most recent signal.
+func TestApply_401_RetryAlsoFails_Propagates401OnRetry(t *testing.T) {
+	const oldBearer = "stale-bearer-1"
+	const newBearer = "stale-bearer-2"
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		// Both POSTs return 401.
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          oldBearer,
+		refreshedBearer: newBearer,
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error when retry also returns 401")
+	}
+	// The error must mention 401 (the
+	// retry's 401, since the refresh
+	// succeeded and the second POST
+	// was made with the new bearer).
+	msg := err.Error()
+	if !strings.Contains(msg, "401") {
+		t.Errorf("error must mention 401, got %q", msg)
+	}
+	if !strings.Contains(msg, "retry") {
+		t.Errorf("error must mention retry, got %q", msg)
+	}
+	// Two POSTs (the original 401 +
+	// the retry 401).
+	if h := hits.Load(); h != 2 {
+		t.Errorf("agent hits: want 2, got %d", h)
+	}
+	// One refresh.
+	if rc := resolver.refreshCalls.Load(); rc != 1 {
+		t.Errorf("RefreshBearer calls: want 1, got %d", rc)
+	}
+	// Two Resolve calls (initial +
+	// retry). The v0.8.8 code does
+	// NOT do a second Resolve on
+	// the retry path — the retry
+	// uses the bearer returned
+	// from RefreshBearer.
+	// (Wait — the actual code DOES
+	// use the bearer returned
+	// from RefreshBearer, so
+	// Resolve is only called once.
+	// Let me re-check.)
+	if rc := resolver.calls.Load(); rc != 1 {
+		t.Errorf("Resolve calls: want 1 (refresh returns the new bearer, no second Resolve), got %d", rc)
+	}
+}
+
+// TestApply_500_NoAutoRefresh verifies that
+// non-401 errors (e.g. 500) do NOT
+// trigger the auto-refresh path. The
+// 500 is a server-side problem, not
+// a stale-bearer problem, so the
+// refresh would just waste an SSH
+// session and not fix anything.
+func TestApply_500_NoAutoRefresh(t *testing.T) {
+	const wantBearer = "test-bearer-do-not-use"
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"agent oops"}`))
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:   strings.TrimPrefix(agent.URL, "http://"),
+		bearer: wantBearer,
+		// If RefreshBearer IS called
+		// despite the 500, the
+		// refresh would return a
+		// new bearer, which would
+		// then be detected as a
+		// missed assertion below.
+		refreshedBearer: "should-not-be-used",
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error on 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error must mention 500, got %q", err.Error())
+	}
+	// Exactly ONE POST. The 500 did
+	// not trigger a refresh + retry.
+	if h := hits.Load(); h != 1 {
+		t.Errorf("agent hits: want 1 (no retry on 500), got %d", h)
+	}
+	// Zero refreshes.
+	if rc := resolver.refreshCalls.Load(); rc != 0 {
+		t.Errorf("RefreshBearer calls: want 0 (500 is not 401), got %d", rc)
+	}
+	// The bearer was NOT updated
+	// (proves the no-refresh path
+	// didn't touch the resolver).
+	if resolver.bearer != wantBearer {
+		t.Errorf("resolver.bearer should be unchanged, want %q, got %q", wantBearer, resolver.bearer)
+	}
+}
+
+// TestApply_404_NoAutoRefresh is the same
+// invariant for 404: a 404 is
+// "endpoint does not exist" or "node
+// deleted from the agent's view" —
+// the bearer is irrelevant. The
+// refresh would not fix the 404.
+func TestApply_404_NoAutoRefresh(t *testing.T) {
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          "x",
+		refreshedBearer: "should-not-be-used",
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error on 404")
+	}
+	if h := hits.Load(); h != 1 {
+		t.Errorf("agent hits: want 1 (no retry on 404), got %d", h)
+	}
+	if rc := resolver.refreshCalls.Load(); rc != 0 {
+		t.Errorf("RefreshBearer calls: want 0 (404 is not 401), got %d", rc)
+	}
+}
+
+// TestApply_401_RefreshSucceeds_RetryNon401 verifies the
+// "refresh succeeded but the retry
+// returns a non-401 non-2xx" edge
+// case: the agent might be in a
+// state where the bearer was the
+// problem AND there's something else
+// wrong (e.g. sing-box config parse
+// failure). The retry's error is
+// returned; the operator sees both
+// signals (the recovery happened,
+// the agent is still broken for a
+// different reason).
+func TestApply_401_RefreshSucceeds_RetryNon401(t *testing.T) {
+	const oldBearer = "stale"
+	const newBearer = "fresh"
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := hits.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// Retry returns 500 (e.g.
+		// sing-box parse failure
+		// after a successful
+		// bearer refresh).
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"config parse failure"}`))
+	}))
+	defer agent.Close()
+
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          oldBearer,
+		refreshedBearer: newBearer,
+	}
+	p := New()
+	p.Configure(resolver, agent.Client())
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error on 500 retry")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "500") {
+		t.Errorf("error must mention 500 (the retry's status), got %q", msg)
+	}
+	if !strings.Contains(msg, "retry") {
+		t.Errorf("error must mention retry, got %q", msg)
 	}
 }

@@ -706,3 +706,36 @@ func (r *singboxNodeResolver) Resolve(ctx context.Context, id uuid.UUID) (addres
 	}
 	return n.Address, n.AgentBearer, nil
 }
+
+// RefreshBearer implements singbox.NodeResolver
+// (v0.8.8). The method is a thin adapter over
+// `nodes.Service.RefreshAgentBearer` (the v0.8.7
+// operator-side refresh flow). The adapter is in
+// main.go (not in the singbox or nodes packages)
+// so the singbox package can stay free of any
+// import-time coupling to the nodes-package's
+// SSH factory / known_hosts / envelope — the
+// adapter is wired by main() with the same
+// dependencies the v0.8.7 wiring uses.
+//
+// The auto-refresh fires when the singbox Apply
+// path sees a 401 from the agent. The adapter
+// returns the new bearer (which the Service has
+// already written to `nodes.agent_bearer`) so
+// the Apply path can retry without a second
+// Resolve call when only the bearer changed.
+//
+// The audit row recorded by
+// `nodes.Service.RefreshAgentBearer` has an
+// empty `ActorID` (the BatchedApplier goroutine
+// has no `auth.Claims` in context). This
+// distinguishes auto-refresh from the v0.8.7
+// operator-initiated flow (which has a
+// non-empty `ActorID`).
+func (r *singboxNodeResolver) RefreshBearer(ctx context.Context, id uuid.UUID) (string, error) {
+	out, err := r.svc.RefreshAgentBearer(ctx, id, nodes.RefreshBearerOptions{})
+	if err != nil {
+		return "", err
+	}
+	return out.Bearer, nil
+}

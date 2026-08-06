@@ -134,6 +134,17 @@ func (r *integrationStubResolver) Resolve(_ context.Context, _ uuid.UUID) (strin
 	return r.hostPort, r.bearer, nil
 }
 
+// RefreshBearer is a no-op for the integration
+// test: the fake agent never returns 401, so the
+// BatchedApplier never enters the auto-refresh
+// retry path. Returning the same bearer keeps
+// `singbox.NodeResolver` satisfied without
+// making the test async or pulling the SSH
+// fixture into the integration scope.
+func (r *integrationStubResolver) RefreshBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
+}
+
 // TestIntegration_EndToEnd_RealPgCreateUserTriggersApply
 // is the headline integration test: the panel
 // persists a user via users.Service.Create (real
