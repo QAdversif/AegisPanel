@@ -170,15 +170,21 @@ handful of dialogs) carry pre-existing eslint warnings for
 auto-fixable with `eslint . --fix`; not in scope for any
 release PR. v0.7.0-legacy chore.
 
-#### Cosign re-signing on every release — v0.8.x
+#### Cosign re-signing on every release — closed in v0.8.9
 
-v0.7.0 closed the `latest` tag + cosign sign/verify
-pair for the panel and agent images, but the
-post-v0.7.0 workflow contract (PRs 102/103/104/111)
-does not yet include cosign re-signing on every
-release. A future PR adds `cosign sign --yes
-$image` after the `metadata-action` step on every
-tag-push. v0.8.x.
+Closed in v0.8.9. After the existing single sign
+step, `release.yml` waits 30s (let GHCR settle)
+and then re-signs each image + runs `cosign verify`
+with the same OIDC flags a consumer would use
+(`--certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*"`,
+`--certificate-oidc-issuer https://token.actions.githubusercontent.com`).
+Three concrete failure modes covered (v0.8.8
+evidence, PR #189): (1) tag-mutation drift on
+`latest` between sign and pull; (2) sign-step
+OIDC flake recovery without full workflow_dispatch
++ rebuild; (3) explicit `cosign verify` audit
+trail in workflow log so a successful `sign` exit
+0 is no longer a "we hope this works" claim.
 
 #### Smoke test on fresh VM in CI — v0.9.0
 
