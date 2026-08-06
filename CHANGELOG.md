@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (v0.8.8 — BatchedApplier 401 auto-refresh integration)
+
+- **singbox.Apply 401 → auto-refresh →
+  retry (one attempt)**. The
+  v0.8.7 PR added
+  `nodes.Service.RefreshAgentBearer`
+  as the operator-side recovery
+  path for a stale agent bearer
+  (SSH into the node, read
+  `/etc/aegis/agent.env`, parse
+  `AEGIS_AGENT_BEARER`, update
+  `nodes.agent_bearer`). v0.8.8
+  wires that same method into the
+  singbox `Apply` path: when the
+  agent returns 401, the panel
+  calls `RefreshBearer` and retries
+  the POST once with the new
+  bearer. The recovery is invisible
+  to the `BatchedApplier` caller
+  (returns nil on success). One
+  retry only — no loop. The
+  per-status error mapping is
+  preserved: 500, 404, and other
+  non-2xx do NOT trigger the
+  auto-refresh (those are
+  server-side problems, not
+  stale-bearer problems).
+- **`singbox.NodeResolver` interface
+  extension**: the existing
+  `Resolve(ctx, id)` method is
+  joined by a new
+  `RefreshBearer(ctx, id) (newBearer, err)`
+  method. The `cmd/aegis/main.go`
+  `singboxNodeResolver` adapter
+  implements both: `Resolve`
+  reads the row, `RefreshBearer`
+  wraps
+  `nodes.Service.RefreshAgentBearer`.
+  The interface extension is the
+  minimal surface for the
+  auto-refresh — the singbox
+  package stays free of any direct
+  import of nodes.
+- **Audit row distinction**: the
+  auto-refresh uses the same
+  `nodes.Service.RefreshAgentBearer`
+  as the v0.8.7
+  operator-initiated path, but
+  with no `auth.Claims` in context.
+  The audit row's `ActorID` is
+  empty for auto-refresh and
+  non-empty for the v0.8.7
+  HTTP/CLI path. The shape
+  distinguishes "the panel did
+  this" from "the operator did
+  this" in the audit UI.
+
+### Tests
+
+- **6 new Apply-level tests** in
+  `backend/internal/cores/singbox/apply_test.go`:
+  - `TestApply_401_AutoRefresh_RetrySucceeds`
+    — full happy path (401 →
+    refresh → 200 on retry; 2
+    POSTs, 1 Resolve, 1
+    RefreshBearer, resolver's
+    `bearer` field updated to
+    the new value).
+  - `TestApply_401_RefreshFails_OriginalErrorPropagated`
+    — refresh error wrapped with
+    401 context; exactly 1 POST
+    (no retry on refresh failure).
+  - `TestApply_401_RetryAlsoFails_Propagates401OnRetry`
+    — second 401 surfaces to
+    caller, no loop.
+  - `TestApply_500_NoAutoRefresh` —
+    500 does NOT trigger refresh
+    (server-side problem, not
+    stale-bearer).
+  - `TestApply_404_NoAutoRefresh` —
+    404 does NOT trigger refresh.
+  - `TestApply_401_RefreshSucceeds_RetryNon401`
+    — refresh succeeded but
+    retry returns 500 (e.g.
+    sing-box parse failure
+    after a successful bearer
+    refresh).
+- **Updated `flushfn_smoke_test`
+  `stubResolver`** with a no-op
+  `RefreshBearer` so the smoke
+  test compiles against the
+  extended interface.
+
+### Race safety
+
+- Two `BatchedApplier` goroutines
+  hitting the same node and both
+  seeing 401 will both call
+  `RefreshBearer`. The race is
+  benign: both reads return the
+  same `agent.env` value; the DB
+  write is idempotent at the row
+  level. The only cost is two
+  extra SSH sessions, which is
+  acceptable for the rare 401
+  case. A per-node mutex is a
+  future optimization if
+  production traffic shows the
+  race is a real problem.
+
+## [0.8.7] - 2026-08-05
+
 ### Added (v0.8.7 — refresh-agent-bearer: Service + HTTP + UI)
 
 - **`nodes.Service.RefreshAgentBearer` + `GetStoredKeyForUse`**

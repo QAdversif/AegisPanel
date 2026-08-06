@@ -95,6 +95,19 @@ func (a *fakeAgent) snapshot() []appliedPayload {
 // server (the singbox.Apply implementation
 // prepends "http://" itself, so the resolver
 // returns just the host:port).
+//
+// v0.8.8: also implements the
+// `RefreshBearer` half of the
+// `singbox.NodeResolver` interface so
+// the smoke compiles after the
+// 401-auto-refresh work. The
+// RefreshBearer method is a no-op (it
+// returns the same bearer) because
+// the smoke test does not exercise
+// the 401-retry path; the dedicated
+// auto-refresh tests in
+// `singbox/apply_test.go` cover
+// that path with a richer fake.
 type stubResolver struct {
 	hostPort string
 	bearer   string
@@ -102,6 +115,19 @@ type stubResolver struct {
 
 func (r *stubResolver) Resolve(_ context.Context, _ uuid.UUID) (string, string, error) {
 	return r.hostPort, r.bearer, nil
+}
+
+// RefreshBearer implements the v0.8.8
+// half of singbox.NodeResolver. The
+// smoke test does not exercise the
+// 401-auto-refresh path, so the
+// method is a no-op returning the
+// same bearer. The dedicated
+// auto-refresh tests in
+// `singbox/apply_test.go` cover the
+// behaviour.
+func (r *stubResolver) RefreshBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
 }
 
 // hostPortFromURL extracts the host:port from a
