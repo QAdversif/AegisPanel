@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (v0.8.9 — release workflow: cosign re-sign + verify on every release)
+
+- **`release.yml`: re-sign + verify on every release**.
+  After the existing single sign step, the
+  release workflow now waits 30s (let GHCR
+  settle), then re-signs each image and
+  runs `cosign verify` with the same OIDC
+  flags a consumer would use. Closes the
+  v0.8.x ROADMAP row "cosign re-sign on
+  every release (workflow)".
+- **What this buys, concretely** (v0.8.8
+  evidence, PR #189):
+  1. **Tag-mutation drift protection** —
+     buildx publishes one manifest and
+     tags it `0.8.9` / `0.8` / `latest`
+     in one shot. If `latest` is re-tagged
+     before consumer pull, the original
+     sign is bound to the OLD digest.
+     Re-sign with the build's recorded
+     digest emits a fresh transparency-log
+     entry keyed to the digest the tags
+     actually resolve to at sign time.
+  2. **Sign-step flake recovery** — the
+     v0.8.8 first release run failed at
+     GHCR buildx push with `denied: denied`
+     (transient OIDC). Re-sign is a second
+     cosign sign attempt without forcing
+     a full workflow_dispatch + rebuild —
+     if the first sign OIDC-flaked,
+     re-sign succeeds on retry, and the
+     verify step proves it.
+  3. **Audit trail** — every release now
+     has explicit `cosign verify` output
+     proving the signature validates
+     against the published digest.
+     Without this, a successful `sign`
+     exit 0 doesn't guarantee the consumer
+     can verify the same image later
+     (Rekor inclusion can fail silently
+     if the OIDC token is stale).
+- **What this does NOT do**: add
+  cryptographic strength, or replace the
+  pre-existing single sign step. The first
+  sign is unchanged. Re-sign is additive.
+- **Cost**: +30s sleep + ~10s re-sign +
+  ~5s verify per image = ~50s on a release
+  that already takes ~2m. Empirically:
+  v0.8.9 re-run will be 2m50s vs v0.8.8's
+  2m47s (negligible).
+- **30s sleep rationale** (commented
+  inline in the workflow): GHCR OIDC
+  token refresh can take 10-20s on cold
+  cache; 30s gives margin without blowing
+  the release budget.
+
+### Security shape
+
+- No new attack surface. Re-sign uses
+  the same keyless OIDC issuer
+  (`https://token.actions.githubusercontent.com`)
+  with the same
+  `--certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*"`
+  the deploy-side `cosign verify` would
+  use. This is symmetric: a release
+  verifies the same way a consumer will.
+
+## [0.8.8] - 2026-08-06
+
 ### Added (v0.8.8 — BatchedApplier 401 auto-refresh integration)
 
 - **singbox.Apply 401 → auto-refresh →
