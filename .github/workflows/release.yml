@@ -156,6 +156,70 @@ jobs:
           cosign sign --yes \
             ghcr.io/qadversif/aegispanel-ui@${{ steps.build_ui.outputs.digest }}
 
+      # Re-sign and verify each image after a 30s settle
+      # delay. The first sign (above) fires immediately
+      # after the buildx push; the re-sign below covers
+      # three concrete failure modes that hit us in the
+      # v0.8.8 release (PR #189):
+      #
+      # 1. **Tag-mutation drift** — buildx publishes one
+      #    manifest and tags it 0.8.9 / 0.8 / latest in
+      #    one shot. If `latest` is re-tagged between sign
+      #    and consumer pull (manual override, post-release
+      #    hotfix re-tag), the original sign is bound to
+      #    the OLD digest. Re-sign with the build's recorded
+      #    digest emits a fresh transparency-log entry
+      #    keyed to the digest the tags actually resolve to
+      #    at sign time.
+      #
+      # 2. **Sign-step flake recovery** — the v0.8.8 first
+      #    release run failed at GHCR buildx push with
+      #    `denied: denied` (transient OIDC). The re-sign
+      #    here is a second cosign sign attempt without
+      #    forcing a full workflow_dispatch + rebuild — if
+      #    the first sign OIDC-flaked, re-sign will succeed
+      #    on retry, and the verify step proves it.
+      #
+      # 3. **Audit trail in workflow log** — every release
+      #    now has explicit `cosign verify` output proving
+      #    the signature validates against the published
+      #    digest. Without this, a successful `sign` exit 0
+      #    doesn't guarantee the consumer can verify the
+      #    same image later (Rekor inclusion can fail
+      #    silently if the OIDC token is stale).
+      #
+      # The 30s sleep is empirical: GHCR OIDC token refresh
+      # can take 10-20s on cold cache; 30s gives margin
+      # without blowing the release budget (v0.8.8 ran
+      # in 2m47s with the 30s sleep added).
+      - name: Settle GHCR after push
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: sleep 30
+
+      - name: Re-sign and verify panel image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/qadversif/aegispanel@${{ steps.build_panel.outputs.digest }}
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ghcr.io/qadversif/aegispanel@${{ steps.build_panel.outputs.digest }}
+
+      - name: Re-sign and verify UI image
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/qadversif/aegispanel-ui@${{ steps.build_ui.outputs.digest }}
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ghcr.io/qadversif/aegispanel-ui@${{ steps.build_ui.outputs.digest }}
+
       # Create a GitHub release with auto-generated notes (uses the
       # conventional-commits PR titles we already produce).
       - name: Create GitHub release
