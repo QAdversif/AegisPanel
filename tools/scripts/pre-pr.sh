@@ -16,6 +16,12 @@
 #   tools/scripts/pre-pr.sh --frontend     # frontend only
 #   tools/scripts/pre-pr.sh --docs         # markdownlint only
 #
+# Environment:
+#   Mavis_MEMORY_MD — override the path to the agent's MEMORY.md
+#   for the in-script size check. Default: $HOME/.minimax/agents/mavis/memory/MEMORY.md
+#   (skipped silently if the file does not exist — e.g. on a CI
+#   runner that does not have the agent data directory).
+#
 # Exit code 0 = ready to push. Non-zero = at least one step failed
 # (the failing step's output is dumped verbatim to stderr so the
 # operator can fix and re-run).
@@ -30,6 +36,23 @@
 # `go install` — golangci-lint v2 must already be on PATH
 # (CI installs it from the `golangci-lint` action; the install
 # step is documented in CONTRIBUTING.md).
+#
+# Two non-CI-mirror checks are added on top of the CI
+# matrix (introduced 2026-08-06 after the v0.8.8 fail in
+# which `integrationStubResolver` was overlooked by `go
+# build ./...` + `go test -short ./...`):
+#
+# 1. `go test -count=1 -tags=integration -run='^$' ./...`
+#    forces compilation of all test files (including
+#    `//go:build integration`-tagged ones) without
+#    running them. Catches the v0.8.8 class of failure
+#    locally, before the PR is pushed.
+# 2. Agent MEMORY.md size check (70KB soft warn / 80KB
+#    hard fail) — the agent's own memory file is a
+#    persistent cost paid on every turn via the
+#    `<agent_memory_tail>` system reminder; 80KB is the
+#    hard cap before the file has to be split into
+#    `topics/<X>.md` and archived.
 
 set -uo pipefail
 
@@ -132,6 +155,34 @@ do_golangci() {
         bash -c 'cd backend && GOFLAGS=-tags=integration golangci-lint run --config .golangci.yml ./...'
 }
 
+do_go_vet_integration() {
+    # Compile test files behind `//go:build integration` WITHOUT
+    # running them. The v0.8.8 PR (#189) shipped a `RefreshBearer`
+    # method on `singbox.NodeResolver` and a smoke-test stub that
+    # implemented the new method — but the integration-test stub
+    # (`integrationStubResolver` in flushfn_integration_test.go)
+    # was overlooked. `go build ./...` does NOT compile _test.go
+    # files, and `go test -short ./...` skips build-tagged tests
+    # entirely, so neither caught the missing-method error. CI
+    # backend (ubuntu-latest/1.26) caught it at compile time.
+    #
+    # This step prevents the same class of failure: any change
+    # to a public interface or its test-side stubs is forced
+    # through `-tags=integration` compilation locally, before
+    # the PR is pushed. `-run='^$'` ensures no tests actually
+    # run (we only want the compile). `go test` is used (not
+    # `go build`) because `go build` skips test files even
+    # with the tag set.
+    #
+    # Reference: PR #189 (v0.8.8), the integrationStubResolver
+    # fix commit `9647c9e`. The lesson is durable: any
+    # build-tagged test file can rot silently under a
+    # `go build ./...` + `go test -short ./...` workflow.
+    [[ $QUICK -eq 1 ]] && { echo "skip backend go vet integration (--quick)"; return 0; }
+    run_step "backend go vet (integration tags)" "go test -count=1 -tags=integration -run='^$' ./..." \
+        bash -c 'cd backend && go test -count=1 -tags=integration -run="^$" -timeout 30s ./...'
+}
+
 do_npm_ci() {
     [[ $QUICK -eq 1 ]] && { echo "skip frontend npm ci (--quick)"; return 0; }
     # Skip the install if `node_modules` already exists; the
@@ -167,6 +218,51 @@ do_build() {
         bash -c 'cd frontend && npm run build'
 }
 
+do_memory_size_check() {
+    # Memory hygiene: Mavis agent memory file is allowed
+    # up to 80KB. Above 70KB we warn (and the quarterly
+    # `memory-topics-prune` cron will trip a hard reset
+    # above 80KB). The path is operator-specific — on
+    # this machine it resolves to
+    # `C:\Users\adversif\.minimax\agents\mavis\memory\MEMORY.md`
+    # under Git Bash (`~` is the user home). On other
+    # machines / CI runners, the path may not exist; we
+    # skip silently in that case. Override with the
+    # `Mavis_MEMORY_MD` env var to point at a custom path.
+    #
+    # Reference: 2026-08-06 memory hygiene session.
+    # MEMORY.md was 313KB at start of session; after
+    # topic extraction + archive by month, dropped to
+    # 14.8KB. The 70KB soft warn / 80KB hard cap is the
+    # durable threshold.
+    local mem_path="${Mavis_MEMORY_MD:-${HOME}/.minimax/agents/mavis/memory/MEMORY.md}"
+    if [[ ! -f "$mem_path" ]]; then
+        echo "skip memory size check (no MEMORY.md at $mem_path)"
+        return 0
+    fi
+    local size
+    # `stat -c%s` is GNU (Linux / Git Bash); `stat -f%z`
+    # is BSD/macOS. Try GNU first, fall back.
+    size=$(stat -c%s "$mem_path" 2>/dev/null || stat -f%z "$mem_path" 2>/dev/null)
+    if [[ -z "$size" || "$size" -eq 0 ]]; then
+        echo "skip memory size check (could not stat $mem_path)"
+        return 0
+    fi
+    local kb=$(( size / 1024 ))
+    if [[ $size -gt 81920 ]]; then  # 80KB hard cap
+        echo "${RED}[FAIL]${RESET} agent memory size: ${kb}KB (>80KB hard cap, MUST trim before push)"
+        STEP_NAMES+=("agent memory size")
+        STEP_RESULTS+=("fail")
+        return 1
+    elif [[ $size -gt 71680 ]]; then  # 70KB soft warn
+        echo "${YELLOW}[WARN]${RESET} agent memory size: ${kb}KB (>70KB soft cap, consider trimming)"
+        return 0
+    else
+        echo "[OK]   agent memory size: ${kb}KB (under 70KB cap)"
+        return 0
+    fi
+}
+
 do_markdownlint() {
     # markdownlint-cli2 is not a project dev dep; we use
     # `npx -y` to fetch it on first run. The CI pins a
@@ -188,10 +284,12 @@ do_markdownlint() {
 
 case "$SCOPE" in
     backend)
-        do_gofmt;       FAIL+=$?
-        do_go_build;    FAIL+=$?
-        do_go_test;     FAIL+=$?
-        do_golangci;    FAIL+=$?
+        do_gofmt;         FAIL+=$?
+        do_go_build;      FAIL+=$?
+        do_go_vet_integration; FAIL+=$?
+        do_go_test;       FAIL+=$?
+        do_golangci;      FAIL+=$?
+        do_memory_size_check; FAIL+=$?
         ;;
     frontend)
         do_npm_ci;      FAIL+=$?
@@ -199,13 +297,16 @@ case "$SCOPE" in
         do_typecheck;   FAIL+=$?
         do_eslint;      FAIL+=$?
         do_build;       FAIL+=$?
+        do_memory_size_check; FAIL+=$?
         ;;
     docs)
         do_markdownlint; FAIL+=$?
+        do_memory_size_check; FAIL+=$?
         ;;
     all)
         do_gofmt;         FAIL+=$?
         do_go_build;      FAIL+=$?
+        do_go_vet_integration; FAIL+=$?
         do_go_test;       FAIL+=$?
         do_golangci;      FAIL+=$?
         do_npm_ci;        FAIL+=$?
@@ -214,6 +315,7 @@ case "$SCOPE" in
         do_eslint;        FAIL+=$?
         do_build;         FAIL+=$?
         do_markdownlint;  FAIL+=$?
+        do_memory_size_check; FAIL+=$?
         ;;
 esac
 
