@@ -198,7 +198,7 @@ These items are tracked in `docs/ROADMAP.md` and
 `docs/README.md` for context. None block v0.8.0 or
 the v1.0.0-mvp-soft-launch.
 
-- **JSON logs in production** — closed in v0.8.6
++ **JSON logs in production** — closed in v0.8.6
   (config-level guard for the `AEGIS_ENV=development`
   with a pg backend, the silent-misconfig shape; see
   `Config.validate()` and `usesAnyPgBackend()` in
@@ -208,17 +208,17 @@ the v1.0.0-mvp-soft-launch.
   since v0.5.0-era; the v0.8.6 PR is the guard
   that converts the silent-misconfig failure mode
   into a loud boot-time error.
-- **Cosign re-signing on every release** — v0.7.0
++ **Cosign re-signing on every release** — v0.7.0
   closed the initial sign + verify pair; the
   post-v0.7.0 workflow contract (PRs 102/103/104/111)
   does not yet include cosign re-signing on every
   release. v0.8.x.
-- **Smoke test on fresh VM in CI** — v0.9.0
++ **Smoke test on fresh VM in CI** — v0.9.0
   candidate. `tools/scripts/smoke-local.sh` (PR #152)
   covers the local docker-compose path; a
   terraform + ansible + boot-log CI job is a
   separate work unit. v0.9.0.
-- **`internal/cabinet` end-user surface** —
++ **`internal/cabinet` end-user surface** —
   doc.go-only. The per-user sub URL is the
   per-user cabinet for v0.8.0. A separate
   end-user-facing cabinet (login UI, sub URL fetch,
@@ -276,11 +276,11 @@ lands the operator-facing tariff catalog.
 
 Deferred to v0.6.x (logged in `docs/ROADMAP.md`):
 
-- `plan_pool` writes (the join table linking plans to host
++ `plan_pool` writes (the join table linking plans to host
   pools). v0.6.0 keeps the read-only view in
   `internal/subscription`.
-- `plan_pool` UI (no HostPool picker in the plan dialog yet).
-- Audit log writes from the mutating handler (the call-site
++ `plan_pool` UI (no HostPool picker in the plan dialog yet).
++ Audit log writes from the mutating handler (the call-site
   wiring is a separate batch across all admin handlers).
 
 ## Closed in v0.5.0
@@ -361,21 +361,21 @@ auditable.
 
 These are sometimes mistaken for gaps; they are intentional.
 
-- The default admin password is documented in
++ The default admin password is documented in
   `deploy/ansible/group_vars/all.yml` — not a backdoor, just
   an operator onboarding aid. v0.5.0+ sops+age flow makes the
   rotation path documented in
   `docs/operator-guide.md` §"Secrets rotation".
-- The default dark theme is intentional (dev-tool aesthetic
++ The default dark theme is intentional (dev-tool aesthetic
   per `ADR-0004`). Light theme is a token swap away; the
   light-theme polish is on the v1.5+ roadmap.
-- Subscriptions render the sing-box format by default; Clash /
++ Subscriptions render the sing-box format by default; Clash /
   base64 / HTML are available via the `?format=` query
   parameter and the `/subscription` view.
-- The project is single-tenant by design. See
++ The project is single-tenant by design. See
   `ARCHITECTURE.md` §27 and the relevant ADR (multi-tenant was
   explicitly rejected in v9).
-- 9 packages remain `doc.go`-only placeholders (cabinet,
++ 9 packages remain `doc.go`-only placeholders (cabinet,
   caddy, cascades, decoy, events, mcp, notifications, stats,
   subscriptions-plural). Of these, `plans` and `webhooks` are
   done (v0.6.0, v0.7.0); the rest are post-v1.0. They are
