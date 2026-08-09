@@ -95,6 +95,33 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Host, error) {
 	return s.store.GetByID(ctx, id)
 }
 
+// HostsForInbound returns the host id that owns the
+// (nodeID, inboundID) endpoint pair, or nil when no
+// host references the pair. Thin pass-through to the
+// store, with the same nil-vs-error contract. Added
+// in v0.8.x as the pre-req for the Builder to
+// populate `cores.InboundSpec.HostID` (the
+// `builder.go:32-41` TODO). The Service layer is
+// the right place to add the "multiple hosts
+// reference the same pair" warning once we have
+// surfaced a real operator pattern; for now the
+// deterministic-first-hits contract is enough.
+func (s *Service) HostsForInbound(ctx context.Context, nodeID, inboundID uuid.UUID) (*uuid.UUID, error) {
+	return s.store.HostsForInbound(ctx, nodeID, inboundID)
+}
+
+// NodesForHost returns every distinct node id the
+// host references via its Endpoints. Empty slice
+// (not nil) for a host with no endpoints; the
+// caller (`users.Service.enqueueUserDelta` in
+// v0.8.x) treats the result as a set. Added in
+// v0.8.x as the pre-req for the per-user
+// `HostsAllowlist` host→node expansion in
+// `users.Service.enqueueUserDelta`.
+func (s *Service) NodesForHost(ctx context.Context, hostID uuid.UUID) ([]uuid.UUID, error) {
+	return s.store.NodesForHost(ctx, hostID)
+}
+
 // CreateInput is the payload the HTTP handler passes in.
 // The caller can leave ID zero and let the service assign
 // one, or pre-assign if they have a deterministic ID

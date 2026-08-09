@@ -498,3 +498,151 @@ func TestPgStore_Delete_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// --- v0.8.x: host→inbound + host→node lookups ---------------------
+
+// TestPgStore_HostsForInbound_FirstHitWins pins the
+// Builder-side v0.8.x contract: the (nodeID,
+// inboundID) pair resolves to a single host id (the
+// first match when the pair is referenced by
+// multiple hosts). The deterministic first hit is
+// the v0.8.x contract; an operator who creates the
+// same (node, inbound) pair in two hosts gets a
+// Service-layer warning log (not a panic).
+func TestPgStore_HostsForInbound_FirstHitWins(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	f := newHostFixture(t, pool)
+	ctx := context.Background()
+
+	if err := store.Create(ctx, f.host); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.HostsForInbound(ctx, f.nodeA, f.inbA)
+	if err != nil {
+		t.Fatalf("HostsForInbound: %v", err)
+	}
+	if got == nil {
+		t.Fatal("HostsForInbound returned nil; want the host id")
+	}
+	if *got != f.host.ID {
+		t.Errorf("host id = %s, want %s", *got, f.host.ID)
+	}
+}
+
+// TestPgStore_HostsForInbound_NotInAnyHost covers the
+// "inbound exists but is not referenced by any host"
+// state: a builder rendering an un-provisioned
+// inbound gets nil back, not an error. The builder
+// sets `InboundSpec.HostID = ""` in this case.
+func TestPgStore_HostsForInbound_NotInAnyHost(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	f := newHostFixture(t, pool)
+	ctx := context.Background()
+
+	if err := store.Create(ctx, f.host); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// A (node, inbound) pair that no host's
+	// endpoint references. The node id is a fresh
+	// UUID; the inbound id is also fresh.
+	got, err := store.HostsForInbound(ctx, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("HostsForInbound: %v", err)
+	}
+	if got != nil {
+		t.Errorf("host id = %s, want nil (no host references the pair)", *got)
+	}
+}
+
+// TestPgStore_NodesForHost_DistinctSorted pins the
+// user-fan-out-side v0.8.x contract: the host
+// returns every DISTINCT node id the host's
+// Endpoints reference (deduplication is the
+// "distinct" semantic; a host with two endpoints
+// on the same node returns one entry). Empty
+// result (not nil) for a host with no endpoints.
+func TestPgStore_NodesForHost_DistinctSorted(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	f := newHostFixture(t, pool)
+	ctx := context.Background()
+
+	if err := store.Create(ctx, f.host); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.NodesForHost(ctx, f.host.ID)
+	if err != nil {
+		t.Fatalf("NodesForHost: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("nodes = %d, want 2 (the fixture seeds 2 distinct nodes)", len(got))
+	}
+	// Set-equality check (DISTINCT has no defined
+	// order; the SQL has no ORDER BY on the
+	// node-only projection).
+	gotSet := make(map[uuid.UUID]struct{}, len(got))
+	for _, n := range got {
+		gotSet[n] = struct{}{}
+	}
+	if _, ok := gotSet[f.nodeA]; !ok {
+		t.Errorf("nodeA (%s) not in result %v", f.nodeA, got)
+	}
+	if _, ok := gotSet[f.nodeB]; !ok {
+		t.Errorf("nodeB (%s) not in result %v", f.nodeB, got)
+	}
+}
+
+// TestPgStore_NodesForHost_NotFound covers the
+// user-fan-out "deleted host in allowlist" path:
+// a host id that does not exist returns ErrNotFound.
+// `enqueueUserDelta` treats this as "no nodes for
+// that host" (fail-closed; warning log).
+func TestPgStore_NodesForHost_NotFound(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	_, err := store.NodesForHost(context.Background(), uuid.New())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestPgStore_NodesForHost_EmptyReturnsNonNil pins
+// the "host with no endpoints returns an empty
+// slice (not nil) + no error" contract. The
+// `enqueueUserDelta` caller treats the result as a
+// set; the empty case is "host exists but has no
+// endpoints", which is a valid state for a host
+// being constructed in two phases.
+func TestPgStore_NodesForHost_EmptyReturnsNonNil(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	hostID := uuid.New()
+	// Insert a host with no endpoints via raw
+	// SQL (the store's Create validates the
+	// endpoint count, so we go around it).
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO hosts (id, remark, type, enabled, priority,
+			status_filter, country, city, tags, balancer)
+		VALUES ($1, 'no-endpoints-host-' || $1::text, 'direct',
+			true, 0, '[]'::jsonb, '', '', '[]'::jsonb, null)`,
+		hostID,
+	); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+
+	got, err := store.NodesForHost(context.Background(), hostID)
+	if err != nil {
+		t.Fatalf("NodesForHost: %v", err)
+	}
+	if got == nil {
+		t.Error("got nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}

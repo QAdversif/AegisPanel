@@ -28,17 +28,21 @@
 // `cfg.Experimental[ExperimentalInboundCredentialsKey]`
 // map the sing-box renderer reads.
 //
-// For PR 3 of the Phase 2 plan, the builder does NOT
-// filter credentials by user-side `HostsAllowlist` /
-// `Blocklist` — every credential for an inbound lands
-// in the rendered config for the inbound's node. The
-// sing-box sing-box config's per-user routing rules
-// (the subscription renderer's concern) are the
-// canonical place for the user-side filter; the
-// node-side rendered config carries the credential
-// material the agent will accept on the wire. A
-// future PR that adds a host-to-inbound mapping can
-// re-introduce the filter here.
+// v0.8.x: the builder now populates
+// `InboundSpec.HostID` via the `LookupHostForInbound`
+// source (the host→inbound lookup from
+// `internal/hosts.Service.HostsForInbound`). The
+// field was previously always empty (see the
+// `HostID: ""` line in the loop below); it is the
+// panel-side reference to the host this inbound
+// belongs to, and the canonical key the user-side
+// credential filter would key off. The actual
+// per-user filter at render time is a follow-up
+// (it needs a per-user context in the FlushFn, which
+// the BatchedApplier does not carry today); the
+// v0.8.x work here is the prerequisite lookup.
+// See `docs/comparison/remnawave.md:118-119` and
+// `docs/ROADMAP.md` for the upstream design notes.
 package builder
 
 import (
@@ -63,6 +67,25 @@ import (
 // caller needs), not the implementer.
 type ListInboundsByNode interface {
 	ListByNode(ctx context.Context, nodeID uuid.UUID) ([]*inbounds.Inbound, error)
+}
+
+// LookupHostForInbound is the slice of the hosts
+// service the builder needs (v0.8.x host→node
+// mapping). Returns the host id that owns the
+// (nodeID, inboundID) endpoint pair, or nil if no
+// host references the pair. The (nil, nil) case is
+// the "this inbound is not in any host" state — a
+// common scenario for test fixtures and for
+// operator pre-provisioning. The builder
+// populates `InboundSpec.HostID = ""` in that
+// case (Phase 1 contract: HostID is the panel's
+// reference to the host, not a required render
+// input). Added in v0.8.x as the pre-req for the
+// Builder-side filter per the `builder.go:32-41`
+// TODO and the `docs/comparison/remnawave.md:118`
+// "the canonical place" comment.
+type LookupHostForInbound interface {
+	HostsForInbound(ctx context.Context, nodeID, inboundID uuid.UUID) (*uuid.UUID, error)
 }
 
 // ListCredentialsByInbound is the slice of the
@@ -143,9 +166,27 @@ const experimentalInboundCredentialsKey = "inbound_credentials"
 // an empty `users: [...]` array in the rendered
 // config (the sing-box renderer's Phase 1 fallback
 // path), which is the same behavior as v0.7.2.
+//
+// v0.8.x: the `hostSrc` argument supplies the
+// host→inbound lookup (see `LookupHostForInbound`).
+// For every enabled inbound the builder queries the
+// host service and writes the result to
+// `InboundSpec.HostID`. The field is what the
+// sing-box renderer needs for outbound group
+// rendering (v0.8.x+; gated on user demand
+// "duplicate host names in subscription" per
+// `docs/comparison/remnawave.md:319`) and is the
+// canonical reference the user-side credential
+// filter would key off. A nil `hostSrc` skips the
+// lookup (the rendered HostID stays "" — the same
+// v0.8.0-v0.8.7 behaviour). A lookup error is
+// logged and treated as "no host for this inbound"
+// (HostID = ""), matching the fail-soft pattern the
+// credentials source already follows.
 func BuildCoreConfigForNode(
 	ctx context.Context,
 	inbSrc ListInboundsByNode,
+	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
 	nodeID uuid.UUID,
 ) (cores.CoreConfig, error) {
@@ -173,10 +214,32 @@ func BuildCoreConfigForNode(
 			// the service validator).
 			tag = inb.ID.String()
 		}
+		// v0.8.x: populate InboundSpec.HostID via
+		// the host→inbound lookup. A nil hostSrc
+		// keeps the v0.8.0-v0.8.7 behaviour
+		// (HostID = ""). A nil result from a real
+		// lookup means "this inbound is not
+		// referenced by any host's endpoint" — a
+		// valid state for test fixtures and
+		// pre-provisioning. A lookup error is
+		// logged and treated as "no host"; the
+		// render still proceeds with HostID = "".
+		var hostID string
+		if hostSrc != nil {
+			id, herr := hostSrc.HostsForInbound(ctx, nodeID, inb.ID)
+			if herr != nil {
+				log.Warn().Err(herr).
+					Str("node", nodeID.String()).
+					Str("inbound", tag).
+					Msg("builder: host lookup failed; falling back to empty HostID")
+			} else if id != nil {
+				hostID = id.String()
+			}
+		}
 		specs = append(specs, cores.InboundSpec{
 			Tag:    tag,
 			Type:   string(inb.Protocol),
-			HostID: "", // Phase 1: no separate host config; the inbound's Params carry the full picture.
+			HostID: hostID,
 		})
 		// The inbound's Params is the protocol-level
 		// config blob (port, tls, transport, etc.).
@@ -287,12 +350,16 @@ func BuildCoreConfigForNode(
 // failure must not block subsequent flushes).
 //
 // The closure captures the inbounds source +
-// credentials source + renderer + node identity,
-// so the BatchedApplier can be created once per
-// node and need not be told which node it serves
-// per flush.
+// host→inbound lookup + credentials source +
+// renderer + node identity, so the BatchedApplier
+// can be created once per node and need not be
+// told which node it serves per flush. v0.8.x adds
+// the `hostSrc` argument; nil skips the host
+// lookup (HostID stays ""), matching the v0.8.0-v0.8.7
+// render contract.
 func NewFlushFn(
 	inbSrc ListInboundsByNode,
+	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
 	renderer CoreRenderer,
 	nodeID uuid.UUID,
@@ -300,7 +367,7 @@ func NewFlushFn(
 ) cores.FlushFn {
 	return func(flushCtx context.Context, deltas []cores.Delta) error {
 		start := time.Now()
-		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, credSrc, nodeID)
+		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, hostSrc, credSrc, nodeID)
 		if err != nil {
 			log.Error().Err(err).Str("node", nodeName).
 				Msg("v0.5.0: BatchedApplier: builder failed; skipping Apply")

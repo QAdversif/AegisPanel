@@ -97,22 +97,60 @@ key). v0.8.3.
 
 ### UX follow-ups (deferred from v0.8.1)
 
-#### Host → node mapping in the Builder-side filter — v0.8.x
+#### Host → node mapping in the Builder-side filter — closed in this PR
 
-The Builder fetches every credential for the inbound
-and includes it in the rendered config (PR #169).
-The user-level filter is in
-`users.Service.enqueueUserDelta`, which decides
-WHICH nodes get a FlushFn re-render. The Builder
-does not filter by `user.HostsAllowlist` today —
-the model has no host-to-inbound mapping. A future
-PR that adds the host-to-inbound mapping will let
-the Builder filter credentials at render time as
-well. Same trade-off as the BatchedApplier fan-out
-filter: the data is in the user struct, but the
-mapping from "this inbound belongs to host X" to
-"host X is in user.HostsAllowlist" is not yet
-modelled. v0.8.x.
+Closed in this PR (the host→node mapping v0.8.x
+work). The lookup lives in `internal/hosts.Service`:
+
+  - `HostsForInbound(ctx, nodeID, inboundID)
+    (*uuid.UUID, error)` — the (node, inbound)
+    pair's owning host id (or nil if no host
+    references the pair). Used by
+    `internal/cores/builder.BuildCoreConfigForNode`
+    to populate `InboundSpec.HostID` (previously
+    always `""`, see `builder.go:32-41`).
+  - `NodesForHost(ctx, hostID) ([]uuid.UUID,
+    error)` — every distinct node id the host
+    references. Used by
+    `internal/users.Service.expandHostsToNodes` to
+    fan `User.HostsAllowlist` / `HostsBlocklist`
+    (host IDs, per the architecture) into node IDs
+    the BatchedApplier fan-out matches.
+
+The user-level filter on the BatchedApplier side
+was, in v0.7.x, a **misimplementation**: the field
+was named `HostsAllowlist` but the fan-out code
+treated the UUIDs as node IDs. v0.8.x fixes the
+semantic: the field stores host IDs (per the
+architecture; see `docs/comparison/remnawave.md:
+118-119` and the original TODO at `builder.go:
+32-41`); the fan-out expands them via
+`NodesForHost`. A nil `s.hosts` with a non-empty
+field is **fail-closed** (no fan-out + warning
+log) — the alternative (fail-open to "all nodes")
+would silently grant access on a misconfigured
+v0.8.x install.
+
+The per-credential Builder-side filter (the
+"Builder does not filter credentials by
+`user.HostsAllowlist`" half of the original TODO)
+is a follow-up — it requires a per-user context
+in the FlushFn, which the BatchedApplier does not
+carry today. The v0.8.x work here is the
+prerequisite lookup; the consumer-side filter is
+a separate PR. Outbound group rendering
+(`docs/comparison/remnawave.md:319`) is gated on
+user demand and is a separate PR.
+
+**Migration note for operators**: the
+`User.HostsAllowlist` / `HostsBlocklist` UUIDs
+are now host IDs, not node IDs. A panel
+upgrading from v0.7.x to v0.8.x where these
+fields held node IDs will see an empty fan-out
+for affected users until the values are
+re-populated with host IDs. The `expandHostsToNodes`
+helper's warning log (`user fan-out is empty
+(fail-closed)`) is the operational signal.
 
 #### Inbound-templates work — v0.8.x+
 
