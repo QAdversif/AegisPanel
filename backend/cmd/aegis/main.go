@@ -684,7 +684,21 @@ func singboxWiring(
 		// would skip the lookup and keep
 		// HostID = "" (v0.8.0-v0.8.7
 		// behaviour).
-		flushFn := builder.NewFlushFn(a.Inbounds, a.Hosts, a.Credentials, p, nodeID, nodeName)
+		//
+		// v0.8.10+: the users source (a.Users)
+		// is the per-node user allow-set the
+		// Builder uses to filter the per-inbound
+		// credential list. nil would skip the
+		// filter (v0.8.0-v0.8.9 default-allow
+		// contract). The real wiring resolves
+		// `a.Users.AllowedUsersForNode(ctx,
+		// nodeID)` per flush, drops credentials
+		// whose `UserID` is not in the set, and
+		// the rendered `users: [...]` array only
+		// carries the allowed users. Closes the
+		// second half of the v0.7.x Phase 2
+		// multi-user TODO.
+		flushFn := builder.NewFlushFn(a.Inbounds, a.Hosts, a.Credentials, a.Users, p, nodeID, nodeName)
 		a.AddNodeBatchedApplier(ctx, nodeID, nodeName, flushFn)
 	}
 	return nil
