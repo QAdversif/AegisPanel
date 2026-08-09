@@ -486,8 +486,14 @@ const columns: ColumnDef<Plan, unknown>[] = [
           <DialogTitle>{{ t('plans.create') }}</DialogTitle>
           <DialogDescription>{{ t('plans.subtitle') }}</DialogDescription>
         </DialogHeader>
-        <Form :form="createForm" class="space-y-4">
-          <FormField name="name" :label="t('plans.name')">
+        <Form
+          :form="createForm"
+          class="space-y-4"
+        >
+          <FormField
+            name="name"
+            :label="t('plans.name')"
+          >
             <Input
               v-model="createForm.values.name"
               type="text"
@@ -496,7 +502,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
             />
           </FormField>
           <div class="grid grid-cols-2 gap-4">
-            <FormField name="trafficLimitBytes" :label="t('plans.trafficLimit')">
+            <FormField
+              name="trafficLimitBytes"
+              :label="t('plans.trafficLimit')"
+            >
               <Input
                 v-model="createForm.values.trafficLimitBytes"
                 type="number"
@@ -504,7 +513,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="durationInput" :label="t('plans.duration')">
+            <FormField
+              name="durationInput"
+              :label="t('plans.duration')"
+            >
               <Input
                 v-model="createForm.values.durationInput"
                 type="text"
@@ -512,7 +524,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 autocomplete="off"
               />
             </FormField>
-            <FormField name="deviceLimit" :label="t('plans.deviceLimit')">
+            <FormField
+              name="deviceLimit"
+              :label="t('plans.deviceLimit')"
+            >
               <Input
                 v-model="createForm.values.deviceLimit"
                 type="number"
@@ -521,7 +536,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="priceCents" :label="t('plans.priceCents')">
+            <FormField
+              name="priceCents"
+              :label="t('plans.priceCents')"
+            >
               <Input
                 v-model="createForm.values.priceCents"
                 type="number"
@@ -529,23 +547,40 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="resetPeriod" :label="t('plans.resetPeriod')" class="col-span-2">
+            <FormField
+              name="resetPeriod"
+              :label="t('plans.resetPeriod')"
+              class="col-span-2"
+            >
               <Select v-model="createForm.values.resetPeriod">
                 <SelectTrigger>
                   <SelectValue :placeholder="t('plans.resetPeriod')" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="daily">{{ t('plans.resetPeriods.daily') }}</SelectItem>
-                  <SelectItem value="weekly">{{ t('plans.resetPeriods.weekly') }}</SelectItem>
-                  <SelectItem value="monthly">{{ t('plans.resetPeriods.monthly') }}</SelectItem>
-                  <SelectItem value="never">{{ t('plans.resetPeriods.never') }}</SelectItem>
+                  <SelectItem value="daily">
+                    {{ t('plans.resetPeriods.daily') }}
+                  </SelectItem>
+                  <SelectItem value="weekly">
+                    {{ t('plans.resetPeriods.weekly') }}
+                  </SelectItem>
+                  <SelectItem value="monthly">
+                    {{ t('plans.resetPeriods.monthly') }}
+                  </SelectItem>
+                  <SelectItem value="never">
+                    {{ t('plans.resetPeriods.never') }}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </FormField>
           </div>
           <DialogFooter>
             <DialogClose as-child>
-              <Button variant="outline" type="button">{{ t('common.cancel') }}</Button>
+              <Button
+                variant="outline"
+                type="button"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
             <Button
               type="submit"
@@ -565,8 +600,14 @@ const columns: ColumnDef<Plan, unknown>[] = [
           <DialogTitle>{{ t('plans.edit') }}</DialogTitle>
           <DialogDescription>{{ editing?.name }}</DialogDescription>
         </DialogHeader>
-        <Form :form="editForm" class="space-y-4">
-          <FormField name="name" :label="t('plans.name')">
+        <Form
+          :form="editForm"
+          class="space-y-4"
+        >
+          <FormField
+            name="name"
+            :label="t('plans.name')"
+          >
             <Input
               v-model="editForm.values.name"
               type="text"
@@ -575,7 +616,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
             />
           </FormField>
           <div class="grid grid-cols-2 gap-4">
-            <FormField name="trafficLimitBytes" :label="t('plans.trafficLimit')">
+            <FormField
+              name="trafficLimitBytes"
+              :label="t('plans.trafficLimit')"
+            >
               <Input
                 v-model="editForm.values.trafficLimitBytes"
                 type="number"
@@ -583,7 +627,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="durationInput" :label="t('plans.duration')">
+            <FormField
+              name="durationInput"
+              :label="t('plans.duration')"
+            >
               <Input
                 v-model="editForm.values.durationInput"
                 type="text"
@@ -591,7 +638,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 autocomplete="off"
               />
             </FormField>
-            <FormField name="deviceLimit" :label="t('plans.deviceLimit')">
+            <FormField
+              name="deviceLimit"
+              :label="t('plans.deviceLimit')"
+            >
               <Input
                 v-model="editForm.values.deviceLimit"
                 type="number"
@@ -600,7 +650,10 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="priceCents" :label="t('plans.priceCents')">
+            <FormField
+              name="priceCents"
+              :label="t('plans.priceCents')"
+            >
               <Input
                 v-model="editForm.values.priceCents"
                 type="number"
@@ -608,23 +661,40 @@ const columns: ColumnDef<Plan, unknown>[] = [
                 step="1"
               />
             </FormField>
-            <FormField name="resetPeriod" :label="t('plans.resetPeriod')" class="col-span-2">
+            <FormField
+              name="resetPeriod"
+              :label="t('plans.resetPeriod')"
+              class="col-span-2"
+            >
               <Select v-model="editForm.values.resetPeriod">
                 <SelectTrigger>
                   <SelectValue :placeholder="t('plans.resetPeriod')" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="daily">{{ t('plans.resetPeriods.daily') }}</SelectItem>
-                  <SelectItem value="weekly">{{ t('plans.resetPeriods.weekly') }}</SelectItem>
-                  <SelectItem value="monthly">{{ t('plans.resetPeriods.monthly') }}</SelectItem>
-                  <SelectItem value="never">{{ t('plans.resetPeriods.never') }}</SelectItem>
+                  <SelectItem value="daily">
+                    {{ t('plans.resetPeriods.daily') }}
+                  </SelectItem>
+                  <SelectItem value="weekly">
+                    {{ t('plans.resetPeriods.weekly') }}
+                  </SelectItem>
+                  <SelectItem value="monthly">
+                    {{ t('plans.resetPeriods.monthly') }}
+                  </SelectItem>
+                  <SelectItem value="never">
+                    {{ t('plans.resetPeriods.never') }}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </FormField>
           </div>
           <DialogFooter>
             <DialogClose as-child>
-              <Button variant="outline" type="button">{{ t('common.cancel') }}</Button>
+              <Button
+                variant="outline"
+                type="button"
+              >
+                {{ t('common.cancel') }}
+              </Button>
             </DialogClose>
             <Button
               type="submit"
@@ -648,9 +718,18 @@ const columns: ColumnDef<Plan, unknown>[] = [
         </DialogHeader>
         <DialogFooter>
           <DialogClose as-child>
-            <Button variant="outline" type="button">{{ t('common.cancel') }}</Button>
+            <Button
+              variant="outline"
+              type="button"
+            >
+              {{ t('common.cancel') }}
+            </Button>
           </DialogClose>
-          <Button variant="destructive" type="button" @click="confirmDelete">
+          <Button
+            variant="destructive"
+            type="button"
+            @click="confirmDelete"
+          >
             <Trash2 class="h-4 w-4" />
             {{ t('plans.delete') }}
           </Button>

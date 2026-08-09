@@ -710,7 +710,10 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
             class="block break-all rounded bg-background p-2 font-mono text-xs"
           >{{ lastCreatedSecret.secret }}</code>
           <div class="flex items-center gap-2">
-            <Button size="sm" @click="onCopySecret">
+            <Button
+              size="sm"
+              @click="onCopySecret"
+            >
               {{ t('webhooks.copy') }}
             </Button>
             <Button
@@ -788,11 +791,16 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
           </div>
           <DialogFooter>
             <DialogClose as-child>
-              <Button variant="outline" type="button">
+              <Button
+                variant="outline"
+                type="button"
+              >
                 {{ t('common.cancel') }}
               </Button>
             </DialogClose>
-            <Button type="submit">{{ t('common.create') }}</Button>
+            <Button type="submit">
+              {{ t('common.create') }}
+            </Button>
           </DialogFooter>
         </Form>
       </DialogContent>
@@ -842,11 +850,16 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
           />
           <DialogFooter>
             <DialogClose as-child>
-              <Button variant="outline" type="button">
+              <Button
+                variant="outline"
+                type="button"
+              >
                 {{ t('common.cancel') }}
               </Button>
             </DialogClose>
-            <Button type="submit">{{ t('common.save') }}</Button>
+            <Button type="submit">
+              {{ t('common.save') }}
+            </Button>
           </DialogFooter>
         </Form>
       </DialogContent>
@@ -867,7 +880,10 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
               {{ t('common.cancel') }}
             </Button>
           </DialogClose>
-          <Button variant="destructive" @click="onConfirmDelete">
+          <Button
+            variant="destructive"
+            @click="onConfirmDelete"
+          >
             {{ t('common.delete') }}
           </Button>
         </DialogFooter>
@@ -893,7 +909,9 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
         />
         <DialogFooter>
           <DialogClose as-child>
-            <Button variant="outline">{{ t('common.close') }}</Button>
+            <Button variant="outline">
+              {{ t('common.close') }}
+            </Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>
@@ -916,7 +934,9 @@ async function onReplay(d: WebhookDLQEntry): Promise<void> {
         />
         <DialogFooter>
           <DialogClose as-child>
-            <Button variant="outline">{{ t('common.close') }}</Button>
+            <Button variant="outline">
+              {{ t('common.close') }}
+            </Button>
           </DialogClose>
         </DialogFooter>
       </DialogContent>
