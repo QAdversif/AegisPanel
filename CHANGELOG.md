@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-08-10
+
+This is a **consolidation release** that closes the
+3-PR gap between `v0.8.10` (`ae41e59`) and `main`
+(`4c85a13`). It contains one security gap closure
+(PR #198, the per-user credential filter — the
+last remaining high-severity security gap from
+the deep-state analysis, required before the
+v1.0.0 GA tag) and two cosmetic frontend batches
+(PR #196 frontend-deps, PR #197 Tailwind v4
+migration). No new backend API surface, no new
+OpenAPI, no new env vars, no new schema migrations.
+The on-disk prod is unchanged from the v0.8.9
+deploy; the v0.8.11 tag is the canonical reference
+for any post-2026-08-10 hotfix branch and the
+clean snapshot for the v0.9.0 fresh-VM smoke test.
+
 ### Added (per-user credential filter in the Builder)
 
 Closes the second half of the v0.7.x Phase 2
@@ -37,6 +54,52 @@ the allowed users.
 - **Migration notes for operators**: no schema migration. No new env vars. No new `AEGIS_*_BACKEND` config. The `AEGIS_WEBHOOKS_SECRET_AGE_*` envelope and the `AEGIS_*_BACKEND=pg` set from the v0.8.9 production deploy are sufficient. Operators who have populated `User.HostsAllowlist` with host IDs see the per-user filter activate immediately on the next BatchedApplier flush; operators who have not populated the fields see no behavioral change (the v0.8.0-v0.8.9 default-allow contract is preserved when `s.hosts` is wired but every user has empty allow/block lists).
 
 - **Docs**: `KNOWN_LIMITATIONS.md` "The per-credential Builder-side filter" entry closed (with the migration note for operators). `ROADMAP.md` `v0.8.x` row updated to mark "per-user credential filter in Builder" shipped. `docs/SECURITY.md` "Not designed to defend against" section updated: the per-user cross-node leak is now closed. `CHANGELOG.md` (this entry).
+
+### Added (frontend-deps: @vueuse/core 11→14, vite 7→8, jsdom 25→30)
+
+Lockfile-only batch. No `src/` code changes. The
+three packages were pinned in `frontend/package.json`
+3+ major versions behind current; the bump brings
+them to the current `^X.Y.Z` line. `npm install` ran
+clean (added 18, removed 17, changed 22 packages
+in 22s); pre-pr.sh 10/10 ✓ including
+`frontend build` (vite 8.2.1 + rolldown, 19.9s) and
+`frontend type-check` (vue-tsc 3.3.8 ✓). 24/24 CI ✓.
+**Key observation** (durable lesson): `@vueuse/core`
+is declared in `package.json` but **never imported
+in `src/`** — grep returned 0 hits. Three major
+versions went by without any side effects because
+nothing calls it. Long-term decision deferred
+(either start using it for storage / debounce /
+etc., or remove from deps).
+
+### Added (Tailwind v4 migration — CSS-first config + @tailwindcss/vite)
+
+Frontend-only batch. Drops `tailwindcss@3.4`,
+`tailwindcss-animate@1.0`, `autoprefixer@10.5`,
+`postcss@8.5.25`, `postcss.config.js`, and
+`tailwind.config.ts` (117 lines). Adds
+`tailwindcss@4.3.3` and `@tailwindcss/vite@4.3.3`.
+Keeps `@tailwindcss/forms@0.5.11` and
+`@tailwindcss/typography@0.5.20` (their 0.5.x
+peer is `>=4.0.0` — verified via `npm view <pkg>
+peerDependencies`). `styles.css` is now
+CSS-first via `@import "tailwindcss"`,
+`@plugin "@tailwindcss/forms"`, `@plugin
+"@tailwindcss/typography"`, `@custom-variant dark
+(&:where(.dark, .dark *))`, `@theme { --color-*,
+--radius-*, --font-*, --animate-accordion-* }`,
+inline `@keyframes accordion-down/up`
+(replaces `tailwindcss-animate`). HSL custom
+properties in `:root` and `.dark` preserved
+1-в-1 (shadcn-vue convention, no visual diff
+for users). Container utility dropped from
+config (grep чист, not used in `src/`). Pipeline
+shift: from PostCSS (`postcss.config.js` +
+`autoprefixer`) to `@tailwindcss/vite` plugin
+in `vite.config.ts`. Pre-pr.sh 10/10 ✓ (build 17s,
+vite 8.2.1 + rolldown, CSS bundle 52.63kB
+gzip 9.22kB). 24/24 CI ✓.
 
 ## [0.8.10] - 2026-08-09
 
