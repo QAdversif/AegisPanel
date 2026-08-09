@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
@@ -96,6 +97,27 @@ type Service struct {
 	// stream) is one flag away. See
 	// AEGIS_BATCHED_APPLIER_ENABLED.
 	batchedAppliers map[uuid.UUID]*cores.BatchedApplier
+	// hosts is the v0.8.x host→node lookup that
+	// powers `enqueueUserDelta`'s per-user
+	// host-allow/block filter. Declared as a
+	// narrow interface so the existing unit-test
+	// fixtures can stub the lookup without
+	// instantiating a real *hosts.Service. nil =
+	// the field is unset (unit tests + pre-v0.8.x
+	// behaviour); the filter falls through to the
+	// v0.7.x default-allow path.
+	hosts HostNodesLookup
+}
+
+// HostNodesLookup is the slice of the hosts
+// service the v0.8.x user fan-out needs. Declared
+// here (in the consumers' package) to keep the
+// `internal/users` -> `internal/hosts` import
+// optional in the future; the real implementer
+// is `*hosts.Service` and the field is set via
+// `WithHosts` in main wiring.
+type HostNodesLookup interface {
+	NodesForHost(ctx context.Context, hostID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // NewService wires a Service around the given store.
@@ -108,6 +130,19 @@ func NewService(store Store) *Service {
 		idGen:      uuid.New,
 		tokenBytes: 32,
 	}
+}
+
+// WithHosts installs the host→node lookup. Used by
+// the v0.8.x `enqueueUserDelta` to expand
+// `User.HostsAllowlist` (host IDs, per the
+// architecture) into the node IDs the BatchedApplier
+// fan-out matches against. Same setter pattern as
+// WithWebhooks / WithAudits so the existing 167+
+// test fixtures stay untouched (nil is the
+// pre-v0.8.x default-allow behaviour).
+func (s *Service) WithHosts(h HostNodesLookup) *Service {
+	s.hosts = h
+	return s
 }
 
 // WithWebhooks installs the outbound event service.
@@ -161,24 +196,43 @@ func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Ser
 //     its existing fan-out.
 //   - If `HostsAllowlist` is non-empty: only fan
 //     out to appliers whose node ID is in the
-//     allowlist. This is the "user is allowed on
-//     this set of nodes" semantic.
+//     host-expanded allowlist (v0.8.x). The field
+//     stores host IDs (per the architecture); the
+//     fan-out expands each host to its node IDs
+//     via `s.hosts.NodesForHost` and unions them.
+//     This is the "user is allowed on this set of
+//     hosts" semantic — the canonical place for
+//     the per-user server filter per
+//     `docs/comparison/remnave.md:118-119`.
 //   - If `HostsBlocklist` is non-empty: skip any
-//     applier whose node ID is in the blocklist.
+//     applier whose node ID is in the
+//     host-expanded blocklist (same expansion).
 //     The blocklist wins over the allowlist (an
 //     empty allowlist + non-empty blocklist means
-//     "all nodes EXCEPT these").
+//     "all nodes EXCEPT the hosts in the
+//     blocklist").
 //
 // The `nodeID` argument to Enqueue is the
 // BatchedApplier's per-node key. The user model
 // stores `HostsAllowlist` / `Blocklist` as
-// `[]uuid.UUID`; for v0.7.x the BatchedApplier
-// key is the *node* UUID (set by
-// `App.AddNodeBatchedApplier`). The semantic
-// "this user is allowed on these nodes" is the
-// fan-out filter; a future PR that adds a host-to-
-// node mapping can re-introduce the host-level
-// filter without changing this helper's contract.
+// `[]uuid.UUID`; in v0.8.x the UUIDs are host IDs
+// (not node IDs — the previous v0.7.x code treated
+// them as node IDs, which is what the architecture
+// calls a misimplementation; the v0.8.x work
+// here fixes the semantic to match the field
+// name). The BatchedApplier fan-out still keys on
+// node IDs; the expansion via `NodesForHost` is
+// the bridge.
+//
+// v0.8.x fail-closed: if the user has a non-empty
+// allow/block list but the `s.hosts` lookup is
+// nil (main forgot to call `WithHosts`), the
+// fan-out is empty (no applier matches) and a
+// warning is logged. The alternative — fan-out
+// to every node when the lookup is missing — is
+// fail-open and would silently grant access on
+// a misconfigured v0.8.x install. The fail-closed
+// behaviour is what the architecture intends.
 //
 // The helper swallows no errors — Enqueue is a
 // blocking channel write and a slow consumer
@@ -191,13 +245,14 @@ func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Ser
 // signal (the operator will see latency on the
 // HTTP write and either scale the agent or
 // disable the feature).
-func (s *Service) enqueueUserDelta(d cores.Delta, user *User) {
+func (s *Service) enqueueUserDelta(ctx context.Context, d cores.Delta, user *User) {
 	if len(s.batchedAppliers) == 0 {
 		return
 	}
-	// Fast paths: nil user (shouldn't happen at the
-	// call sites, but be defensive) OR no allowlist
-	// filter at all → fan out to every node.
+	// Fast path: nil user (shouldn't happen at the
+	// call sites, but be defensive) OR no allow/block
+	// list at all → fan out to every node (v0.5.0
+	// default-allow; the safe migration path).
 	if user == nil || (len(user.HostsAllowlist) == 0 && len(user.HostsBlocklist) == 0) {
 		for _, ap := range s.batchedAppliers {
 			if ap == nil {
@@ -207,18 +262,29 @@ func (s *Service) enqueueUserDelta(d cores.Delta, user *User) {
 		}
 		return
 	}
-	// Phase 2: filter by the user's allowlist /
-	// blocklist. The appliers' map key is the
-	// node UUID, so we look up by node ID
-	// directly.
-	allow := make(map[uuid.UUID]struct{}, len(user.HostsAllowlist))
-	for _, id := range user.HostsAllowlist {
-		allow[id] = struct{}{}
-	}
-	block := make(map[uuid.UUID]struct{}, len(user.HostsBlocklist))
-	for _, id := range user.HostsBlocklist {
-		block[id] = struct{}{}
-	}
+	// v0.8.x: the user has a non-empty allow/block
+	// list. Expand the host IDs to node IDs via
+	// `s.hosts.NodesForHost`. A nil lookup is a
+	// fail-closed empty fan-out (logged); a real
+	// lookup that errors on a missing host is
+	// treated as "no nodes for that host" (a
+	// deleted host in the allowlist should not
+	// silently grant access to all nodes).
+	//
+	// The `hasAllowFilter` flag is keyed off the
+	// *user's* field (not the expanded set) so
+	// the fan-out is fail-closed: a non-empty
+	// field whose expansion is empty (missing
+	// lookup, missing host) yields an empty
+	// fan-out rather than falling back to the
+	// v0.5.0 default-allow. The "user did not set
+	// anything" path is the early return above;
+	// here we are explicitly in the "user set
+	// something" path and must honour the field
+	// even if the expansion is empty.
+	hasAllowFilter := len(user.HostsAllowlist) > 0
+	allow := s.expandHostsToNodes(ctx, user.HostsAllowlist, "allowlist")
+	block := s.expandHostsToNodes(ctx, user.HostsBlocklist, "blocklist")
 	for nodeID, ap := range s.batchedAppliers {
 		if ap == nil {
 			continue
@@ -226,13 +292,56 @@ func (s *Service) enqueueUserDelta(d cores.Delta, user *User) {
 		if _, blocked := block[nodeID]; blocked {
 			continue
 		}
-		if len(allow) > 0 {
+		if hasAllowFilter {
 			if _, allowed := allow[nodeID]; !allowed {
 				continue
 			}
 		}
 		ap.Enqueue(d)
 	}
+}
+
+// expandHostsToNodes turns a list of host IDs (from
+// `User.HostsAllowlist` / `HostsBlocklist`) into a
+// set of node IDs the BatchedApplier fan-out can
+// match against. A nil `s.hosts` returns an empty
+// set (fail-closed; logged once at the call site).
+// A real lookup that errors on a missing host is
+// treated as "no nodes for that host" (fail-closed;
+// the host was deleted). `label` is the field name
+// for the warning log ("allowlist" / "blocklist").
+// The `ctx` argument is propagated from the caller
+// (the mutating method) so the lookup inherits the
+// request deadline / cancellation.
+func (s *Service) expandHostsToNodes(ctx context.Context, hosts []uuid.UUID, label string) map[uuid.UUID]struct{} {
+	out := make(map[uuid.UUID]struct{})
+	if len(hosts) == 0 {
+		return out
+	}
+	if s.hosts == nil {
+		log.Warn().
+			Str("field", "hosts_"+label).
+			Int("hosts", len(hosts)).
+			Msg("users: host→node lookup is nil; user fan-out is empty (fail-closed). Wire WithHosts in main wiring.")
+		return out
+	}
+	for _, hostID := range hosts {
+		if hostID == uuid.Nil {
+			continue
+		}
+		nodeIDs, err := s.hosts.NodesForHost(ctx, hostID)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("field", "hosts_"+label).
+				Str("host", hostID.String()).
+				Msg("users: host→node lookup failed; treating host as empty")
+			continue
+		}
+		for _, n := range nodeIDs {
+			out[n] = struct{}{}
+		}
+	}
+	return out
 }
 
 // SetClock swaps the time source. Test-only.
@@ -419,7 +528,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*User, error) {
 	// window). v0.7.x: the fan-out is narrowed by
 	// the user's HostsAllowlist / Blocklist (see
 	// enqueueUserDelta for the contract).
-	s.enqueueUserDelta(cores.Delta{
+	s.enqueueUserDelta(ctx, cores.Delta{
 		Kind:   cores.DeltaAddUser,
 		UserID: out.ID,
 	}, &out)
@@ -585,7 +694,7 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Us
 			Bytes int64 `json:"bytes"`
 		}{Bytes: out.TrafficLimitBytes})
 	}
-	s.enqueueUserDelta(delta, out)
+	s.enqueueUserDelta(ctx, delta, out)
 	return out, nil
 }
 
@@ -648,7 +757,7 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	// narrowed by the same HostsAllowlist /
 	// Blocklist the user had when the row was
 	// alive.
-	s.enqueueUserDelta(cores.Delta{
+	s.enqueueUserDelta(ctx, cores.Delta{
 		Kind:   cores.DeltaRemoveUser,
 		UserID: id,
 	}, cur)
@@ -745,7 +854,7 @@ func (s *Service) RotateSubToken(ctx context.Context, id uuid.UUID, grace time.D
 	// renderer picks it up for free. v0.7.x:
 	// the fan-out is narrowed by the post-
 	// rotate user's HostsAllowlist / Blocklist.
-	s.enqueueUserDelta(cores.Delta{
+	s.enqueueUserDelta(ctx, cores.Delta{
 		Kind:   cores.DeltaAddUser,
 		UserID: out.ID,
 	}, out)
