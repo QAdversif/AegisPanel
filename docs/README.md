@@ -72,7 +72,7 @@ title: Aegis documentation
 | Merged "Add node + Provision" dialog | ⏳ v0.8.x+ |
 | shadcn-vue `RadioGroup` primitive | ⏳ v0.8.x+ |
 | Pre-existing eslint warnings cleanup (chore PR) | ⏳ v0.8.x+ |
-| Per-user credential filter in Builder (security gap — required for v1.0.0 GA) | ⏳ v0.8.x+ / v0.9.0 |
+| Per-user credential filter in Builder (closes the v0.7.x Phase 2 multi-user TODO) | ✅ shipped (v0.8.10+) |
 | Cabinet API (extended plans, hosts, decoys) | 🟡 v1.2+ |
 | S3-compatible backup storage | 🟡 v1.2+ |
 | Cascade topology | ⏳ Phase 4+ |

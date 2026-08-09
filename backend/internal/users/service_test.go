@@ -289,3 +289,172 @@ func TestService_UsernameValidation(t *testing.T) {
 // the address of a literal in UpdateInput fields.
 func ptrString(s string) *string { return &s }
 func ptrInt64(n int64) *int64    { return &n }
+
+// TestService_AllowedUsersForNode exercises the
+// v0.8.10+ per-node user allow-set that the Builder
+// uses to filter per-inbound credentials. The
+// underlying `expandHostsToNodes` logic is
+// shared with `enqueueUserDelta` (v0.8.x PR #192);
+// the `AllowedUsersForNode` method is the
+// reverse-direction read of the same set (which
+// users are on this node, instead of which nodes
+// is this user on). The cases here mirror the
+// fan-out tests in `batchapplier_fanout_test.go`
+// so the read and write sides of the filter stay
+// consistent.
+func TestService_AllowedUsersForNode(t *testing.T) {
+	nodeA := uuid.MustParse("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa")
+	nodeB := uuid.MustParse("bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb")
+	hostX := uuid.MustParse("11111111-aaaa-aaaa-aaaa-111111111111")
+	hostY := uuid.MustParse("22222222-bbbb-bbbb-bbbb-222222222222")
+
+	// Create a few users with mixed filter
+	// shapes. uNoFilter has neither allow nor
+	// block list (default-allow, included on
+	// every node). uAllowX has an allowlist
+	// that points at hostX (which references
+	// nodeA only). uBlockY has a blocklist
+	// that points at hostY (which references
+	// nodeB). uBoth has an allowlist (hostX)
+	// AND a blocklist (hostY) — included only
+	// on nodeA, excluded from nodeB.
+	svc := newSvc(t)
+	mk := func(name string, allow, block []uuid.UUID) *User {
+		u, err := svc.Create(context.Background(), CreateInput{
+			Username:       name,
+			HostsAllowlist: allow,
+			HostsBlocklist: block,
+		})
+		if err != nil {
+			t.Fatalf("setup: Create %s: %v", name, err)
+		}
+		return u
+	}
+	uNoFilter := mk("u_no_filter", nil, nil)
+	uAllowX := mk("u_allow_x", []uuid.UUID{hostX}, nil)
+	uBlockY := mk("u_block_y", nil, []uuid.UUID{hostY})
+	uBoth := mk("u_both", []uuid.UUID{hostX}, []uuid.UUID{hostY})
+	// Inactive user — must be excluded by the
+	// StatusActive filter in ListByStatus.
+	disabled := StatusDisabled
+	if _, err := svc.Create(context.Background(), CreateInput{
+		Username: "u_inactive",
+		Status:   disabled,
+	}); err != nil {
+		t.Fatalf("setup: Create inactive: %v", err)
+	}
+
+	svc.WithHosts(&stubHosts{
+		hostToNodes: map[uuid.UUID][]uuid.UUID{
+			hostX: {nodeA},
+			hostY: {nodeB},
+		},
+	})
+
+	// nodeA: uNoFilter (default-allow) +
+	// uAllowX (allowlist matches) + uBlockY
+	// (blocklist is hostY → nodeB, so nodeA is
+	// not blocked) + uBoth (allowlist matches,
+	// blocklist does not include nodeA) = 4
+	// users.
+	gotA, err := svc.AllowedUsersForNode(context.Background(), nodeA)
+	if err != nil {
+		t.Fatalf("AllowedUsersForNode(nodeA) error: %v", err)
+	}
+	if len(gotA) != 4 {
+		t.Errorf("nodeA allow-set size = %d, want 4 (got = %v)", len(gotA), gotA)
+	}
+	if !containsAll(gotA, []uuid.UUID{uNoFilter.ID, uAllowX.ID, uBlockY.ID, uBoth.ID}) {
+		t.Errorf("nodeA allow-set = %v, want contains [%v %v %v %v]",
+			gotA, uNoFilter.ID, uAllowX.ID, uBlockY.ID, uBoth.ID)
+	}
+
+	// nodeB: uNoFilter (default-allow) is
+	// included. uAllowX is excluded (allowlist
+	// points at hostX = nodeA). uBlockY is
+	// excluded (blocklist matches nodeB). uBoth
+	// is excluded (blocklist matches nodeB).
+	// 1 user total.
+	gotB, err := svc.AllowedUsersForNode(context.Background(), nodeB)
+	if err != nil {
+		t.Fatalf("AllowedUsersForNode(nodeB) error: %v", err)
+	}
+	if len(gotB) != 1 || gotB[0] != uNoFilter.ID {
+		t.Errorf("nodeB allow-set = %v, want [%v]", gotB, uNoFilter.ID)
+	}
+}
+
+// TestService_AllowedUsersForNode_NilHosts asserts
+// the fail-closed semantic: a non-empty allowlist
+// with a nil `s.hosts` lookup yields an empty
+// allow-set (the user is NOT in the result, even
+// though the filter said "this host"). The
+// `enqueueUserDelta` fan-out has the same
+// behaviour; the read side mirrors it. Without
+// this guard, a misconfigured panel (forgot to
+// call `WithHosts` in main) would silently grant
+// access on every node.
+func TestService_AllowedUsersForNode_NilHosts(t *testing.T) {
+	svc := newSvc(t)
+	hostX := uuid.MustParse("11111111-aaaa-aaaa-aaaa-111111111111")
+	if _, err := svc.Create(context.Background(), CreateInput{
+		Username:       "u_allow_only",
+		HostsAllowlist: []uuid.UUID{hostX},
+	}); err != nil {
+		t.Fatalf("setup: Create: %v", err)
+	}
+	// No svc.WithHosts(...) call — `s.hosts` is
+	// nil. The user has a non-empty allowlist,
+	// so AllowedUsersForNode must return an
+	// empty set.
+	got, err := svc.AllowedUsersForNode(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("AllowedUsersForNode error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("nil-hosts + non-empty allowlist: got = %v, want empty (fail-closed)", got)
+	}
+}
+
+// TestService_AllowedUsersForNode_DefaultAllow covers
+// the "no allowlist, no blocklist" path: every
+// active user is included regardless of the host
+// lookup state.
+func TestService_AllowedUsersForNode_DefaultAllow(t *testing.T) {
+	svc := newSvc(t)
+	u1, err := svc.Create(context.Background(), CreateInput{Username: "u1_default"})
+	if err != nil {
+		t.Fatalf("setup: Create u1: %v", err)
+	}
+	u2, err := svc.Create(context.Background(), CreateInput{Username: "u2_default"})
+	if err != nil {
+		t.Fatalf("setup: Create u2: %v", err)
+	}
+	// nil `s.hosts` is fine for the default-allow
+	// case (no filter, no lookup needed).
+	got, err := svc.AllowedUsersForNode(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("AllowedUsersForNode error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("default-allow: got size = %d, want 2 (got = %v)", len(got), got)
+	}
+	if !containsAll(got, []uuid.UUID{u1.ID, u2.ID}) {
+		t.Errorf("default-allow: got = %v, want contains [%v %v]", got, u1.ID, u2.ID)
+	}
+}
+
+// containsAll reports whether `s` contains every
+// element of `want` (order-independent).
+func containsAll(s, want []uuid.UUID) bool {
+	have := make(map[uuid.UUID]struct{}, len(s))
+	for _, id := range s {
+		have[id] = struct{}{}
+	}
+	for _, id := range want {
+		if _, ok := have[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
