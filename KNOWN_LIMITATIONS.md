@@ -279,6 +279,54 @@ so the server-side `docker run` only needs
 on the operator. The runbook §6.6 documents
 this as the future direction.
 
+#### Subscription URL display in UsersView — closed in this PR
+
+Closed in this PR. The v0.8.x operator UX gap
+("the admin has no way to get a user's
+subscription URL out of the panel UI without
+manually concatenating
+`https://<host>/<sub_path>/sub/<token>`") was
+an oversight from the v0.1.0 SubscriptionView
+work (the diagnostic page only accepts a raw
+sub_token and never exposes the constructed
+URL). A dead `fetchSubscriptionForUser` helper
+in `frontend/src/api/services/subscription.ts`
+called a non-existent
+`GET /api/v1/users/{id}/sub` endpoint; the
+helper has been removed.
+
+The fix:
+
+- **New DropdownMenu item in `UsersView.vue`**
+  ("Show subscription URL" / "Показать ссылку
+  подписки") on each user row. Opens a dialog
+  with the full URL (read-only textarea), a
+  **Copy URL** button, an **Open** button (new
+  tab, `noopener`), and a format selector +
+  **Preview** button that renders the
+  sing-box / clash / base64 / HTML payload
+  via the existing `GET /api/v1/sub/{token}`
+  endpoint.
+- **URL construction** is pure-frontend:
+  `${window.location.origin}${sub_path_prefix}/sub/${user.subToken}`.
+  The active `sub_path` is read from
+  `GET /api/v1/panelcfg/` on every dialog open
+  (so a recent rotation is picked up without a
+  page reload) and a **Refresh** button
+  re-runs the lookup without closing the
+  dialog.
+- **Existing post-create / post-rotate modal
+  extended**: the dialog now also shows the
+  full URL (read-only textarea) + a new
+  **Copy URL** button alongside the existing
+  **Copy** (raw token) button. The raw token
+  stays primary because of the v0.1.0
+  "shown only once" contract.
+- **No backend change**. No `openapi.yaml`
+  bump. The two endpoints touched
+  (`/api/v1/sub/{token}`, `/api/v1/panelcfg/`)
+  are both pre-existing and stable.
+
 #### Smoke test on fresh VM in CI — v0.9.0
 
 `tools/scripts/smoke-local.sh` (PR #152) covers the
