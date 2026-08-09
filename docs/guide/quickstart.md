@@ -12,11 +12,15 @@ is the impatient version.
 
 You need:
 
-- A Linux x86_64 VPS (Ubuntu 22.04+ recommended) with
-  `aegis-deploy` SSH access.
+- A Linux x86_64 VPS (Ubuntu 24.04+ recommended) with `root`
+  or `aegis-deploy` SSH access. The v0.8.x canonical path is
+  manual `docker run` on the panel host (the Ansible role-based
+  path is a v0.5.0-era option that's still maintained but no
+  longer the only option).
 - Docker 24+ and Docker Compose v2 on the VPS.
-- `sops` and `age` on your **local** machine.
-- Ansible 9+ on your **local** machine.
+- `sops` 3.13+ and `age` 1.1+ on your **local** machine.
+- Ansible 9+ on your **local** machine — **only** if you take
+  the role-based path. The manual path doesn't need it.
 - An HTTPS-capable domain pointed at the VPS (for Caddy + the
   public panel URL).
 
@@ -70,42 +74,67 @@ git commit -m "chore(ops): bootstrap secrets file"
 ## 4. Stage on the target host
 
 ```bash
-scp deploy/secrets/secrets.yml \
-  aegis-deploy@panel.example.com:/etc/aegis/secrets.yml.enc
-scp ~/.aegis/age.key \
-  aegis-deploy@panel.example.com:/etc/aegis/age.key
-ssh aegis-deploy@panel.example.com 'sudo chmod 0600 /etc/aegis/age.key'
+# Encrypted env (at-rest storage on the host)
+scp ~/.aegis/aegis-env.enc.env root@panel.example.com:/etc/aegis/
+# Age key (the server-side counterpart; needed by the distroless
+# container to decrypt webhooks secrets + nodes.ssh_private_key_ciphertext)
+scp ~/.ssh/aegis.age.key root@panel.example.com:/etc/aegis/age.key
+# On the server, fix the perms for the distroless nonroot UID
+ssh root@panel.example.com 'chown 65532:65532 /etc/aegis/age.key && chmod 0640 /etc/aegis/age.key && chmod 0600 /etc/aegis/aegis-env.enc.env'
 ```
 
-The encrypted file lands at `/etc/aegis/secrets.yml.enc`; the
-age private key lands at `/etc/aegis/age.key` (mode 0600,
-owner root). Both paths are the `configure_secrets` role's
-defaults; override in `group_vars/all.yml` if your topology
-differs.
+> **v0.8.x note**: the age private key lives on the **operator's
+> local machine** (`~/.ssh/aegis.age.key`, mode 0600), not on
+> the panel host. The panel host only needs the public
+> counterpart to verify signatures, and a copy of the private
+> key as `/etc/aegis/age.key` for runtime decrypts of
+> `webhook_endpoints.secret` and `nodes.ssh_private_key_ciphertext`.
+> The v0.5.0-era `secrets.env` on the host is no longer the
+> source of truth — the v0.8.x contract is decrypt-on-operator
+> - `docker run -e KEY=VALUE` flags. See
+> [`operator-guide.md#v0.8.x-secret-decryption-contract`](../operator-guide.md)
+> for the full pattern.
 
-## 5. Run the panel playbook
+## 5. Decrypt on the operator, ship the panel + UI
 
 ```bash
-ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
-  deploy/ansible/playbooks/panel.yml
+# On your local machine, decrypt the env into a temp file
+SOPS_AGE_KEY_FILE=~/.ssh/aegis.age.key \
+sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env \
+  > /tmp/aegis-env.plain
+
+# Build the -e flag list (a small python or awk one-liner)
+# See docs/RUNBOOKS/deploy.md §6.4 for the worked example,
+# or the operator's local .tmp-build-env-flags.py script.
+
+# Pull the images on the panel host
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.9'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9'
+
+# Run the panel (one shot, with all the -e flags from above)
+ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net \
+  --restart unless-stopped \
+  -v /var/lib/aegis/migrations:/app/migrations:ro \
+  -v /var/lib/aegis/known_hosts:/var/lib/aegis/known_hosts:ro \
+  -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
+  -p 127.0.0.1:8080:8080 \
+  <the -e flags from the decrypted env> \
+  ghcr.io/qadversif/aegispanel:0.8.9"
 ```
 
-The playbook runs three roles:
-
-1. `bootstrap_node` — creates the `aegis-deploy` user, base
-   packages, the `/etc/aegis/` tree.
-2. `configure_secrets` — installs sops+age, decrypts
-   `secrets.yml.enc` to `secrets.env` (mode 0600, owner
-   `aegis-deploy`).
-3. `install_panel` — drops `docker-compose.prod.yml`, pulls
-   the panel image, starts the stack.
+The Ansible-based path is still supported (the roles
+`bootstrap_node` + `configure_secrets` + `install_panel` under
+`deploy/ansible/roles/` cover the same flow as one-liner
+playbook invocations), but the v0.8.x canonical install
+is the manual `docker run` path above.
 
 ## 6. Smoke test
 
 ```bash
-# Loopback health check
-ssh aegis-deploy@panel.example.com \
-  'curl -fsS http://127.0.0.1:8080/healthz'
+# Loopback health check (the only health endpoint in v0.8.x;
+# /healthz was a v0.5.0-era alias, removed in v0.8.0)
+ssh root@panel.example.com 'curl -fsS http://127.0.0.1:8080/api/v1/health'
+# → {"status":"ok","version":"dev"}
 
 # Public panel URL (Caddy is the public ingress; the loopback
 # port 8080 is not exposed)
@@ -113,14 +142,27 @@ xdg-open https://panel.example.com
 ```
 
 The default admin login is `admin` + the password you set in
-`aegis.admin_password` (decrypted from the secrets file).
-Change the password on first login.
+`AEGIS_JWT_SECRET`'s neighbouring admin password field (or
+the default `***REMOVED***` if you used the
+v0.8.9 first-run fixture — change it on first login). The
+admin is created via `aegis admin add admin --email <email>
+--role super-admin` on the panel host (the aegis binary
+on the server).
 
 ## 7. Add the first node
 
 ```bash
+# Option A: Ansible role-based
 ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
   deploy/ansible/playbooks/node.yml
+
+# Option B: Manual via the panel UI
+# 1. SSH to the node, install sing-box + aegis-agent manually
+# 2. In the panel UI: Settings → Nodes → Add
+# 3. Paste the operator's SSH key (or the panel's stored key
+#    if you ran the v0.8.1+ rotate-panel-key flow)
+# 4. The node is marked `online` and the BatchedApplier starts
+#    pushing sing-box configs.
 ```
 
 The node playbook installs sing-box (with the GitHub-API

@@ -35,18 +35,20 @@ title: Aegis documentation
 | Component | Status |
 | --- | --- |
 | Architecture (this doc tree) | ✅ Finalised (v9.5) |
-| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.0 |
-| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups) | ✅ v0.8.0 |
+| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.9 |
+| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups, credentials) | ✅ v0.8.9 |
 | Local dev environment (docker compose) | ✅ v0.5.0 |
 | Core (sing-box provider, GitHub-API SHA-256 install) | ✅ v0.5.0 |
-| sops+age secrets (`configure_secrets` Ansible role) | ✅ v0.5.0 |
+| sops+age secrets (`configure_secrets` Ansible role + decrypt-on-operator pattern) | ✅ v0.5.0 (canonical manual path refined in v0.8.x) |
 | Backup / restore (`aegis-pg-backup`, `aegis-pg-restore`) | ✅ v0.5.0 |
 | Outgoing webhooks (HMAC + retry + DLQ) | ✅ v0.7.0 |
-| Operator guide + security policy + quickstart | ✅ v0.5.0 |
-| Pre-PR local CI gate (`tools/scripts/pre-pr.sh`) | ✅ v0.5.0 |
+| Operator guide + security policy + quickstart | ✅ v0.5.0 (v0.8.x refresh) |
+| Pre-PR local CI gate (`tools/scripts/pre-pr.sh`) | ✅ v0.5.0 (vet-integration + memory-size checks added 2026-08-06, PR #190) |
 | Container wiring for the sops+age secrets file | ✅ v0.5.0 |
 | Cosign sign + verify for panel and agent images | ✅ v0.7.0 |
+| Cosign re-sign + verify on every release (30s settle + re-sign + verify) | ✅ v0.8.9 |
 | JSON logs in production (`AEGIS_ENV=production`) | ✅ v0.7.0 |
+| JSON-logs config guard (refuses `development` + any `AEGIS_*_BACKEND=pg`) | ✅ v0.8.6 |
 | Webhook call-site wiring (production event flow) | ✅ v0.7.1 |
 | `sops` envelope on `webhook_endpoints.secret` | ✅ v0.7.1 |
 | Background worker for webhook retry | ✅ v0.7.1 |
@@ -54,16 +56,28 @@ title: Aegis documentation
 | Composition root (`internal/app.Build`; main.go God-object fix) | ✅ v0.7.2 |
 | End-to-end integration test for the panel→agent pipeline | ✅ v0.7.2 |
 | Audit log call-site wiring (every mutating service audited) | ✅ v0.8.0 |
-| Phase 2 multi-user sing-box render — data model (`internal/credentials` + migration 0019) | ✅ v0.8.0 |
-| Phase 2 multi-user sing-box render — multi-user renderer signature | ✅ v0.8.0 |
-| Phase 2 multi-user sing-box render — builder + BatchedApplier narrow | ✅ v0.8.0 |
-| Phase 2 multi-user sing-box render — per-user subscription render | ✅ v0.8.0 |
-| HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/`) | ⏳ v0.8.x |
+| Phase 2 multi-user sing-box render end-to-end (data + renderer + builder + subscription) | ✅ v0.8.0 |
+| Persistent panel SSH key (ed25519 + sops+age envelope) | ✅ v0.8.1 |
+| Three-way auth radio (key / password / stored) on the provision UI | ✅ v0.8.1 |
+| Server-side `auth.me` fix on pg backend (closes the v0.8.0 500 on pg) | ✅ v0.8.2 |
+| HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/`) | ✅ v0.8.2 |
+| `aegis admin node rotate-panel-key` CLI (v0.3.0..v0.7.x re-provision) | ✅ v0.8.3 |
+| HTTP mirror of the rotate-panel-key CLI | ✅ v0.8.4 |
+| "Show stored key" debug surface in NodesView | ✅ v0.8.5 |
+| `nodes.Service.RefreshAgentBearer` (operator-side bearer recovery) | ✅ v0.8.7 |
+| BatchedApplier 401→auto-refresh integration | ✅ v0.8.8 |
+| Host → node mapping in Builder filter | ✅ v0.8.x (PR #192) |
+| Subscription URL display in UsersView (admin copy-link UX) | ✅ v0.8.x (PR #193) |
 | Inbound-templates work (per-tenant `Params` defaults) | ⏳ v0.8.x+ |
+| Merged "Add node + Provision" dialog | ⏳ v0.8.x+ |
+| shadcn-vue `RadioGroup` primitive | ⏳ v0.8.x+ |
+| Pre-existing eslint warnings cleanup (chore PR) | ⏳ v0.8.x+ |
+| Per-user credential filter in Builder (security gap — required for v1.0.0 GA) | ⏳ v0.8.x+ / v0.9.0 |
 | Cabinet API (extended plans, hosts, decoys) | 🟡 v1.2+ |
 | S3-compatible backup storage | 🟡 v1.2+ |
 | Cascade topology | ⏳ Phase 4+ |
 | MCP integration | ⏳ Phase 4+ |
+| Smoke test on fresh VM in CI (terraform + ansible + boot log) | ⏳ v0.9.0 |
 | Tailwind v4 migration | ⏳ v1.5 |
 | Light theme polish | ⏳ v1.5 |
 
