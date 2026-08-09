@@ -16,14 +16,17 @@ import { h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { ColumnDef } from '@tanstack/vue-table'
-import { KeyRound, MoreHorizontal, RefreshCw, UserPlus, X } from 'lucide-vue-next'
+import { ExternalLink, Eye, KeyRound, Link2, MoreHorizontal, RefreshCw, UserPlus, X } from 'lucide-vue-next'
 import { z } from 'zod'
 
 import {
   createUser,
+  fetchSubscription,
+  getActivePanelPath,
   listUsers,
   rotateUserToken,
   updateUser,
+  type RenderedSubscription,
 } from '@/api/services'
 import { useToastStore } from '@/stores/toast'
 import { toApiError } from '@/api/client'
@@ -66,6 +69,30 @@ const tokenView = ref<{ user: User; token: string } | null>(null)
 const tokenOpen = ref(false)
 const createOpen = ref(false)
 const editOpen = ref(false)
+// panelPath is the active sub_path prefix; empty string = the
+// default `/sub/{token}` mount (no rotation), non-empty = the
+// rotated `{sub_path}/sub/{token}` mount. The full subscription
+// URL the operator gives to the user is built from this +
+// `window.location.origin` + the user's `subToken`. Loaded on
+// mount and re-loaded on each dialog open so a recent rotation
+// is reflected.
+const panelPath = ref<string>('')
+// subUrlView is the per-user "show subscription URL" dialog
+// state. `url` is the full URL the operator can copy / open /
+// preview; `preview` carries the last rendered subscription
+// payload (sing-box / clash / base64), `previewFormat` is the
+// format that produced it, and `previewing` / `previewError`
+// drive the in-dialog button state.
+const subUrlView = ref<{
+  user: User
+  url: string
+  preview: RenderedSubscription | null
+  previewFormat: RenderedSubscription['format']
+  previewing: boolean
+  previewError: string | null
+} | null>(null)
+const subUrlOpen = ref(false)
+const subUrlFormat = ref<RenderedSubscription['format']>('sing-box')
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -82,8 +109,46 @@ async function refresh(): Promise<void> {
   }
 }
 
+// loadPanelPath fetches the active sub_path so the
+// per-user subscription URL is always built against
+// the current rotated prefix. A failure is non-fatal:
+// the empty default keeps the URL working at
+// `/sub/{token}` (the documented default mount).
+// Re-invoked on every dialog open so a recent
+// rotation is picked up without a page reload.
+async function loadPanelPath(): Promise<void> {
+  try {
+    const cfg = await getActivePanelPath()
+    panelPath.value = cfg.subPath ?? ''
+  } catch (error) {
+    toast.add({
+      title: t('users.subscriptionUrlLoadFailed'),
+      description: toApiError(error).message,
+      variant: 'destructive',
+    })
+  }
+}
+
+// buildSubUrl constructs the operator-facing URL the
+// end user pastes into a VPN client. The shape
+// matches the backend mount:
+//
+//   - subPath == "" (default, no rotation):
+//     `${origin}/sub/{token}`
+//   - subPath != "" (rotated):
+//     `${origin}/{subPath}/sub/{token}`
+//
+// The trailing-slash normalisation is not needed
+// (the backend router matches the no-slash form).
+function buildSubUrl(user: User): string {
+  const origin = window.location.origin
+  const prefix = panelPath.value ? `/${panelPath.value}` : ''
+  return `${origin}${prefix}/sub/${user.subToken}`
+}
+
 onMounted(() => {
   void refresh()
+  void loadPanelPath()
 })
 
 // --- Create ------------------------------------------------------------
@@ -219,6 +284,82 @@ async function rotateToken(user: User): Promise<void> {
   }
 }
 
+// --- Show subscription URL --------------------------------------------
+
+// openSubscriptionUrl re-loads the panel path (so a
+// recent rotation is reflected) and opens the
+// per-user dialog with the constructed URL. The
+// preview is null on first open; the operator
+// picks a format and clicks "Preview" to render
+// the payload the user would receive.
+async function openSubscriptionUrl(user: User): Promise<void> {
+  await loadPanelPath()
+  subUrlView.value = {
+    user,
+    url: buildSubUrl(user),
+    preview: null,
+    previewFormat: subUrlFormat.value,
+    previewing: false,
+    previewError: null,
+  }
+  subUrlOpen.value = true
+}
+
+function closeSubscriptionUrl(): void {
+  subUrlOpen.value = false
+  subUrlView.value = null
+}
+
+// refreshSubscriptionUrl rebinds the dialog's URL
+// against the latest sub_path. Called after a
+// successful rotation of the sub_path (in case the
+// operator opens the dialog, rotates, and re-opens
+// without a full page reload).
+function refreshSubscriptionUrl(): void {
+  if (subUrlView.value) {
+    subUrlView.value.url = buildSubUrl(subUrlView.value.user)
+  }
+}
+
+// previewSubscription renders the per-token
+// subscription in the dialog's currently-selected
+// format. The endpoint is the same admin
+// `/api/v1/sub/{token}` already used by the
+// diagnostic SubscriptionView (so the preview is
+// byte-identical to what the user would receive
+// over the user-facing URL).
+async function previewSubscription(): Promise<void> {
+  if (!subUrlView.value) return
+  const v = subUrlView.value
+  v.previewing = true
+  v.previewError = null
+  try {
+    v.preview = await fetchSubscription(v.user.subToken, subUrlFormat.value)
+    v.previewFormat = subUrlFormat.value
+  } catch (error) {
+    v.previewError = toApiError(error).message
+    v.preview = null
+  } finally {
+    v.previewing = false
+  }
+}
+
+// openInNewTab opens the dialog's current URL
+// in a new browser tab. Wrapped in a function
+// (not an inline `@click`) so the template
+// doesn't have to reference `window` directly —
+// Vue's `useI18n()` returns a `t` object that
+// shadows the global `window` in template scope,
+// and TS's `vue-tsc` would flag the inline
+// reference as a missing property.
+function openInNewTab(): void {
+  if (!subUrlView.value) return
+  // `window` here is the browser global, NOT
+  // the i18n shadow (this is a `<script setup>`
+  // function, not a template expression).
+  globalThis.open(subUrlView.value.url, '_blank', 'noopener')
+}
+
 // --- Table columns -----------------------------------------------------
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -279,6 +420,11 @@ const columns: ColumnDef<User, unknown>[] = [
         ),
         h(DropdownMenuContent, { align: 'end' }, () => [
           h(DropdownMenuItem, { onSelect: () => startEdit(row.original) }, () => t('common.edit')),
+          h(
+            DropdownMenuItem,
+            { onSelect: () => void openSubscriptionUrl(row.original) },
+            () => t('users.showSubscriptionUrl'),
+          ),
           h(DropdownMenuItem, { onSelect: () => rotateToken(row.original) }, () => t('users.rotateToken')),
           h(
             DropdownMenuItem,
@@ -584,6 +730,13 @@ async function softDelete(user: User): Promise<void> {
             :rows="3"
             class="users__token-field"
           />
+          <small class="users__meta">{{ t('users.subscriptionUrlLabel') }}</small>
+          <Textarea
+            :model-value="buildSubUrl(tokenView.user)"
+            readonly
+            :rows="2"
+            class="users__token-field"
+          />
         </div>
         <DialogFooter>
           <Button
@@ -591,6 +744,13 @@ async function softDelete(user: User): Promise<void> {
             @click="copyToClipboard(tokenView.token)"
           >
             {{ t('users.copy') }}
+          </Button>
+          <Button
+            variant="outline"
+            @click="copyToClipboard(buildSubUrl(tokenView.user))"
+          >
+            <Link2 class="h-4 w-4" />
+            {{ t('users.copyUrl') }}
           </Button>
           <Button
             variant="outline"
@@ -603,6 +763,110 @@ async function softDelete(user: User): Promise<void> {
             {{ t('users.rotateToken') }}
           </Button>
           <Button @click="tokenOpen = false">
+            <X class="h-4 w-4" />
+            {{ t('common.cancel') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Subscription URL dialog (per-user; opened from the row menu) -->
+    <Dialog v-model:open="subUrlOpen">
+      <DialogContent
+        v-if="subUrlView"
+        class="users__suburl-content"
+      >
+        <DialogHeader>
+          <DialogTitle>
+            <Link2 class="inline h-4 w-4 mr-1" />
+            {{ t('users.subscriptionUrlTitle') }}
+          </DialogTitle>
+          <DialogDescription>{{ t('users.subscriptionUrlDescription') }}</DialogDescription>
+        </DialogHeader>
+        <div class="users__token-block">
+          <small class="users__meta">{{ t('users.username') }}: {{ subUrlView.user.username }}</small>
+          <Textarea
+            :model-value="subUrlView.url"
+            readonly
+            :rows="2"
+            class="users__token-field"
+          />
+          <div class="users__suburl-preview-row">
+            <Select v-model="subUrlFormat">
+              <SelectTrigger class="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sing-box">
+                  sing-box
+                </SelectItem>
+                <SelectItem value="clash">
+                  Clash
+                </SelectItem>
+                <SelectItem value="base64">
+                  base64
+                </SelectItem>
+                <SelectItem value="html">
+                  HTML
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              :disabled="subUrlView.previewing"
+              @click="previewSubscription"
+            >
+              <Eye class="h-4 w-4" />
+              {{ t('users.preview') }}
+            </Button>
+          </div>
+          <div
+            v-if="subUrlView.previewing"
+            class="users__suburl-rendering"
+          >
+            {{ t('subscription.rendering') }}
+          </div>
+          <div
+            v-else-if="subUrlView.previewError"
+            class="users__suburl-error"
+          >
+            {{ subUrlView.previewError }}
+          </div>
+          <template v-else-if="subUrlView.preview">
+            <small class="users__meta">
+              {{ t('subscription.resultTitle', { format: subUrlView.previewFormat }) }}
+            </small>
+            <pre class="users__suburl-payload">{{ subUrlView.preview.body }}</pre>
+            <img
+              v-if="subUrlView.preview.qrDataUrl"
+              :src="subUrlView.preview.qrDataUrl"
+              :alt="t('subscription.qrAlt')"
+              class="users__suburl-qr"
+            >
+          </template>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            @click="copyToClipboard(subUrlView.url)"
+          >
+            <Link2 class="h-4 w-4" />
+            {{ t('users.copyUrl') }}
+          </Button>
+          <Button
+            variant="outline"
+            @click="refreshSubscriptionUrl"
+          >
+            {{ t('users.refresh') }}
+          </Button>
+          <Button
+            variant="outline"
+            @click="openInNewTab"
+          >
+            <ExternalLink class="h-4 w-4" />
+            {{ t('users.openUrl') }}
+          </Button>
+          <Button @click="closeSubscriptionUrl">
             <X class="h-4 w-4" />
             {{ t('common.cancel') }}
           </Button>
@@ -652,5 +916,49 @@ async function softDelete(user: User): Promise<void> {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8125rem;
   word-break: break-all;
+}
+
+.users__suburl-content {
+  max-width: 36rem;
+}
+
+.users__suburl-preview-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.users__suburl-rendering {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.875rem;
+}
+
+.users__suburl-error {
+  color: hsl(var(--destructive));
+  font-size: 0.875rem;
+  word-break: break-word;
+}
+
+.users__suburl-payload {
+  margin: 0;
+  padding: 0.75rem;
+  background: hsl(var(--muted));
+  border-radius: 0.375rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.users__suburl-qr {
+  display: block;
+  margin-top: 0.5rem;
+  width: 10rem;
+  height: 10rem;
+  border-radius: 0.375rem;
+  border: 1px solid hsl(var(--border));
 }
 </style>
