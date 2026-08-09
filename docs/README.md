@@ -69,7 +69,7 @@ title: Aegis documentation
 | Host → node mapping in Builder filter | ✅ v0.8.x (PR #192) |
 | Subscription URL display in UsersView (admin copy-link UX) | ✅ v0.8.x (PR #193) |
 | Inbound-templates work (per-tenant `Params` defaults) | ⏳ v0.8.x+ |
-| Merged "Add node + Provision" dialog | ⏳ v0.8.x+ |
+| Merged "Add node + Provision" dialog | ✅ shipped (v0.8.12+) |
 | shadcn-vue `RadioGroup` primitive | ⏳ v0.8.x+ |
 | Pre-existing eslint warnings cleanup (chore PR) | ⏳ v0.8.x+ |
 | Per-user credential filter in Builder (closes the v0.7.x Phase 2 multi-user TODO) | ✅ shipped (v0.8.10+) |

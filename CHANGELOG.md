@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (merged "Add node + Provision" dialog)
+
+Closes the v0.8.x-bucket UX follow-up "merged
+'Add node + Provision' dialog". The previous
+flow required two separate operator steps:
+(1) click "Add node" → fill the form → register
+the node in `new` state; (2) click "Provision"
+on the new row → fill the SSH credentials →
+install the agent. The v0.8.12 dialog combines
+both into a single form with a "Provision this
+node after registering" checkbox (default on).
+When checked, the form reveals the auth-method
+radio (key / password) + key / password /
+ssh_user / ssh_port / tofu_policy /
+expected_fingerprint fields; the submit handler
+calls `createNode` then `provisionNode` in
+sequence. When unchecked, only `createNode` is
+called (the v0.8.11 behaviour). The per-row
+"Provision" dropdown entry stays for
+re-provisioning offline nodes (it still has the
+three-way radio including the "Stored panel key"
+option, which is disabled for first-time
+installs).
+
+- **`internal/cores/builder/nodeAddSchema`** — new merged schema. Extends `nodeCreateSchema` with the v0.8.x provision fields + a `provisionNow` discriminator. When `provisionNow` is `true`, the `superRefine` enforces the same XOR + conditional-required + tofu_policy rules as `nodeProvisionSchema`. The `stored` auth method is rejected at the schema level for first-time installs (the panel has no key on file yet).
+
+- **`frontend/src/views/NodesView.vue`** — the create dialog now uses `nodeAddSchema` (via `createForm`) instead of `nodeCreateSchema`. The submit handler does the create first; on success, if `provisionNow` is `true`, the handler calls `provisionNode` with the wire payload built from the auth method. If the second call fails, the handler surfaces a non-fatal toast ("Node registered, but provisioning failed — retry from row menu"); the form closes either way (the operator can re-provision from the row's Provision entry).
+
+- **i18n** (en + ru): 9 new keys — `provisionAfterCreate`, `provisionAfterCreateHint`, `registerAndProvision`, `registerOnly`, `createdAndProvisioned`, `createdProvisionFailed`, `createdProvisionFailedHint`, plus 2 more for clarity. The existing `createTitle` / `createDescription` / `created` / `createFailed` keys are unchanged (the dialog still uses them for the basic-create path).
+
+- **Docs**: `docs/ROADMAP.md` v0.8.x row updated to mark "merged 'Add node + Provision' dialog" shipped. `KNOWN_LIMITATIONS.md` "v0.8.x UX follow-ups — merged 'Add node + Provision' dialog" entry closed (with the migration note for operators). `CHANGELOG.md` (this entry).
+
+- **Migration notes for operators**: no backend changes, no schema migration, no new env vars. The two existing API endpoints (`POST /api/v1/nodes` and `POST /api/v1/nodes/{id}/provision`) are unchanged; the merged dialog is a UX-layer composition. Operators who preferred the two-step flow can uncheck the "Provision after registering" checkbox to keep the v0.8.11 behaviour.
+
 ## [0.8.11] - 2026-08-10
 
 This is a **consolidation release** that closes the
