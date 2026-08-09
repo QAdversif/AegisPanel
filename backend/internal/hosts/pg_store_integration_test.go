@@ -622,15 +622,23 @@ func TestPgStore_NodesForHost_EmptyReturnsNonNil(t *testing.T) {
 	pool := testutil.MustNewPool(t)
 	store := NewPgStore(pool)
 	hostID := uuid.New()
-	// Insert a host with no endpoints via raw
-	// SQL (the store's Create validates the
-	// endpoint count, so we go around it).
+	// Insert a host with no endpoints via raw SQL
+	// (the store's Create validates the endpoint
+	// count, so we go around it). Two separate
+	// parameters: $1 is the uuid id, $2 is the
+	// remark text. Using the same parameter twice
+	// with two different casts (`$1, '$1::text'`)
+	// would trip Postgres' "inconsistent types
+	// deduced for parameter $1" error
+	// (SQLSTATE 42P08), because the planner pins
+	// the first cast and the second one has to
+	// match.
 	if _, err := pool.Exec(context.Background(), `
 		INSERT INTO hosts (id, remark, type, enabled, priority,
 			status_filter, country, city, tags, balancer)
-		VALUES ($1, 'no-endpoints-host-' || $1::text, 'direct',
-			true, 0, '[]'::jsonb, '', '', '[]'::jsonb, null)`,
-		hostID,
+		VALUES ($1, $2, 'direct', true, 0, '[]'::jsonb, '',
+			'', '[]'::jsonb, null)`,
+		hostID, "no-endpoints-host-"+hostID.String(),
 	); err != nil {
 		t.Fatalf("seed host: %v", err)
 	}
