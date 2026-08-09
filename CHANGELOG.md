@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (docs-only: sops+age deploy runbook + distroless UID 65532 gotcha)
+
+- **`docs/RUNBOOKS/deploy.md` §6 rewritten** to
+  reflect the actual sops+age deploy workflow proven
+  on 2026-08-09 (v0.8.0 → v0.8.9 production upgrade).
+  The previous §6 ended with "the panel binary reads
+  sops-decrypted env at boot" — no `cmd/aegis/main.go`
+  code path does this in v0.8.x. The new §6 splits the
+  workflow into 6 explicit steps (1.x: definitions;
+  6.1-6.2: keygen + install on server; 6.3-6.4: build
+  the env, 6.5: decrypt-on-operator at
+  deploy time, with the full `SOPS_AGE_KEY_FILE=…
+  sops --config … -d` command + a `docker run -e`
+  flag builder; 6.6: future work, sops-decrypt in
+  the panel binary).
+- **Distroless nonroot UID 65532 ownership gotcha
+  documented in §6.2**. The panel container runs
+  as UID 65532, so `age.key` on the host must be
+  `chown 65532:65532 && chmod 0640` (not 0600 root,
+  which 65532 cannot read). Without this fix the
+  panel boot-loops on a fatal error in
+  `internal/app/app.go:303-304` (the webhooks
+  envelope build). This was the canonical reference
+  for the 2026-08-08 deploy incident class.
+- **Canonical env file shape (§6.3)** — the previous
+  §6.3 had YAML examples with `AEGIS_WEBHOOKS_SECRET_KEY_FILE`
+  and `AEGIS_WEBHOOKS_CREDENTIALS_*` env vars that
+  do not exist in `internal/config/config.go`. The
+  actual env uses dotenv format with the single
+  `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE` +
+  `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS` envelope
+  (shared by webhooks / nodes.stored-key / bootstrap
+  / CLI admin_node rotate-panel-key) + all 11
+  `AEGIS_*_BACKEND` set to `pg` for production.
+- **Decrypt-on-operator pattern (§6.5)** — the
+  `sops -d` invocation lives on the operator, not
+  the server. The server-side `docker run` carries
+  the plaintext env over the SSH channel once. The
+  at-rest storage on the server is always the
+  encrypted file (`/etc/aegis/aegis-env.enc.env`,
+  chmod 0600 root).
+- **`KNOWN_LIMITATIONS.md`** — the §6 gaps above
+  are recorded as a `closed in this PR` entry under
+  "Operations polish (deferred from v0.5.0 / v0.7.0)",
+  with the boot-loop log snippet + the canonical
+  `chown 65532:65532` fix.
+
+## [0.8.9] - 2026-08-08
+
 ### Added (v0.8.9 — release workflow: cosign re-sign + verify on every release)
 
 - **`release.yml`: re-sign + verify on every release**.

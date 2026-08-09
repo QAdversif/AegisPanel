@@ -186,6 +186,61 @@ OIDC flake recovery without full workflow_dispatch
 trail in workflow log so a successful `sign` exit
 0 is no longer a "we hope this works" claim.
 
+#### `docs/RUNBOOKS/deploy.md` §6 sops+age workflow was
+misleading — closed in this PR
+
+The v0.8.6+ hard guard on memory backends makes
+sops+age a precondition for production deploys,
+but the runbook had three concrete gaps that bit
+the v0.8.0 → v0.8.9 production deploy on
+2026-08-09 (90-min recovery, JWT secret
+regenerated out-of-band):
+
+1. **Decrypt-on-container claim was wrong.** §6.3
+   ended with "the panel binary reads sops-decrypted
+   env at boot" — no `cmd/aegis/main.go` code path
+   does this in v0.8.x. The actual workflow is
+   decrypt-on-operator (operator runs `sops -d`
+   locally, parses the env, builds `docker run
+   -e KEY=VALUE` flags, ships them over SSH). The
+   runbook now spells this out explicitly with
+   the `SOPS_AGE_KEY_FILE=… sops --config … -d`
+   command + a worked `python` env-flag builder.
+2. **No distroless UID ownership gotcha.** The
+   panel container runs as the distroless `nonroot`
+   user (UID **65532**). The age key on the host
+   was originally 0600 root, which 65532 cannot
+   read. The panel boot-looped on:
+   > fatal: webhooks: failed to build age secret
+   > cipher: envelope: read identity file
+   > "/etc/aegis/age.key": open
+   > /etc/aegis/age.key: permission denied
+   The fix: `sudo chown 65532:65532
+   /etc/aegis/age.key && sudo chmod 0640
+   /etc/aegis/age.key`. The runbook now requires
+   this step in §6.2.
+3. **No canonical env file shape.** §6.3 had YAML
+   examples with `AEGIS_WEBHOOKS_SECRET_KEY_FILE`
+   and `AEGIS_WEBHOOKS_CREDENTIALS_*` env vars
+   that don't exist in `internal/config/config.go`.
+   The actual shape is the dotenv-style
+   `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE` +
+   `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS`
+   (the only envelope surface; shared with
+   `nodes.stored-key`, bootstrap, and the
+   `admin_node rotate-panel-key` CLI). The
+   runbook now lists all 11 `AEGIS_*_BACKEND`
+   vars + the 2 envelope vars + the canonical
+   non-secret env shape.
+
+A future v0.8.x PR could plumb sops-decrypt
+into the panel binary's `cmd/aegis/main.go`
+so the server-side `docker run` only needs
+`-e AEGIS_ENV_FILE=… -v …:/etc/aegis/aegis-env.enc.env:ro`
++ the age key mount, with no plaintext-env
+on the operator. The runbook §6.6 documents
+this as the future direction.
+
 #### Smoke test on fresh VM in CI — v0.9.0
 
 `tools/scripts/smoke-local.sh` (PR #152) covers the
