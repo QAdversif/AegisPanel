@@ -317,7 +317,17 @@
     "tokenViewTitle": "Sub_token",
     "tokenViewDescription": "This is the credential the user pastes into a VPN client. Treat it as a secret — it is shown only once after creation / rotation.",
     "copy": "Copy",
-    "copied": "Copied to clipboard"
+    "copied": "Copied to clipboard",
+    "showSubscriptionUrl": "Show subscription URL",
+    "subscriptionUrlLabel": "Subscription URL",
+    "subscriptionUrlTitle": "Subscription URL",
+    "subscriptionUrlDescription": "The full URL the user pastes into a VPN client. Built from the panel's origin, the active sub_path, and the user's sub_token. Use Copy to send it to the user, or Preview to see the rendered payload.",
+    "subscriptionUrlLoadFailed": "Could not load the active sub_path",
+    "subscriptionPreviewFailed": "Could not render the subscription preview",
+    "copyUrl": "Copy URL",
+    "openUrl": "Open",
+    "refresh": "Refresh",
+    "preview": "Preview"
   },
   "subscription": {
     "title": "Subscription",

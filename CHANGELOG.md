@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (UI: subscription URL display in UsersView)
+
+The v0.8.x operator UX gap — "the admin has no way to get a
+user's subscription URL out of the panel UI without
+manually concatenating `https://<host>/<sub_path>/sub/<token>`"
+— is closed. A new **Show subscription URL** DropdownMenu item
+on each user row opens a dialog with the full URL (read-only
+textarea), a **Copy URL** button, an **Open** button (new tab,
+`noopener`), and a format selector + **Preview** button that
+renders the sing-box / clash / base64 / HTML payload via the
+existing `GET /api/v1/sub/{token}` endpoint. The URL is
+built from `window.location.origin` + the active sub_path
+(from `GET /api/v1/panelcfg/`, re-fetched on every dialog
+open so a recent sub_path rotation is picked up without a
+page reload) + the user's `subToken`.
+
+- **New dialog state in `UsersView.vue`**: `subUrlView`
+  carries `{user, url, preview, previewFormat, previewing,
+  previewError}`; `subUrlFormat` is the dialog's persistent
+  format selector (defaults to `sing-box`).
+- **Helpers**: `loadPanelPath()` (re-fetches the active
+  `sub_path` via `getActivePanelPath()`), `buildSubUrl(user)`
+  (constructs `${origin}${subPathPrefix}/sub/${subToken}`),
+  `openSubscriptionUrl(user)`, `closeSubscriptionUrl()`,
+  `refreshSubscriptionUrl()` (rebuilds the URL after a
+  sub_path rotation), `previewSubscription()` (calls
+  `fetchSubscription(subToken, subUrlFormat)`).
+- **Existing create / rotate modal extended**: the post-create
+  / post-rotate dialog now also shows the full URL (read-only
+  textarea) + a new **Copy URL** button alongside the
+  existing **Copy** (raw token) button. The raw token stays
+  primary (the existing "shown only once" contract).
+- **Dead code removed**: the unused `fetchSubscriptionForUser`
+  helper in `frontend/src/api/services/subscription.ts` (it
+  called a non-existent `GET /api/v1/users/{id}/sub` endpoint)
+  is deleted; the per-user preview path now uses the existing
+  `/api/v1/sub/{token}` route with the per-user `subToken`.
+- **i18n**: new `users.showSubscriptionUrl`,
+  `users.subscriptionUrlLabel`, `users.subscriptionUrlTitle`,
+  `users.subscriptionUrlDescription`,
+  `users.subscriptionUrlLoadFailed`,
+  `users.subscriptionPreviewFailed`, `users.copyUrl`,
+  `users.openUrl`, `users.refresh`, `users.preview` keys in
+  both `en.json` and `ru.json`.
+- **No backend change**. No `openapi.yaml` bump. No new env
+  vars. The two endpoints touched (`/api/v1/sub/{token}`,
+  `/api/v1/panelcfg/`) are both pre-existing.
+
 ### Added (host→node mapping in hosts / builder / users)
 
 - **`internal/hosts` — `HostsForInbound` + `NodesForHost` lookups** (v0.8.x host→node mapping; the prerequisite for outbound group rendering per `docs/comparison/remnawave.md:319`). The MemoryStore scans its `byID` map (the in-memory test path); the PgStore runs a `SELECT host_id FROM host_endpoints WHERE node_id=$1 AND inbound_id=$2 LIMIT 1` (for `HostsForInbound`) and a `SELECT DISTINCT node_id FROM host_endpoints WHERE host_id=$1` (for `NodesForHost`). Both have full unit + integration test coverage.
