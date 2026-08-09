@@ -40,6 +40,33 @@ type Store interface {
 	// Delete removes the host with the given id. Returns
 	// ErrNotFound if no such host exists.
 	Delete(ctx context.Context, id uuid.UUID) error
+	// HostsForInbound returns the host id that owns
+	// the (nodeID, inboundID) endpoint pair, or
+	// uuid.Nil if the inbound is not currently
+	// referenced by any host's endpoint. The return
+	// is `*uuid.UUID` (not `uuid.UUID`) so the
+	// "not in any host" state is distinguishable
+	// from a real zero-value id. Only one host is
+	// returned; if multiple hosts reference the
+	// same (node, inbound) pair (an operator
+	// edge case), the deterministic first hit
+	// wins and the Service layer is expected
+	// to log a warning. Added in v0.8.x as the
+	// pre-req for the Builder to populate
+	// `InboundSpec.HostID` (see
+	// `builder.go:32-41`).
+	HostsForInbound(ctx context.Context, nodeID, inboundID uuid.UUID) (*uuid.UUID, error)
+	// NodesForHost returns every node id that the
+	// given host references via its Endpoints.
+	// The result is the union of
+	// host_endpoints.node_id for the host; a host
+	// with no endpoints returns an empty slice
+	// (not an error). Added in v0.8.x as the
+	// pre-req for `users.Service.enqueueUserDelta`
+	// to expand `User.HostsAllowlist` (host IDs,
+	// per the architecture) into node IDs the
+	// BatchedApplier fan-out can match.
+	NodesForHost(ctx context.Context, hostID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // ErrNotFound is returned by Store implementations when the
@@ -212,6 +239,56 @@ func (s *MemoryStore) Delete(_ context.Context, id uuid.UUID) error {
 	delete(s.byID, id)
 	delete(s.byKey, remarkKey(h.Remark))
 	return nil
+}
+
+// HostsForInbound scans every host's Endpoints for a
+// match on (nodeID, inboundID) and returns the first
+// matching host's id. The full scan is fine for
+// MemoryStore (Phase 0 in-memory test path; the
+// production wire goes through PgStore). Returns
+// (nil, nil) when no host references the pair — the
+// caller distinguishes this from a real error via
+// the typed nil pattern. A `var rid uuid.UUID; rid ==
+// uuid.Nil` check is the idiomatic Go way to test
+// the "not in any host" state.
+func (s *MemoryStore) HostsForInbound(_ context.Context, nodeID, inboundID uuid.UUID) (*uuid.UUID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, h := range s.byID {
+		for _, ep := range h.Endpoints {
+			if ep.NodeID == nodeID && ep.InboundID == inboundID {
+				id := h.ID
+				return &id, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// NodesForHost returns every distinct node id the
+// host references via its Endpoints. The result is
+// a fresh slice (no aliasing); empty (not nil) for
+// a host with no endpoints. Deduplication is done
+// via a set map; the order is not stable (Go map
+// iteration), but the caller (`users.Service.
+// enqueueUserDelta`) treats the result as a set.
+func (s *MemoryStore) NodesForHost(_ context.Context, hostID uuid.UUID) ([]uuid.UUID, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	h, ok := s.byID[hostID]
+	if !ok {
+		return nil, fmt.Errorf("id %s: %w", hostID, ErrNotFound)
+	}
+	seen := make(map[uuid.UUID]struct{}, len(h.Endpoints))
+	out := make([]uuid.UUID, 0, len(h.Endpoints))
+	for _, ep := range h.Endpoints {
+		if _, dup := seen[ep.NodeID]; dup {
+			continue
+		}
+		seen[ep.NodeID] = struct{}{}
+		out = append(out, ep.NodeID)
+	}
+	return out, nil
 }
 
 // cloneHost returns a deep-enough copy that the caller can

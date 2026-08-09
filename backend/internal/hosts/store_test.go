@@ -255,3 +255,134 @@ func TestMemoryStore_ConcurrentAccess(t *testing.T) {
 		t.Errorf("got %d hosts, want %d", len(got), N)
 	}
 }
+
+// --- v0.8.x: host→inbound + host→node lookups ---------------------
+
+// TestMemoryStore_HostsForInbound_FirstHit covers
+// the MemoryStore implementation of the
+// v0.8.x host→inbound lookup. The full scan
+// over byID is fine for the in-memory test path;
+// the production wire goes through PgStore (see
+// the integration test for the SQL contract).
+func TestMemoryStore_HostsForInbound_FirstHit(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	nodeA := uuid.New()
+	inbA := uuid.New()
+	h := newTestHost("Latvia", Endpoint{
+		ID:        uuid.New(),
+		NodeID:    nodeA,
+		InboundID: inbA,
+		Weight:    1,
+	})
+	if err := store.Create(ctx, h); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := store.HostsForInbound(ctx, nodeA, inbA)
+	if err != nil {
+		t.Fatalf("HostsForInbound: %v", err)
+	}
+	if got == nil {
+		t.Fatal("got nil, want host id")
+	}
+	if *got != h.ID {
+		t.Errorf("host id = %s, want %s", *got, h.ID)
+	}
+}
+
+// TestMemoryStore_HostsForInbound_NotInAnyHost is
+// the "inbound exists but is not referenced by any
+// host" state. The MemoryStore returns (nil, nil);
+// the caller (Builder) sets `InboundSpec.HostID =
+// ""` in this case.
+func TestMemoryStore_HostsForInbound_NotInAnyHost(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	h := newTestHost("Latvia", Endpoint{
+		ID:        uuid.New(),
+		NodeID:    uuid.New(),
+		InboundID: uuid.New(),
+		Weight:    1,
+	})
+	if err := store.Create(ctx, h); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := store.HostsForInbound(ctx, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("HostsForInbound: %v", err)
+	}
+	if got != nil {
+		t.Errorf("host id = %s, want nil", *got)
+	}
+}
+
+// TestMemoryStore_NodesForHost_Distinct covers the
+// v0.8.x host→node fan-out. A host with two
+// endpoints on the same node returns one entry
+// (the DISTINCT semantic). A host with endpoints
+// on two nodes returns both.
+func TestMemoryStore_NodesForHost_Distinct(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	nodeA := uuid.New()
+	nodeB := uuid.New()
+	h := newTestHost("Latvia",
+		Endpoint{ID: uuid.New(), NodeID: nodeA, InboundID: uuid.New(), Weight: 1},
+		Endpoint{ID: uuid.New(), NodeID: nodeA, InboundID: uuid.New(), Weight: 1}, // same node, different inb
+		Endpoint{ID: uuid.New(), NodeID: nodeB, InboundID: uuid.New(), Weight: 1},
+	)
+	if err := store.Create(ctx, h); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := store.NodesForHost(ctx, h.ID)
+	if err != nil {
+		t.Fatalf("NodesForHost: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("nodes = %d, want 2 (DISTINCT collapses the 2 entries for nodeA)", len(got))
+	}
+	gotSet := make(map[uuid.UUID]struct{}, len(got))
+	for _, n := range got {
+		gotSet[n] = struct{}{}
+	}
+	if _, ok := gotSet[nodeA]; !ok {
+		t.Errorf("nodeA not in result %v", got)
+	}
+	if _, ok := gotSet[nodeB]; !ok {
+		t.Errorf("nodeB not in result %v", got)
+	}
+}
+
+// TestMemoryStore_NodesForHost_NotFound is the
+// "deleted host in allowlist" path.
+func TestMemoryStore_NodesForHost_NotFound(t *testing.T) {
+	store := NewMemoryStore()
+	_, err := store.NodesForHost(context.Background(), uuid.New())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestMemoryStore_NodesForHost_Empty covers the
+// "host with no endpoints" state. The result is
+// an empty slice (not nil); the caller's range loop
+// over a nil slice is a no-op, so the distinction
+// is documentary, not behavioural.
+func TestMemoryStore_NodesForHost_Empty(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	h := newTestHost("Empty")
+	if err := store.Create(ctx, h); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := store.NodesForHost(ctx, h.ID)
+	if err != nil {
+		t.Fatalf("NodesForHost: %v", err)
+	}
+	if got == nil {
+		t.Error("got nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}

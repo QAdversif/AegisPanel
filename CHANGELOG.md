@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (host→node mapping in hosts / builder / users)
+
+- **`internal/hosts` — `HostsForInbound` + `NodesForHost` lookups** (v0.8.x host→node mapping; the prerequisite for outbound group rendering per `docs/comparison/remnawave.md:319`). The MemoryStore scans its `byID` map (the in-memory test path); the PgStore runs a `SELECT host_id FROM host_endpoints WHERE node_id=$1 AND inbound_id=$2 LIMIT 1` (for `HostsForInbound`) and a `SELECT DISTINCT node_id FROM host_endpoints WHERE host_id=$1` (for `NodesForHost`). Both have full unit + integration test coverage.
+
+- **`internal/cores/builder` — `LookupHostForInbound` interface + `BuildCoreConfigForNode` populates `InboundSpec.HostID`**. The field was always `""` (see the `builder.go:32-41` TODO and the `HostID: ""` line that the new code replaces). With the new lookup, every enabled inbound in the rendered `CoreConfig` carries the host id it belongs to (or `""` for an un-provisioned inbound). The sing-box renderer can use the field for outbound group rendering; the future per-user credential filter at the Builder level keys off it.
+
+- **`internal/cores/builder.NewFlushFn` — new `hostSrc` argument** between `inbSrc` and `credSrc`. A nil lookup preserves the v0.8.0-v0.8.7 behaviour (HostID = ""). Wired in `cmd/aegis/main.go` to pass `a.Hosts`.
+
+- **`internal/users` — `WithHosts` setter + `HostNodesLookup` interface** (the v0.8.x dependency on the hosts service for the user fan-out). The new `expandHostsToNodes` helper turns `User.HostsAllowlist` / `HostsBlocklist` (host IDs, per the architecture) into the node IDs the BatchedApplier map keys on. The `enqueueUserDelta` v0.7.x misimplementation (treating the field as node IDs) is fixed; the v0.8.x fan-out matches the architecture.
+
+- **Fail-closed semantic for the user fan-out**: a non-empty `User.HostsAllowlist` with a nil `s.hosts` lookup yields an empty fan-out (warning log). The alternative (fail-open to "all nodes" when the lookup is missing) would silently grant access on a misconfigured v0.8.x install. The fail-closed behaviour is what the architecture intends.
+
+- **Tests**: 5 new `TestEnqueueUserDelta_*` cases (`MultiHost`, `NilHosts_NonEmptyField_FailsClosed`, `UnknownHostInAllowlist_FailsClosed`, the existing tests updated to the host-ID semantic). 4 new `TestMemoryStore_*` cases + 5 new `TestPgStore_*` integration cases for the new methods. The `internal/cores/builder/flushfn_smoke_test.go` and `flushfn_integration_test.go` callers updated for the new `NewFlushFn` signature.
+
+- **Wiring**: `internal/app/app.go` calls `a.Users.WithHosts(a.Hosts)` right after `users.NewService`. `cmd/aegis/main.go` passes `a.Hosts` to `builder.NewFlushFn`.
+
+- **Docs**: `KNOWN_LIMITATIONS.md` "Host → node mapping in the Builder-side filter" entry closed (with the migration note for operators). `ROADMAP.md` `v0.8.x` row updated. `CHANGELOG.md` (this entry).
+
+### Migration notes for operators
+
+- `User.HostsAllowlist` / `HostsBlocklist` UUIDs are now **host IDs**, not node IDs. A panel upgrading from v0.7.x to v0.8.x where these fields held node IDs will see an empty fan-out for affected users until the values are re-populated with host IDs. The `expandHostsToNodes` helper's warning log (`user fan-out is empty (fail-closed)`) is the operational signal.
+- No schema migration. The `host_endpoints` table is unchanged; the new methods are pure lookups on existing rows.
+- No new env vars. The `AEGIS_WEBHOOKS_SECRET_AGE_*` envelope and the `AEGIS_*_BACKEND=pg` env set from v0.8.9 production deploy are sufficient.
+
 ### Added (docs-only: sops+age deploy runbook + distroless UID 65532 gotcha)
 
 - **`docs/RUNBOOKS/deploy.md` §6 rewritten** to
