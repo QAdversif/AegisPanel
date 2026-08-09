@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-08-09
+
+This is a **consolidation release** that closes the 3-PR gap
+between `v0.8.9` (`035c77e5`) and `main` (`9e8579b`). It
+contains no new backend, OpenAPI, env, or schema changes —
+all three PRs since v0.8.9 are either UI-only or docs-only.
+The on-disk deploy is unchanged from the 2026-08-09 v0.8.9
+production deploy; the v0.8.10 tag is the canonical
+reference for any post-2026-08-09 hotfix branch.
+
 ### Added (UI: subscription URL display in UsersView)
 
 The v0.8.x operator UX gap — "the admin has no way to get a
@@ -125,6 +135,92 @@ page reload) + the user's `subToken`.
   "Operations polish (deferred from v0.5.0 / v0.7.0)",
   with the boot-loop log snippet + the canonical
   `chown 65532:65532` fix.
+
+### Documentation (sync to v0.8.9)
+
+PR #194 closes a long-standing docs drift between the
+v0.8.9 codebase and the user-facing documentation. No
+new feature, no env var, no schema migration — this is
+a docs-only consolidation so the repo tells a consistent
+story from the root `README.md` to the operator runbook.
+
+- **Root `README.md`** — full rewrite (237 → ~290 lines).
+  Adds a Status section, a milestone table through
+  v0.8.9 (each row ✅ shipped with PR #), a Repository
+  layout section that reflects the v0.8.x state
+  (20 migrations, `crypto` package, OpenAPI 0.8.1), and
+  a Contributing section with the privacy-rule pointer.
+  The previous v0.5.0-era ASCII repo tree is replaced
+  with the actual current structure.
+- **`docs/ROADMAP.md`** — v0.8.9 row `⏳` →
+  `✅ shipped (#190)`. The v0.8.x row now correctly
+  reflects that `host→node mapping` (#192) and
+  `subscription URL display in UsersView` (#193) are
+  closed.
+- **`docs/README.md`** — the status table is brought
+  up to v0.8.9 (Backend ✅ v0.8.9, Frontend ✅
+  v0.8.9, every v0.8.0-v0.8.9 row carries its PR #).
+  The v0.8.x-bucket remaining items are spelled out
+  (inbound-templates, shadcn-vue RadioGroup, merged
+  "Add node + Provision" dialog, eslint cleanup). The
+  per-user credential filter (the only remaining
+  high-severity security gap from the deep-state
+  analysis) is added as `⏳ v0.8.x+ / v0.9.0`.
+- **`docs/SECURITY.md`** — threat model updated from
+  bcrypt to **argon2id** (matching the actual
+  `internal/auth/users.go:54` PHC format). Supported
+  versions table bumped to v0.8.9 with fix notes for
+  v0.8.2 and v0.8.7. The threat model table gains the
+  stale-bearer row (v0.8.7 RefreshAgentBearer +
+  v0.8.8 BatchedApplier 401 auto-refresh) and corrects
+  the distroless UID 65532 chown gotcha (chmod 0640,
+  not 0600 root, which boot-loops). The "Not designed
+  to defend against" section is unchanged. The Docker
+  images supply chain section switches from
+  "trust the maintainer" to a **cosign-verifiable
+  against OIDC issuer** trust model (the v0.8.9
+  release workflow re-signs and verifies on every
+  release).
+- **`docs/operator-guide.md`** — new
+  `## v0.8.x secret-decryption contract (read this
+  first)` section at the top explaining the
+  decrypt-on-operator pattern (correcting the
+  v0.5.0-era "age private key on host" misconception
+  that was the source of the 2026-08-08 deploy
+  incident). The prerequisites table is updated to
+  sops 3.13+ and age 1.1+; Ansible is marked
+  **OPTIONAL** (only for the role-based path). The
+  5-minute TL;DR is rewritten for the v0.8.x manual
+  `docker run` path. The health check section now
+  uses `/api/v1/health` (the v0.5.0 `/healthz` alias
+  was removed in v0.8.0). The "What this guide does
+  NOT cover" section drops the now-shipped
+  "Cosign v0.5.x+ follow-up" and adds "per-user
+  credential filter required for v1.0.0 GA".
+- **`docs/guide/quickstart.md`** — the prerequisites
+  drop the "Ansible required" line. Step 4
+  introduces the v0.8.x env file shape with the
+  distroless UID 65532 chown pattern. Step 5 splits
+  into the v0.8.x canonical manual `docker run` path
+  (with a worked `sops -d` invocation) and an
+  optional Ansible path. Step 6 uses
+  `/api/v1/health` with a callout about the v0.5.0
+  alias removal. Step 7 is split into the Ansible
+  and the manual (panel-UI) options.
+- **`deploy/secrets/README.md`** — new
+  `## v0.8.x contract notes` section: sops 3.13+
+  rationale (the `bufio.Reader` 4096B stdin drain
+  was fixed in sops 3.10, but the JSON output
+  envelope changed in 3.13 — the v0.8.x contract
+  requires 3.13+), the canonical decrypt-on-operator
+  pattern, and the bufio.Reader drain workaround for
+  the panel's own `aegis admin add` (which uses Go's
+  `bufio.NewReader` and a 1.0-second `time.sleep`
+  between the two password prompts is the
+  documented workaround). The reference points to
+  the gitignored operator script
+  `C:\Users\adversif\Documents\vpn\.tmp-create-admin.py`
+  for the full implementation.
 
 ## [0.8.9] - 2026-08-08
 
