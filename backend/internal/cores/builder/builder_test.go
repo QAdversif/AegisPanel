@@ -72,7 +72,7 @@ func (f *fakeCredentialsSource) ListByInbound(_ context.Context, id uuid.UUID) (
 func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 	src := &fakeInboundsSource{}
 	creds := &fakeCredentialsSource{}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 func TestBuildCoreConfigForNode_SourceError(t *testing.T) {
 	src := &fakeInboundsSource{err: errors.New("pg: connection refused")}
 	creds := &fakeCredentialsSource{}
-	_, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
+	_, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -165,7 +165,7 @@ func TestBuildCoreConfigForNode_Mapping(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestBuildCoreConfigForNode_NilParams(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestBuildCoreConfigForNode_WithCredentials(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestBuildCoreConfigForNode_NilCredentialsSource(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("nil credSrc must not fail the build: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestBuildCoreConfigForNode_CredentialsError(t *testing.T) {
 	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
 	creds := &fakeCredentialsSource{err: errors.New("pg: transient blip")}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("per-inbound credSrc error must not fail the build: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestBuildCoreConfigForNode_EmptyCredentialsIsFallback(t *testing.T) {
 			vlessInbound.ID: {}, // explicitly empty
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -418,4 +418,226 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// fakeUsersSource satisfies ListUsersAllowedForNode
+// for the v0.8.10+ per-user credential filter tests.
+// The `allowed` map is keyed by node ID; the
+// corresponding value is the slice of user IDs the
+// `AllowedUsersForNode` lookup returns. `err`
+// injects a lookup error so the fail-soft path can
+// be exercised. `nil` is a valid "no users on this
+// node" return value (an empty set → every
+// credential is dropped, the fail-closed semantic).
+type fakeUsersSource struct {
+	allowed map[uuid.UUID][]uuid.UUID
+	err     error
+	calls   int
+}
+
+func (f *fakeUsersSource) AllowedUsersForNode(_ context.Context, nodeID uuid.UUID) ([]uuid.UUID, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.allowed[nodeID], nil
+}
+
+// TestBuildCoreConfigForNode_PerUserFilter_FullAllow
+// covers the v0.8.10+ per-user credential filter's
+// default happy path: every credential's UserID is
+// in the per-node allow-set, so every credential
+// passes the filter. The downstream `users: [...]`
+// array carries the full credential list.
+func TestBuildCoreConfigForNode_PerUserFilter_FullAllow(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	userA := uuid.New()
+	userB := uuid.New()
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-in", Protocol: "vless", Enabled: true},
+	}}
+	creds := &fakeCredentialsSource{creds: map[uuid.UUID][]*credentials.Credential{
+		inbID: {
+			{ID: uuid.New(), UserID: userA, InboundID: inbID, CredentialValue: "uuid-a"},
+			{ID: uuid.New(), UserID: userB, InboundID: inbID, CredentialValue: "uuid-b"},
+		},
+	}}
+	users := &fakeUsersSource{allowed: map[uuid.UUID][]uuid.UUID{
+		nodeID: {userA, userB},
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	arr, ok := credsByTag["vless-in"].([]credentials.Credential)
+	if !ok {
+		t.Fatalf("credsByTag[vless-in] missing or wrong type: %T", credsByTag["vless-in"])
+	}
+	if len(arr) != 2 {
+		t.Errorf("full-allow: creds = %d, want 2 (got = %v)", len(arr), arr)
+	}
+	if users.calls != 1 {
+		t.Errorf("AllowedUsersForNode calls = %d, want 1 (one per build, not per inbound)", users.calls)
+	}
+}
+
+// TestBuildCoreConfigForNode_PerUserFilter_PartialAllow
+// covers the canonical security gap close: only
+// some of the per-inbound credentials are in the
+// per-node allow-set. The non-matching
+// credentials are dropped; the rendered `users:
+// [...]` array carries only the allowed users.
+// This is the second half of the v0.7.x Phase 2
+// TODO (the BatchedApplier fan-out was the first
+// half, in v0.8.x PR #192).
+func TestBuildCoreConfigForNode_PerUserFilter_PartialAllow(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	userAllowed := uuid.New()
+	userDropped := uuid.New()
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-in", Protocol: "vless", Enabled: true},
+	}}
+	creds := &fakeCredentialsSource{creds: map[uuid.UUID][]*credentials.Credential{
+		inbID: {
+			{ID: uuid.New(), UserID: userAllowed, InboundID: inbID, CredentialValue: "uuid-allowed"},
+			{ID: uuid.New(), UserID: userDropped, InboundID: inbID, CredentialValue: "uuid-dropped"},
+		},
+	}}
+	users := &fakeUsersSource{allowed: map[uuid.UUID][]uuid.UUID{
+		nodeID: {userAllowed},
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	arr, ok := credsByTag["vless-in"].([]credentials.Credential)
+	if !ok {
+		t.Fatalf("credsByTag[vless-in] missing or wrong type: %T", credsByTag["vless-in"])
+	}
+	if len(arr) != 1 {
+		t.Errorf("partial-allow: creds = %d, want 1 (got = %v)", len(arr), arr)
+	}
+	if arr[0].UserID != userAllowed {
+		t.Errorf("partial-allow: kept user = %v, want %v (the dropped user leaked into the rendered config)", arr[0].UserID, userAllowed)
+	}
+}
+
+// TestBuildCoreConfigForNode_PerUserFilter_EmptyAllow
+// covers the fail-closed edge: the lookup
+// succeeded and returned an empty slice. Every
+// credential is dropped, and the per-tag entry is
+// omitted from `credsByTag` (the sing-box renderer
+// falls back to the Phase 1 single-user path —
+// which is the desired behaviour for a panel where
+// every active user is filtered out by their host
+// allow/block set, because the operator
+// intentionally wants the inbound to be inert).
+func TestBuildCoreConfigForNode_PerUserFilter_EmptyAllow(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	userID := uuid.New()
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-in", Protocol: "vless", Enabled: true},
+	}}
+	creds := &fakeCredentialsSource{creds: map[uuid.UUID][]*credentials.Credential{
+		inbID: {
+			{ID: uuid.New(), UserID: userID, InboundID: inbID, CredentialValue: "uuid-x"},
+		},
+	}}
+	users := &fakeUsersSource{allowed: map[uuid.UUID][]uuid.UUID{
+		nodeID: nil, // lookup succeeded, empty allow-set
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	if _, has := credsByTag["vless-in"]; has {
+		t.Errorf("empty-allow: credsByTag[vless-in] present, want absent (every cred dropped; Phase 1 fallback)")
+	}
+}
+
+// TestBuildCoreConfigForNode_PerUserFilter_NilUsers
+// covers the v0.8.0-v0.8.9 default-allow contract:
+// a nil `usersSrc` skips the per-user filter, every
+// credential passes. Without this guard, existing
+// v0.8.0-v0.8.9 callers (e.g. the v0.8.5 FlushFn
+// fixtures that pre-date the new source argument)
+// would fail to compile.
+func TestBuildCoreConfigForNode_PerUserFilter_NilUsers(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	userA := uuid.New()
+	userB := uuid.New()
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-in", Protocol: "vless", Enabled: true},
+	}}
+	creds := &fakeCredentialsSource{creds: map[uuid.UUID][]*credentials.Credential{
+		inbID: {
+			{ID: uuid.New(), UserID: userA, InboundID: inbID, CredentialValue: "uuid-a"},
+			{ID: uuid.New(), UserID: userB, InboundID: inbID, CredentialValue: "uuid-b"},
+		},
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	arr, ok := credsByTag["vless-in"].([]credentials.Credential)
+	if !ok {
+		t.Fatalf("credsByTag[vless-in] missing or wrong type: %T", credsByTag["vless-in"])
+	}
+	if len(arr) != 2 {
+		t.Errorf("nil-users (default-allow): creds = %d, want 2 (got = %v)", len(arr), arr)
+	}
+}
+
+// TestBuildCoreConfigForNode_PerUserFilter_LookupError
+// covers the fail-soft contract: a lookup error is
+// logged + treated as if the users source was nil
+// (every credential passes, the v0.8.0-v0.8.9
+// default-allow contract). Without this guard, a
+// transient pg blip during a BatchedApplier flush
+// would block every node from rendering — the
+// same pattern the credentials source and host
+// source already follow.
+func TestBuildCoreConfigForNode_PerUserFilter_LookupError(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	userID := uuid.New()
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-in", Protocol: "vless", Enabled: true},
+	}}
+	creds := &fakeCredentialsSource{creds: map[uuid.UUID][]*credentials.Credential{
+		inbID: {
+			{ID: uuid.New(), UserID: userID, InboundID: inbID, CredentialValue: "uuid-x"},
+		},
+	}}
+	users := &fakeUsersSource{err: errors.New("simulated pg blip")}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	credsByTag := got.Experimental["inbound_credentials"].(map[string]any)
+	arr, ok := credsByTag["vless-in"].([]credentials.Credential)
+	if !ok {
+		t.Fatalf("credsByTag[vless-in] missing or wrong type: %T", credsByTag["vless-in"])
+	}
+	if len(arr) != 1 {
+		t.Errorf("lookup-error (fail-soft): creds = %d, want 1 (got = %v)", len(arr), arr)
+	}
 }

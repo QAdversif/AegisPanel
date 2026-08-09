@@ -517,12 +517,15 @@ is exactly what a memory-only dev install wants.
 - **A high-availability topology.** Aegis is single-instance.
   A second panel host is not in scope; the canonical recovery
   path is restore-from-backup onto a fresh VM.
-- **The per-user credential filter in the Builder** — the only
-  known high-severity security gap remaining in v0.8.9. See
-  [KNOWN_LIMITATIONS.md](../../KNOWN_LIMITATIONS.md) for the
-  full gap list. The fix (Option A: per-node user allowlist
-  filter inside `BuildCoreConfigForNode`) is a planned
-  v0.8.x+/v0.9.0 item; required before the v1.0.0 GA tag.
+- **The per-user credential filter in the Builder** — shipped
+  in v0.8.10+. The per-node user allow-set is resolved once per
+  `BuildCoreConfigForNode` invocation, the per-inbound credential
+  list is filtered by `Credential.UserID ∈ allow-set`, and the
+  rendered `users: [...]` array only carries the allowed users.
+  See [KNOWN_LIMITATIONS.md](../../KNOWN_LIMITATIONS.md)
+  "Per-user credential filter in the Builder — closed in this PR"
+  for the full description. The v1.0.0 GA tag is unblocked
+  by this fix.
 
 ## Where to next?
 

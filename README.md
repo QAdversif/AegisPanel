@@ -122,9 +122,9 @@ The release ladder:
 | `v0.8.7` | **shipped** | Refresh agent bearer: `nodes.Service.RefreshAgentBearer` (PR #188) |
 | `v0.8.8` | **shipped** | BatchedApplier 401→auto-refresh integration (PR #189) |
 | `v0.8.9` | **shipped** | Release workflow hardening: cosign re-sign + verify on every release (PR #190). Pure workflow change, no code touched. |
-| `v0.8.x` | in progress | Host → node mapping in Builder filter (PR #192 shipped; closes the v0.8.x `host→node mapping` row); subscription URL display in UsersView (PR #193 shipped; closes the v0.8.x `subscription URL display` row); inbound-templates work (per-tenant `Params` defaults); UX follow-ups (merged "Add node + Provision" dialog, shadcn-vue `RadioGroup` primitive); operations polish (pre-existing eslint warnings cleanup as a `chore` PR) |
+| `v0.8.x` | in progress | Host → node mapping in Builder filter (PR #192 shipped); subscription URL display in UsersView (PR #193 shipped); per-user credential filter in Builder (shipped in v0.8.10+ — closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag); inbound-templates work (per-tenant `Params` defaults); UX follow-ups (merged "Add node + Provision" dialog, shadcn-vue `RadioGroup` primitive); operations polish (pre-existing eslint warnings cleanup as a `chore` PR) |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
-| `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release (requires per-user credential filter in Builder — known security gap, see [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md)) |
+| `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release (per-user credential filter no longer blocks — see [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) for the remaining items) |
 
 See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the milestone ladder,
 [`CHANGELOG.md`](./CHANGELOG.md) for the per-PR release notes, and

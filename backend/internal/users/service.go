@@ -344,6 +344,95 @@ func (s *Service) expandHostsToNodes(ctx context.Context, hosts []uuid.UUID, lab
 	return out
 }
 
+// AllowedUsersForNode returns the set of active user
+// IDs that the host-allow/block filter admits for
+// `nodeID`. Mirrors the per-user fan-out in
+// `enqueueUserDelta` (v0.8.x) but in reverse: instead
+// of "which nodes is this user on", it's "which users
+// are on this node". The result is the set of
+// `credentials.Credential.UserID` values the Builder
+// should include when rendering the node's per-inbound
+// `users` array.
+//
+// Filter rules (matching `enqueueUserDelta`'s
+// per-node logic for consistency):
+//
+//   - No allowlist + no blocklist: include (the
+//     v0.5.0 default-allow semantic; the safe
+//     migration path for a panel that has not yet
+//     populated the fields).
+//   - Allowlist non-empty: include only if `nodeID` is
+//     in the host-expanded allowlist (v0.8.x).
+//   - Blocklist non-empty: include only if `nodeID` is
+//     NOT in the host-expanded blocklist. The
+//     blocklist wins over the allowlist.
+//
+// A nil `s.hosts` with a non-empty allow/block list
+// yields an empty allow-set (fail-closed), matching
+// the v0.8.x `enqueueUserDelta` pattern. The warning
+// log is emitted at most once per call (no per-user
+// duplication; the field-level warning is logged by
+// `expandHostsToNodes`).
+//
+// The slice is freshly allocated; callers may mutate
+// it. The helper is O(N) where N is the number of
+// active users. For a small panel that's fine; if the
+// user base grows, the store can grow a dedicated
+// SQL form (a `SELECT id FROM users WHERE
+// allowlist_expanded @> $1 OR blocklist_expanded
+// !@> $1`-style query) — the per-inbound fan-out
+// stays a Go-level filter for v0.8.10.
+//
+// Used by `internal/cores/builder.BuildCoreConfigForNode`
+// as the per-node user allow-set for the credential
+// filter (PR for v0.8.10+). Without this method, the
+// Builder's `ListCredentialsByInbound` source returns
+// every per-(user, inbound) row regardless of the
+// user's host filter — the original v0.7.x
+// `user_inbound_credentials` misimplementation
+// (`KNOWN_LIMITATIONS.md` "Phase 2 multi-user
+// sing-box render — open issues").
+func (s *Service) AllowedUsersForNode(ctx context.Context, nodeID uuid.UUID) ([]uuid.UUID, error) {
+	users, err := s.store.ListByStatus(ctx, StatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("users: list for node %s: %w", nodeID, err)
+	}
+	if len(users) == 0 {
+		return nil, nil
+	}
+	out := make([]uuid.UUID, 0, len(users))
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		// v0.8.x fail-closed: a non-empty allow/block
+		// list with a nil `s.hosts` lookup yields no
+		// match (warning is logged by
+		// `expandHostsToNodes`).
+		hasAllow := len(u.HostsAllowlist) > 0
+		hasBlock := len(u.HostsBlocklist) > 0
+		if (hasAllow || hasBlock) && s.hosts == nil {
+			continue
+		}
+		// Blocklist wins over allowlist (matching
+		// enqueueUserDelta).
+		if hasBlock {
+			block := s.expandHostsToNodes(ctx, u.HostsBlocklist, "blocklist")
+			if _, blocked := block[nodeID]; blocked {
+				continue
+			}
+		}
+		if hasAllow {
+			allow := s.expandHostsToNodes(ctx, u.HostsAllowlist, "allowlist")
+			if _, allowed := allow[nodeID]; !allowed {
+				continue
+			}
+		}
+		out = append(out, u.ID)
+	}
+	return out, nil
+}
+
 // SetClock swaps the time source. Test-only.
 func (s *Service) SetClock(now func() time.Time) {
 	s.now = now
