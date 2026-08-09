@@ -97,22 +97,60 @@ key). v0.8.3.
 
 ### UX follow-ups (deferred from v0.8.1)
 
-#### Host → node mapping in the Builder-side filter — v0.8.x
+#### Host → node mapping in the Builder-side filter — closed in this PR
 
-The Builder fetches every credential for the inbound
-and includes it in the rendered config (PR #169).
-The user-level filter is in
-`users.Service.enqueueUserDelta`, which decides
-WHICH nodes get a FlushFn re-render. The Builder
-does not filter by `user.HostsAllowlist` today —
-the model has no host-to-inbound mapping. A future
-PR that adds the host-to-inbound mapping will let
-the Builder filter credentials at render time as
-well. Same trade-off as the BatchedApplier fan-out
-filter: the data is in the user struct, but the
-mapping from "this inbound belongs to host X" to
-"host X is in user.HostsAllowlist" is not yet
-modelled. v0.8.x.
+Closed in this PR (the host→node mapping v0.8.x
+work). The lookup lives in `internal/hosts.Service`:
+
+- `HostsForInbound(ctx, nodeID, inboundID)
+    (*uuid.UUID, error)` — the (node, inbound)
+    pair's owning host id (or nil if no host
+    references the pair). Used by
+    `internal/cores/builder.BuildCoreConfigForNode`
+    to populate `InboundSpec.HostID` (previously
+    always `""`, see `builder.go:32-41`).
+- `NodesForHost(ctx, hostID) ([]uuid.UUID,
+    error)` — every distinct node id the host
+    references. Used by
+    `internal/users.Service.expandHostsToNodes` to
+    fan `User.HostsAllowlist` / `HostsBlocklist`
+    (host IDs, per the architecture) into node IDs
+    the BatchedApplier fan-out matches.
+
+The user-level filter on the BatchedApplier side
+was, in v0.7.x, a **misimplementation**: the field
+was named `HostsAllowlist` but the fan-out code
+treated the UUIDs as node IDs. v0.8.x fixes the
+semantic: the field stores host IDs (per the
+architecture; see `docs/comparison/remnawave.md:
+118-119` and the original TODO at `builder.go:
+32-41`); the fan-out expands them via
+`NodesForHost`. A nil `s.hosts` with a non-empty
+field is **fail-closed** (no fan-out + warning
+log) — the alternative (fail-open to "all nodes")
+would silently grant access on a misconfigured
+v0.8.x install.
+
+The per-credential Builder-side filter (the
+"Builder does not filter credentials by
+`user.HostsAllowlist`" half of the original TODO)
+is a follow-up — it requires a per-user context
+in the FlushFn, which the BatchedApplier does not
+carry today. The v0.8.x work here is the
+prerequisite lookup; the consumer-side filter is
+a separate PR. Outbound group rendering
+(`docs/comparison/remnawave.md:319`) is gated on
+user demand and is a separate PR.
+
+**Migration note for operators**: the
+`User.HostsAllowlist` / `HostsBlocklist` UUIDs
+are now host IDs, not node IDs. A panel
+upgrading from v0.7.x to v0.8.x where these
+fields held node IDs will see an empty fan-out
+for affected users until the values are
+re-populated with host IDs. The `expandHostsToNodes`
+helper's warning log (`user fan-out is empty
+(fail-closed)`) is the operational signal.
 
 #### Inbound-templates work — v0.8.x+
 
@@ -182,7 +220,7 @@ Three concrete failure modes covered (v0.8.8
 evidence, PR #189): (1) tag-mutation drift on
 `latest` between sign and pull; (2) sign-step
 OIDC flake recovery without full workflow_dispatch
-+ rebuild; (3) explicit `cosign verify` audit
+- rebuild; (3) explicit `cosign verify` audit
 trail in workflow log so a successful `sign` exit
 0 is no longer a "we hope this works" claim.
 
@@ -237,7 +275,7 @@ A future v0.8.x PR could plumb sops-decrypt
 into the panel binary's `cmd/aegis/main.go`
 so the server-side `docker run` only needs
 `-e AEGIS_ENV_FILE=… -v …:/etc/aegis/aegis-env.enc.env:ro`
-+ the age key mount, with no plaintext-env
+- the age key mount, with no plaintext-env
 on the operator. The runbook §6.6 documents
 this as the future direction.
 
@@ -253,7 +291,7 @@ These items are tracked in `docs/ROADMAP.md` and
 `docs/README.md` for context. None block v0.8.0 or
 the v1.0.0-mvp-soft-launch.
 
-+ **JSON logs in production** — closed in v0.8.6
+- **JSON logs in production** — closed in v0.8.6
   (config-level guard for the `AEGIS_ENV=development`
   with a pg backend, the silent-misconfig shape; see
   `Config.validate()` and `usesAnyPgBackend()` in
@@ -263,17 +301,17 @@ the v1.0.0-mvp-soft-launch.
   since v0.5.0-era; the v0.8.6 PR is the guard
   that converts the silent-misconfig failure mode
   into a loud boot-time error.
-+ **Cosign re-signing on every release** — v0.7.0
+- **Cosign re-signing on every release** — v0.7.0
   closed the initial sign + verify pair; the
   post-v0.7.0 workflow contract (PRs 102/103/104/111)
   does not yet include cosign re-signing on every
   release. v0.8.x.
-+ **Smoke test on fresh VM in CI** — v0.9.0
+- **Smoke test on fresh VM in CI** — v0.9.0
   candidate. `tools/scripts/smoke-local.sh` (PR #152)
   covers the local docker-compose path; a
   terraform + ansible + boot-log CI job is a
   separate work unit. v0.9.0.
-+ **`internal/cabinet` end-user surface** —
+- **`internal/cabinet` end-user surface** —
   doc.go-only. The per-user sub URL is the
   per-user cabinet for v0.8.0. A separate
   end-user-facing cabinet (login UI, sub URL fetch,
@@ -331,11 +369,11 @@ lands the operator-facing tariff catalog.
 
 Deferred to v0.6.x (logged in `docs/ROADMAP.md`):
 
-+ `plan_pool` writes (the join table linking plans to host
+- `plan_pool` writes (the join table linking plans to host
   pools). v0.6.0 keeps the read-only view in
   `internal/subscription`.
-+ `plan_pool` UI (no HostPool picker in the plan dialog yet).
-+ Audit log writes from the mutating handler (the call-site
+- `plan_pool` UI (no HostPool picker in the plan dialog yet).
+- Audit log writes from the mutating handler (the call-site
   wiring is a separate batch across all admin handlers).
 
 ## Closed in v0.5.0
@@ -416,21 +454,21 @@ auditable.
 
 These are sometimes mistaken for gaps; they are intentional.
 
-+ The default admin password is documented in
+- The default admin password is documented in
   `deploy/ansible/group_vars/all.yml` — not a backdoor, just
   an operator onboarding aid. v0.5.0+ sops+age flow makes the
   rotation path documented in
   `docs/operator-guide.md` §"Secrets rotation".
-+ The default dark theme is intentional (dev-tool aesthetic
+- The default dark theme is intentional (dev-tool aesthetic
   per `ADR-0004`). Light theme is a token swap away; the
   light-theme polish is on the v1.5+ roadmap.
-+ Subscriptions render the sing-box format by default; Clash /
+- Subscriptions render the sing-box format by default; Clash /
   base64 / HTML are available via the `?format=` query
   parameter and the `/subscription` view.
-+ The project is single-tenant by design. See
+- The project is single-tenant by design. See
   `ARCHITECTURE.md` §27 and the relevant ADR (multi-tenant was
   explicitly rejected in v9).
-+ 9 packages remain `doc.go`-only placeholders (cabinet,
+- 9 packages remain `doc.go`-only placeholders (cabinet,
   caddy, cascades, decoy, events, mcp, notifications, stats,
   subscriptions-plural). Of these, `plans` and `webhooks` are
   done (v0.6.0, v0.7.0); the rest are post-v1.0. They are

@@ -266,6 +266,15 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		Env:     cfg.Env,
 	})
 	a.Users = users.NewService(usersStore)
+	// v0.8.x: wire the host→node lookup so
+	// `users.Service.enqueueUserDelta` can expand
+	// `User.HostsAllowlist` (host IDs, per the
+	// architecture) into node IDs the BatchedApplier
+	// fan-out matches against. See
+	// `docs/comparison/remnawave.md:118-119` and
+	// the v0.8.x builder TODO at
+	// `builder.go:32-41` (now resolved).
+	a.Users.WithHosts(a.Hosts)
 
 	// 8. Plans.
 	plansStore := MustBuild(pool, StoreBuilder[plans.Store]{

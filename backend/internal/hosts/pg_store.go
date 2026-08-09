@@ -268,6 +268,84 @@ func (s *PgStore) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// HostsForInbound returns the host id that owns the
+// (nodeID, inboundID) endpoint pair, or nil when no
+// host references the pair. The query is indexed by
+// host_endpoints.node_id + host_endpoints.inbound_id
+// (the unique index added in migration 0004). The
+// LIMIT 1 + ORDER BY id keeps the result deterministic
+// when an operator accidentally creates the same
+// (node, inbound) pair in two hosts — the Service
+// layer logs a warning in that case.
+func (s *PgStore) HostsForInbound(ctx context.Context, nodeID, inboundID uuid.UUID) (*uuid.UUID, error) {
+	const q = `
+		SELECT host_id
+		FROM host_endpoints
+		WHERE node_id = $1 AND inbound_id = $2
+		ORDER BY host_id
+		LIMIT 1`
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, q, nodeID, inboundID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query host for inbound: %w", err)
+	}
+	return &id, nil
+}
+
+// NodesForHost returns every distinct node id the
+// host references via its Endpoints. The DISTINCT
+// collapses two endpoints on the same node; the
+// result is a fresh slice (no aliasing) and is
+// empty (not nil) for a host with no endpoints.
+// Returns `ErrNotFound` when the host itself does
+// not exist in the `hosts` table (matches the
+// MemoryStore contract — the two-query approach is
+// cheaper than a CTE for the v0.8.x workload where
+// the host existence is the rare case).
+func (s *PgStore) NodesForHost(ctx context.Context, hostID uuid.UUID) ([]uuid.UUID, error) {
+	// Host existence check first: an empty
+	// `host_endpoints` result is ambiguous ("no
+	// host" vs "host with no endpoints"). The
+	// MemoryStore distinguishes the two; we
+	// mirror that here so callers can rely on
+	// the contract. Cost: one extra round trip,
+	// but `hosts` is keyed by PK and the lookup
+	// is index-only.
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM hosts WHERE id = $1)`, hostID,
+	).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("query host exists: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("id %s: %w", hostID, ErrNotFound)
+	}
+	const q = `
+		SELECT DISTINCT node_id
+		FROM host_endpoints
+		WHERE host_id = $1`
+	rows, err := s.pool.Query(ctx, q, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("query nodes for host: %w", err)
+	}
+	defer rows.Close()
+	out := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan node id: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return out, nil
+}
+
 // --- internal: insert helpers ------------------------------------------
 
 // insertHost writes the host row. JSONB columns are

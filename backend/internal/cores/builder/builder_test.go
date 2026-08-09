@@ -72,7 +72,7 @@ func (f *fakeCredentialsSource) ListByInbound(_ context.Context, id uuid.UUID) (
 func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 	src := &fakeInboundsSource{}
 	creds := &fakeCredentialsSource{}
-	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 func TestBuildCoreConfigForNode_SourceError(t *testing.T) {
 	src := &fakeInboundsSource{err: errors.New("pg: connection refused")}
 	creds := &fakeCredentialsSource{}
-	_, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	_, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -165,7 +165,7 @@ func TestBuildCoreConfigForNode_Mapping(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, &fakeCredentialsSource{}, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestBuildCoreConfigForNode_NilParams(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, &fakeCredentialsSource{}, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestBuildCoreConfigForNode_WithCredentials(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, creds, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestBuildCoreConfigForNode_NilCredentialsSource(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("nil credSrc must not fail the build: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestBuildCoreConfigForNode_CredentialsError(t *testing.T) {
 	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
 	creds := &fakeCredentialsSource{err: errors.New("pg: transient blip")}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
 	if err != nil {
 		t.Fatalf("per-inbound credSrc error must not fail the build: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestBuildCoreConfigForNode_EmptyCredentialsIsFallback(t *testing.T) {
 			vlessInbound.ID: {}, // explicitly empty
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, creds, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
