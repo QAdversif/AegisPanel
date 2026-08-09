@@ -1,28 +1,41 @@
 /*
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * TailwindCSS entrypoint for the Aegis admin UI.
+ * TailwindCSS v4 entrypoint for the Aegis admin UI.
  *
- * The three @tailwind directives tell Tailwind to
- * inject (in this order):
- *   1. base       preflight (CSS reset + element
- *                 defaults) and the design tokens
- *   2. components every component class registered
- *                 in src/components/ui/* via @apply
- *   3. utilities  every utility class used in templates
- *
- * The :root and .dark blocks define the design
- * tokens (CSS custom properties) that the Tailwind
- * theme.extend.colors block in tailwind.config.ts
- * exposes. Theming is therefore a matter of changing
- * the variables here - no Tailwind class changes are
- * needed.
+ * v4 changes from v3 (migration in PR B of the
+ * frontend-deps batch):
+ *   1. `@tailwind base; @tailwind components; @tailwind
+ *      utilities;` → `@import "tailwindcss";`
+ *   2. `darkMode: ['class']` in tailwind.config.ts →
+ *      `@custom-variant dark (&:where(.dark, .dark *));`
+ *   3. `tailwind.config.ts` → CSS-first `@theme { ... }`
+ *      block. The `colors` / `borderRadius` / `fontFamily`
+ *      / `keyframes` / `animation` blocks are now
+ *      `--color-*` / `--radius-*` / `--font-*` /
+ *      `@keyframes` / `--animate-*` respectively.
+ *   4. The `plugins: [animate, forms, typography]` block →
+ *      `@plugin "@tailwindcss/forms";` and
+ *      `@plugin "@tailwindcss/typography";`. The
+ *      `tailwindcss-animate` package is dropped — its
+ *      keyframes are inlined below.
+ *   5. PostCSS pipeline (`postcss.config.js` +
+ *      `autoprefixer`) is gone. The
+ *      `@tailwindcss/vite` plugin is registered in
+ *      `vite.config.ts` and processes the CSS at build
+ *      / HMR time.
  *
  * Token values are HSL components (without the
  * hsl(...) wrapper) so Tailwind can compose them
  * with opacity modifiers (bg-primary/50,
- * text-foreground/80, etc.). shadcn-vue uses the
- * same convention.
+ * text-foreground/80, etc.). shadcn-vue uses the same
+ * convention.
+ *
+ * The :root and .dark blocks define the design
+ * tokens (CSS custom properties) that the @theme
+ * block consumes. Theming is therefore a matter of
+ * changing the variables here — no Tailwind class
+ * changes are needed.
  *
  * The --aegis-* variables at the bottom of the
  * base layer preserve the legacy token names from
@@ -31,9 +44,73 @@
  * be removed when that code is fully migrated.
  */
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@plugin "@tailwindcss/forms";
+@plugin "@tailwindcss/typography";
+
+/* shadcn-vue class-based dark mode. The .dark class
+ * is toggled on <html> by the app's theme store; this
+ * variant makes every `dark:` utility match it.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Inline keyframes for the accordion animations.
+ * v3 had these via the `tailwindcss-animate` plugin;
+ * v4 has no equivalent package, so they're here.
+ */
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--reka-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--reka-accordion-content-height); }
+  to { height: 0; }
+}
+
+@theme {
+  /* shadcn-vue convention: every colour is a CSS
+   * variable so theming is a single CSS rule
+   * change. Tailwind exposes the variables under
+   * `bg-background`, `text-foreground`, etc.
+   */
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  /* Border radius — derived from --radius */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  /* The Aegis brand accent — slate-500 ish, but a
+   * touch more saturated to read as a dev-tool
+   * accent rather than a corporate slate. The
+   * value is set on `--primary` below.
+   */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* shadcn-vue's accordion / collapsible animations */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
 
 @layer base {
   :root {
@@ -142,7 +219,8 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
     font-feature-settings: 'rlig' 1, 'calt' 1;
   }
 }
