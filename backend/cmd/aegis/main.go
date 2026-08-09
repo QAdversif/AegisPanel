@@ -677,7 +677,14 @@ func singboxWiring(
 		// credentials source would fall back
 		// to the Phase 1 single-user path
 		// for every inbound.
-		flushFn := builder.NewFlushFn(a.Inbounds, a.Credentials, p, nodeID, nodeName)
+		//
+		// v0.8.x: the host source (a.Hosts) is
+		// the v0.8.x host→node mapping that
+		// populates `InboundSpec.HostID`. nil
+		// would skip the lookup and keep
+		// HostID = "" (v0.8.0-v0.8.7
+		// behaviour).
+		flushFn := builder.NewFlushFn(a.Inbounds, a.Hosts, a.Credentials, p, nodeID, nodeName)
 		a.AddNodeBatchedApplier(ctx, nodeID, nodeName, flushFn)
 	}
 	return nil
