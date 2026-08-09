@@ -225,14 +225,28 @@ the private key never leaves the panel) would help
 operators verify that the node has the right key
 after a manual `ssh` rotation. v0.8.x.
 
-#### Merged "Add node + Provision" dialog — v0.8.x
+#### Merged "Add node + Provision" dialog — closed in this PR
 
-v0.8.1 keeps the v0.3.0 2-step shape: a Create
-dialog then a separate Provision dialog with the
-new auth method radio. A future merged "Add node"
-dialog that does both in one step (the auth
-method is radio-selected per the form state)
-would be a UX simplification. v0.8.x.
+Closed in this PR (v0.8.12). The Create dialog
+now carries a "Provision this node after
+registering" checkbox (default on) and reveals
+the auth-method radio + key / password /
+ssh_user / ssh_port / tofu_policy /
+expected_fingerprint fields when checked. The
+submit handler calls `createNode` then
+optionally `provisionNode` in sequence. The
+per-row "Provision" dropdown entry stays for
+re-provisioning offline nodes (it keeps the
+three-way radio including the "Stored panel key"
+option, which is disabled for first-time
+installs because the panel has no key on file
+yet for a `new` node). The two existing API
+endpoints (`POST /api/v1/nodes` and
+`POST /api/v1/nodes/{id}/provision`) are
+unchanged; the merged dialog is a UX-layer
+composition. Operators who preferred the
+v0.8.11 two-step flow can uncheck the
+"Provision after registering" checkbox.
 
 #### shadcn-vue RadioGroup primitive — v0.8.x
 
