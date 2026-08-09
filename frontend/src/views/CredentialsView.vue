@@ -360,7 +360,10 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
             class="pl-8 w-64"
           />
         </div>
-        <Button type="button" @click="openCreateDialog">
+        <Button
+          type="button"
+          @click="openCreateDialog"
+        >
           <Plus class="size-4 mr-1" />
           {{ t('credentials.newCredential') }}
         </Button>
@@ -383,8 +386,14 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
             {{ t('credentials.createDescription') }}
           </DialogDescription>
         </DialogHeader>
-        <Form :form="createForm" class="space-y-4">
-          <FormField name="userId" :label="t('credentials.field.userId')">
+        <Form
+          :form="createForm"
+          class="space-y-4"
+        >
+          <FormField
+            name="userId"
+            :label="t('credentials.field.userId')"
+          >
             <Input
               v-model="createForm.values.userId"
               placeholder="00000000-0000-0000-0000-000000000000"
@@ -404,15 +413,24 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
             :label="t('credentials.field.credentialValue')"
             :help="t('credentials.field.credentialValueHelp')"
           >
-            <Input v-model="createForm.values.credentialValue" type="text" />
+            <Input
+              v-model="createForm.values.credentialValue"
+              type="text"
+            />
           </FormField>
           <DialogFooter>
             <DialogClose as-child>
-              <Button type="button" variant="outline">
+              <Button
+                type="button"
+                variant="outline"
+              >
                 {{ t('common.cancel') }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="createForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="createForm.isSubmitting.value"
+            >
               {{ t('common.create') }}
             </Button>
           </DialogFooter>
@@ -429,21 +447,33 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
             {{ t('credentials.rotateDescription') }}
           </DialogDescription>
         </DialogHeader>
-        <Form :form="rotateForm" class="space-y-4">
+        <Form
+          :form="rotateForm"
+          class="space-y-4"
+        >
           <FormField
             name="credentialValue"
             :label="t('credentials.field.credentialValue')"
             :help="t('credentials.field.credentialValueHelp')"
           >
-            <Input v-model="rotateForm.values.credentialValue" type="text" />
+            <Input
+              v-model="rotateForm.values.credentialValue"
+              type="text"
+            />
           </FormField>
           <DialogFooter>
             <DialogClose as-child>
-              <Button type="button" variant="outline">
+              <Button
+                type="button"
+                variant="outline"
+              >
                 {{ t('common.cancel') }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="rotateForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="rotateForm.isSubmitting.value"
+            >
               {{ t('credentials.rotate') }}
             </Button>
           </DialogFooter>
@@ -462,11 +492,18 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
         </DialogHeader>
         <DialogFooter>
           <DialogClose as-child>
-            <Button type="button" variant="outline">
+            <Button
+              type="button"
+              variant="outline"
+            >
               {{ t('common.cancel') }}
             </Button>
           </DialogClose>
-          <Button type="button" variant="destructive" @click="confirmDelete">
+          <Button
+            type="button"
+            variant="destructive"
+            @click="confirmDelete"
+          >
             {{ t('credentials.delete') }}
           </Button>
         </DialogFooter>
