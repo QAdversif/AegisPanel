@@ -208,7 +208,7 @@ func TestFlushFn_AppliesConfigToAgent(t *testing.T) {
 	applier := cores.NewBatchedApplier(
 		200*time.Millisecond,
 		100,
-		NewFlushFn(inbSvc, nil, nil, provider, nodeID, "smoke-node"),
+		NewFlushFn(inbSvc, nil, nil, nil, provider, nodeID, "smoke-node"),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -301,7 +301,7 @@ func TestFlushFn_EmptyNodeStillApplies(t *testing.T) {
 	applier := cores.NewBatchedApplier(
 		200*time.Millisecond,
 		100,
-		NewFlushFn(inbSvc, nil, nil, provider, uuid.New(), "empty-node"),
+		NewFlushFn(inbSvc, nil, nil, nil, provider, uuid.New(), "empty-node"),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
