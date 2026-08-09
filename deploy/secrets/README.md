@@ -129,3 +129,40 @@ after updating `.sops.yaml` with the new public key.
   private key on the original author's machine only,
   so an attacker who clones the repo cannot decrypt
   even the example. Replace it with your own.
+
+## v0.8.x contract notes
+
+- **Required tooling**: `sops` 3.13+ (older 3.7+ still works for
+  encrypt/decrypt but the canonical install on Ubuntu 24.04
+  pulls 3.13.3 from GitHub releases since `sops` is not in the
+  apt repo), `age` 1.1+. The `aegis` binary on the panel host
+  (built from `backend/cmd/aegis`) needs to be the Linux
+  amd64 build (`GOOS=linux GOARCH=amd64 go build`) for the
+  `aegis admin add` CLI to work — the distroless panel image
+  does not ship a shell to run it inside.
+- **Decrypt-on-operator is the canonical v0.8.x pattern**.
+  The panel binary does not decrypt sops+age at boot (no
+  `cmd/aegis/main.go` code path that calls `sops.Decrypt`).
+  The operator decrypts locally with
+  `SOPS_AGE_KEY_FILE=… sops --config … -d … > /tmp/aegis-env.plain`,
+  parses the env into `-e KEY=VALUE` docker flags, and ships
+  the plaintext env over the SSH channel to the host. The
+  encrypted file at `/etc/aegis/aegis-env.enc.env` is
+  at-rest backup only. The v0.5.0-era `secrets.env` host path
+  via the `configure_secrets` Ansible role still works (it
+  produces the same env) but is no longer canonical.
+- **`aegis admin add` stdin quirk** (Go `bufio.Reader`
+  default-buffer drain). The aegis binary's password prompt
+  (`promptPassword`) creates a `bufio.NewReader(os.Stdin)`
+  per call and reads until `\n`. With the default 4096-byte
+  buffer, the first `Read` drains the whole pipe when the
+  pipe is small (our case: two ~30-byte password lines). The
+  second `promptPassword` call then sees EOF. Workarounds:
+  1. write the two password lines with a 1-second sleep
+  between them (Python `subprocess.Popen` + `time.sleep`,
+  or `expect` on Unix with a tty), or 2. use `--password
+  $AEGIS_INITIAL_PASSWORD` style flag (not yet implemented;
+  tracked as a v0.8.x+ UX improvement). The 2026-08-09
+  fresh install on the reset VPS used workaround #1; the
+  worked Python script is `C:\Users\adversif\Documents\vpn
+  \.tmp-create-admin.py` (gitignored).
