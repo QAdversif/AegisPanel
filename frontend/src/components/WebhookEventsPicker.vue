@@ -146,9 +146,9 @@ function onToggle(event: WebhookEventType, checked: boolean): void {
           props.value.length === 0
             ? t('webhooks.eventsAll')
             : t('webhooks.eventsPicker.selectedCount', {
-                count: props.value.length,
-                total: 18,
-              })
+              count: props.value.length,
+              total: 18,
+            })
         }}
       </Badge>
     </div>
@@ -172,7 +172,7 @@ function onToggle(event: WebhookEventType, checked: boolean): void {
             class="size-4 rounded border-input text-primary focus:ring-2 focus:ring-ring"
             :checked="isSelected(event)"
             @change="(e) => onToggle(event, (e.target as HTMLInputElement).checked)"
-          />
+          >
           <code class="font-mono text-xs">{{ event }}</code>
         </label>
       </fieldset>

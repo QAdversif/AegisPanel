@@ -734,7 +734,10 @@ const canWrite = computed(() => {
           {{ t("nodes.subtitle") }}
         </p>
       </div>
-      <Button v-if="canWrite" @click="startCreate">
+      <Button
+        v-if="canWrite"
+        @click="startCreate"
+      >
         <Plus class="h-4 w-4" />
         {{ t("nodes.create") }}
       </Button>
@@ -753,15 +756,21 @@ const canWrite = computed(() => {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{{ t("nodes.createTitle") }}</DialogTitle>
-          <DialogDescription>{{
-            t("nodes.createDescription")
-          }}</DialogDescription>
+          <DialogDescription>
+            {{
+              t("nodes.createDescription")
+            }}
+          </DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="createForm.isSubmitting.value"
           @submit="createForm.handleSubmit"
         >
-          <FormField name="name" :label="t('nodes.name')" required>
+          <FormField
+            name="name"
+            :label="t('nodes.name')"
+            required
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -774,7 +783,11 @@ const canWrite = computed(() => {
               />
             </template>
           </FormField>
-          <FormField name="region" :label="t('nodes.region')" required>
+          <FormField
+            name="region"
+            :label="t('nodes.region')"
+            required
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -826,11 +839,17 @@ const canWrite = computed(() => {
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">
+              <Button
+                type="button"
+                variant="outline"
+              >
                 {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="createForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="createForm.isSubmitting.value"
+            >
               {{ t("common.create") }}
             </Button>
           </DialogFooter>
@@ -843,15 +862,21 @@ const canWrite = computed(() => {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{{ t("nodes.editTitle") }}</DialogTitle>
-          <DialogDescription>{{
-            t("nodes.editDescription")
-          }}</DialogDescription>
+          <DialogDescription>
+            {{
+              t("nodes.editDescription")
+            }}
+          </DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="editForm.isSubmitting.value"
           @submit="editForm.handleSubmit"
         >
-          <FormField name="name" :label="t('nodes.name')" required>
+          <FormField
+            name="name"
+            :label="t('nodes.name')"
+            required
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -864,7 +889,11 @@ const canWrite = computed(() => {
               />
             </template>
           </FormField>
-          <FormField name="region" :label="t('nodes.region')" required>
+          <FormField
+            name="region"
+            :label="t('nodes.region')"
+            required
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -895,7 +924,10 @@ const canWrite = computed(() => {
               />
             </template>
           </FormField>
-          <FormField name="capacityHint" :label="t('nodes.capacityHint')">
+          <FormField
+            name="capacityHint"
+            :label="t('nodes.capacityHint')"
+          >
             <template #default="{ id, value, onBlur, hasError }">
               <Input
                 :id="id"
@@ -910,11 +942,17 @@ const canWrite = computed(() => {
           </FormField>
           <DialogFooter>
             <DialogClose>
-              <Button type="button" variant="outline">
+              <Button
+                type="button"
+                variant="outline"
+              >
                 {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="editForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="editForm.isSubmitting.value"
+            >
               {{ t("common.save") }}
             </Button>
           </DialogFooter>
@@ -930,9 +968,11 @@ const canWrite = computed(() => {
             <Server class="h-4 w-4 inline-block mr-2 align-text-bottom" />
             {{ t("nodes.provisionTitle") }}
           </DialogTitle>
-          <DialogDescription>{{
-            t("nodes.provisionDescription")
-          }}</DialogDescription>
+          <DialogDescription>
+            {{
+              t("nodes.provisionDescription")
+            }}
+          </DialogDescription>
         </DialogHeader>
         <Form
           :is-submitting="provisionForm.isSubmitting.value"
@@ -1024,7 +1064,7 @@ const canWrite = computed(() => {
                         provisionForm.setFieldValue('ssh_password', '');
                       }
                     "
-                  />
+                  >
                   <KeySquare class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodKey") }}</span>
                 </label>
@@ -1044,7 +1084,7 @@ const canWrite = computed(() => {
                         provisionForm.setFieldValue('ssh_password', '');
                       }
                     "
-                  />
+                  >
                   <Lock class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodPassword") }}</span>
                 </label>
@@ -1074,7 +1114,7 @@ const canWrite = computed(() => {
                         provisionForm.setFieldValue('ssh_password', '');
                       }
                     "
-                  />
+                  >
                   <KeyRound class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodStored") }}</span>
                 </label>
@@ -1188,7 +1228,10 @@ const canWrite = computed(() => {
                 {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="provisionForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="provisionForm.isSubmitting.value"
+            >
               <Server class="h-4 w-4 mr-2" />
               {{ t("nodes.provision") }}
             </Button>
@@ -1205,9 +1248,11 @@ const canWrite = computed(() => {
             <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
             {{ t("nodes.rotateTitle") }}
           </DialogTitle>
-          <DialogDescription>{{
-            t("nodes.rotateDescription")
-          }}</DialogDescription>
+          <DialogDescription>
+            {{
+              t("nodes.rotateDescription")
+            }}
+          </DialogDescription>
         </DialogHeader>
         <p class="nodes__provision-target">
           <strong>{{ rotating?.name }}</strong>
@@ -1292,7 +1337,10 @@ const canWrite = computed(() => {
                 {{ t("common.cancel") }}
               </Button>
             </DialogClose>
-            <Button type="submit" :disabled="rotateForm.isSubmitting.value">
+            <Button
+              type="submit"
+              :disabled="rotateForm.isSubmitting.value"
+            >
               <RefreshCw class="h-4 w-4" />
               {{ t("nodes.rotateAction") }}
             </Button>
@@ -1305,7 +1353,10 @@ const canWrite = computed(() => {
              form is hidden (`v-if`) so the
              submit button is not visible
              alongside the success card. -->
-        <div v-else class="nodes__rotation-result">
+        <div
+          v-else
+          class="nodes__rotation-result"
+        >
           <h3 class="nodes__rotation-result-title">
             <KeyRound class="h-4 w-4 inline-block mr-2 align-text-bottom" />
             {{ t("nodes.rotateResultTitle") }}
@@ -1342,7 +1393,10 @@ const canWrite = computed(() => {
             </template>
           </FormField>
           <DialogFooter>
-            <Button type="button" @click="closeRotateDialog">
+            <Button
+              type="button"
+              @click="closeRotateDialog"
+            >
               {{ t("common.close") }}
             </Button>
           </DialogFooter>
@@ -1486,9 +1540,11 @@ const canWrite = computed(() => {
             <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
             {{ t("nodes.refreshTitle") }}
           </DialogTitle>
-          <DialogDescription>{{
-            t("nodes.refreshDescription")
-          }}</DialogDescription>
+          <DialogDescription>
+            {{
+              t("nodes.refreshDescription")
+            }}
+          </DialogDescription>
         </DialogHeader>
         <p class="nodes__provision-target">
           <strong>{{ refreshing?.name }}</strong>
@@ -1542,7 +1598,10 @@ const canWrite = computed(() => {
              panel key (proves "the
              refresh used the key I
              expect"). -->
-        <div v-else class="nodes__refresh-result">
+        <div
+          v-else
+          class="nodes__refresh-result"
+        >
           <h3 class="nodes__refresh-result-title">
             <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
             {{ t("nodes.refreshResultTitle") }}
@@ -1577,7 +1636,10 @@ const canWrite = computed(() => {
             </template>
           </FormField>
           <DialogFooter>
-            <Button type="button" @click="closeRefreshDialog">
+            <Button
+              type="button"
+              @click="closeRefreshDialog"
+            >
               {{ t("common.close") }}
             </Button>
           </DialogFooter>
