@@ -32,38 +32,105 @@ You are running Aegis for one of these reasons:
 Aegis is **single-tenant**: one panel serves one operator. If you
 need multi-tenant, this is not the project for you.
 
-## TL;DR — five minutes from zero to "panel running"
+## v0.8.x secret-decryption contract (read this first)
+
+The single most important thing to understand about the v0.8.x
+deploy is the **decrypt-on-operator** pattern:
+
+- The encrypted secrets file (`aegis-env.enc.env`, sops+age) is
+  at-rest storage on **both** the operator's local machine
+  (`~/.aegis/aegis-env.enc.env`) and the panel host
+  (`/etc/aegis/aegis-env.enc.env`, mode 0600 root). The encrypted
+  file is public-readable by design; the security boundary is
+  the age private key.
+- The age private key lives on the **operator's local machine**
+  (e.g. `~/.ssh/aegis.age.key`, mode 0600). The panel host gets
+  only the public counterpart (and only because the panel needs
+  to decrypt webhooks secrets / nodes.ssh_private_key_ciphertext
+  at runtime — the age key is mounted into the distroless container
+  as `/etc/aegis/age.key`, chown 65532:65532 + chmod 0640 so the
+  distroless `nonroot` user can read it).
+- The **plaintext env is built on the operator's machine**
+  via `SOPS_AGE_KEY_FILE=… sops --config ~/.aegis/.sops.yaml -d …` and
+  shipped to the panel host as a stack of `docker run -e KEY=VALUE`
+  flags. The plaintext env never lives on disk on either side.
+- **The panel binary does not decrypt sops+age at boot** (v0.8.x has
+  no `cmd/aegis/main.go` code path that calls `sops.Decrypt`).
+  The plaintext-env-via-`-e` flags IS the contract. See
+  [`docs/RUNBOOKS/deploy.md` §6.5](./RUNBOOKS/deploy.md) for the
+  worked `sops -d` command + the `python` env-flag builder used
+  in the 2026-08-09 fresh install.
+
+Concretely: the `secrets.env` file path on the host that the
+Ansible `configure_secrets` role writes is from a v0.5.0-era
+contract. The v0.8.x contract uses the `docker run -e` flags
+path; `secrets.env` is no longer the host-side source of truth
+(the encrypted file is). The Ansible role still works because
+the decrypt-on-host path produces the same env, but the
+canonical manual path is decrypt-on-operator.
+
+## TL;DR — five minutes from zero to "panel running" (v0.8.x)
 
 ```bash
 # 0. Local prerequisites
 brew install sops age     # or apt: sudo apt install sops age
-pip install ansible       # or apt: sudo apt install ansible
-go install github.com/aedificans/aegispanel/cmd/aegis-pg-backup@latest
+# Ansible is OPTIONAL — the canonical v0.8.x path is manual
+# docker compose on the panel host. Install Ansible only if you
+# want the role-based path (deploy/ansible/playbooks/panel.yml).
 
 # 1. One-time: generate the age keypair (BACK THIS UP)
-age-keygen -o ~/.aegis/age.key
-cat ~/.aegis/age.key.pub   # → paste into .sops.yaml
+age-keygen -o ~/.ssh/aegis.age.key
+cat ~/.ssh/aegis.age.key.pub   # → paste into .sops.yaml under &main
 
-# 2. Fill in real secrets + encrypt
-cp deploy/secrets/secrets.example.yml deploy/secrets/secrets.yml
-$EDITOR deploy/secrets/secrets.yml           # see deploy/secrets/README.md
-sops --encrypt --in-place deploy/secrets/secrets.yml
+# 2. Fill in the env file (operator-side, plaintext → encrypt)
+$EDITOR ~/.aegis/aegis-env.env    # set AEGIS_PANEL_PATH, AEGIS_JWT_SECRET,
+                                   # AEGIS_POSTGRES_DSN, all 11 AEGIS_*_BACKEND=pg,
+                                   # AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS,
+                                   # AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE=/etc/aegis/age.key
+sops --config ~/.aegis/.sops.yaml \
+     --input-type env --output-type env \
+     --encrypted-regex '^(AEGIS_JWT_SECRET|AEGIS_POSTGRES_DSN|AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE)$' \
+     --output ~/.aegis/aegis-env.enc.env \
+     ~/.aegis/aegis-env.env
 
 # 3. Stage on the target host
-scp deploy/secrets/secrets.yml aegis-deploy@panel.example.com:/etc/aegis/secrets.yml.enc
-scp ~/.aegis/age.key aegis-deploy@panel.example.com:/etc/aegis/age.key
-ssh aegis-deploy@panel.example.com 'sudo chmod 0600 /etc/aegis/age.key'
+scp ~/.aegis/aegis-env.enc.env root@panel.example.com:/etc/aegis/
+scp ~/.ssh/aegis.age.key      root@panel.example.com:/etc/aegis/age.key
+# (then chown 65532:65532 /etc/aegis/age.key + chmod 0640)
 
-# 4. Run the panel playbook
-ansible-playbook -i deploy/ansible/inventories/prod/hosts.ini \
-  deploy/ansible/playbooks/panel.yml
+# 4. Decrypt on the operator + build the docker -e flag list
+SOPS_AGE_KEY_FILE=~/.ssh/aegis.age.key \
+sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env > /tmp/aegis-env.plain
+# (parse /tmp/aegis-env.plain into a list of -e KEY='VALUE' flags —
+#  see .tmp-build-env-flags.py in the operator's local repo, or
+#  docs/RUNBOOKS/deploy.md §6.4 for a worked python env-flag builder)
 
-# 5. Smoke test (loopback; Caddy is the public ingress)
-ssh aegis-deploy@panel.example.com \
-  'curl -fsS http://127.0.0.1:8080/healthz'
+# 5. Pull the panel image
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.9'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9'
+
+# 6. Start the panel + UI containers (one-shot docker run with the
+#    -e flags from step 4)
+ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net \
+  --restart unless-stopped \
+  -v /var/lib/aegis/migrations:/app/migrations:ro \
+  -v /var/lib/aegis/known_hosts:/var/lib/aegis/known_hosts:ro \
+  -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
+  -p 127.0.0.1:8080:8080 \
+  <the -e flags from step 4> \
+  ghcr.io/qadversif/aegispanel:0.8.9"
+
+# 7. Smoke test
+curl -fsS http://panel.example.com:8080/api/v1/health
 ```
 
-The rest of this guide unpacks each step.
+The rest of this guide unpacks each step. The 2026-08-09 fresh
+install on a reset VPS (commit history in `deploy.local.md`) is
+the canonical worked example; everything below is a
+generalisation.
+
+> **Note**: the only health endpoint is `GET /api/v1/health` (not
+> `/healthz` — that was a v0.5.0-era alias, removed in v0.8.0).
 
 ## Prerequisites
 
@@ -72,11 +139,11 @@ The rest of this guide unpacks each step.
 | Linux x86_64    | kernel 5+  | host OS for the panel + nodes                 |
 | Docker          | 24+        | the panel container runtime                   |
 | Docker Compose  | v2 (`docker compose`) | the panel stack             |
-| Ansible         | 9+         | install / configure playbooks                 |
-| `sops`          | 3.7+       | encrypt the secrets file                      |
-| `age`           | 1.2+       | the sops recipient keypair                    |
+| `sops`          | 3.13+      | encrypt the secrets file (operator-side)      |
+| `age`           | 1.1+       | the sops recipient keypair (X25519 + ChaCha20-Poly1305) |
 | `psql` / `pg_dump` | 16+    | backup / restore ops (or run aegis-pg-backup on the host) |
 | Outbound HTTPS  | —          | pulls `ghcr.io/qadversif/aegispanel` and the sing-box tarball |
+| Ansible         | 9+         | OPTIONAL: only needed for the role-based install path (`deploy/ansible/playbooks/panel.yml`). The v0.8.x canonical path is manual docker compose / `docker run` on the panel host. |
 
 For dev-loop work on the panel itself, also install:
 
@@ -344,10 +411,14 @@ bare semver (`0.5.0`), the major.minor shorthand (`0.5`), and
 
 ### Health check
 
-The panel exposes a `GET /healthz` that returns 200 when the
-container is up and the Postgres connection is alive. Caddy
-should be configured to use this as the healthcheck for
-upstream probes.
+The panel exposes a `GET /api/v1/health` that returns 200 with
+`{"status":"ok","version":"dev"}` when the container is up and
+the Postgres connection is alive. Caddy should be configured to
+use this as the healthcheck for upstream probes.
+
+> The v0.5.0-era `/healthz` alias was removed in v0.8.0. Use
+> `/api/v1/health` for both Caddy healthchecks and operator
+> smoke tests.
 
 ### Logs
 
@@ -437,19 +508,21 @@ is exactly what a memory-only dev install wants.
 ## What this guide does NOT cover
 
 - **Decoy sites, host pools, plans, webhooks, cascades, the
-  cabinet API** — the v0.6.0+ and v1.x+ features. See the
-  [roadmap](./roadmap).
-- **S3-compatible backup storage** — v0.5.x+ follow-up. The
-  `Store/Backend` interface is already in `internal/backups/`;
-  the S3 implementation is the next PR.
-- **Cosign-signed panel images** — v0.5.x+ follow-up. Sing-box
-  itself is not GPG-signed by SagerNet; we trust the GitHub API
-  response (TLS + GitHub's signing keys). For the panel
-  images, the v0.5.x work is to add `cosign sign` + `cosign
-  verify` in the release pipeline.
+  cabinet API** — see [ROADMAP.md](./ROADMAP.md) for the
+  milestone status of each.
+- **S3-compatible backup storage** — local-only backups are the
+  v0.5.0-v0.8.9 contract. The `Store/Backend` interface in
+  `internal/backups/` is the extension point; the S3 implementation
+  is a future PR.
 - **A high-availability topology.** Aegis is single-instance.
   A second panel host is not in scope; the canonical recovery
   path is restore-from-backup onto a fresh VM.
+- **The per-user credential filter in the Builder** — the only
+  known high-severity security gap remaining in v0.8.9. See
+  [KNOWN_LIMITATIONS.md](../../KNOWN_LIMITATIONS.md) for the
+  full gap list. The fix (Option A: per-node user allowlist
+  filter inside `BuildCoreConfigForNode`) is a planned
+  v0.8.x+/v0.9.0 item; required before the v1.0.0 GA tag.
 
 ## Where to next?
 
