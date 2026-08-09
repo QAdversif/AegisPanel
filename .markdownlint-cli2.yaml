@@ -1,0 +1,40 @@
+# markdownlint-cli2 config for AegisPanel.
+#
+# The pre-pr.sh step (do_markdownlint) passes its own globs
+# inline; this file exists ONLY to add the `.github/pr-body-*.md`
+# exclusion. The pattern catches:
+#
+# 1. Untracked scratch from `gh pr create --body-file` drafts
+#    that the operator forgot to clean up after a PR merged.
+#    These are not committed but they DO live on disk and DO
+#    get picked up by markdownlint's `**/*.md` glob.
+# 2. Tracked `.github/pr-body-<name>.md` files (some are
+#    intentionally tracked per the convention in
+#    .gitignore). The exclusion in this config also applies
+#    to them, so a single config is fine for both cases.
+#
+# The pre-pr.sh has the rules for *all* tracked *.md files
+# (the rest of the rule set lives in `.markdownlint.json`).
+# This file is just the file-list config that adds the
+# `.github/pr-body-*.md` exclusion to the inline patterns
+# pre-pr.sh already provides.
+
+config:
+  # Inherit the existing .markdownlint.json rules
+  extends: .markdownlint.json
+
+globs:
+  - "**/*.md"
+  - "!node_modules/**"
+  - "!**/node_modules/**"
+  - "!**/dist/**"
+  - "!**/.vuepress/.temp/**"
+  - "!**/.vuepress/.cache/**"
+  - "!backups/**"
+  - "!**/coverage/**"
+  - "!.github/pr-body-*.md"
+  - "!.github/pr-comment-*.md"
+  - "!.git-commit-*.md"
+  - "!.git-commit-*.txt"
+  - "!.git-pr-title.txt"
+  - "!.git-tag-v*.txt"
