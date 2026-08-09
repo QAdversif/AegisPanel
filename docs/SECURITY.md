@@ -39,7 +39,7 @@ The maintainers aim to:
   from the report, with extensions granted on request when a fix
   is in progress.
 
-Aegis does **not** run a paid bug-bounty program in the v0.5.0
+Aegis does **not** run a paid bug-bounty program in the v0.8.x
 window. Credit in the CHANGELOG is the standard acknowledgement.
 
 ## Supported versions
@@ -47,14 +47,17 @@ window. Credit in the CHANGELOG is the standard acknowledgement.
 Only the latest minor release receives security fixes. The
 project follows semver:
 
-- **v0.5.x** is the current GA target. Security fixes land on
-  `main` and ship in the next `v0.5.y` patch release.
-- **v0.4.x** and earlier** are **not** supported. Operators on
-  an older release should upgrade. The pre-PR-#119 secrets
-  surface (env vars on the host, no sops+age indirection) has
-  known limitations that are fixed in v0.5.0.
+- **v0.8.x** is the current GA target line (v0.8.9 is the
+  latest tagged release, 2026-08-08). Security fixes land on
+  `main` and ship in the next `v0.8.y` patch release.
+- **v0.7.x** and earlier are **not** supported. Operators on
+  an older release should upgrade. The pre-#119 secrets surface
+  (env vars on the host, no sops+age indirection) had known
+  limitations that were fixed in v0.5.0. The pre-#182 `auth.me`
+  bug (returned 500 on pg backend) was fixed in v0.8.2. The
+  pre-#188 manual agent-bearer rotation was automated in v0.8.7.
 
-For the v0.5.0 → v1.0.0 window, security fixes are
+For the v0.8.x → v1.0.0 window, security fixes are
 backwards-compatible: no breaking changes to the public API,
 the data model, or the on-disk format. Operators can roll
 forward without a migration.
@@ -65,14 +68,15 @@ Aegis is designed to defend against:
 
 | Threat | Mitigation |
 | --- | --- |
-| **Operator's VPS compromised** (root on the panel host) | The panel container is distroless + nonroot (uid 65532) and the secrets.env bind mount is read-only. The panel itself has no shell. A container escape is the only path to a privileged shell. |
+| **Operator's VPS compromised** (root on the panel host) | The panel container is distroless + nonroot (uid 65532) and the age key bind mount is read-only (chown 65532:65532, chmod 0640 so the distroless user can read it; not 0600 root — that boot-loops the panel with "permission denied" on the age key). The panel itself has no shell. A container escape is the only path to a privileged shell. |
 | **Network sniffing between panel ↔ node** | The agent uses TLS to the panel (Let's Encrypt cert validated by the agent). Configs are signed; the agent rejects unsigned configs. |
 | **A malicious sing-box tarball** | The `install_singbox` role looks up the SHA-256 from the GitHub Releases API at install time and verifies the download with `get_url checksum:`. A tampered tarball fails the install. |
-| **An attacker with the panel's DB read access** | All user passwords are bcrypt-hashed; subscription tokens are opaque random hex. The JWT secret is the only plaintext credential in the DB and is operator-rotatable. |
+| **An attacker with the panel's DB read access** | All admin passwords are argon2id-hashed (PHC string `$argon2id$v=19$m=...,t=...,p=...$salt$hash`); subscription tokens are opaque random hex. The JWT secret is the only plaintext credential in the DB and is operator-rotatable. |
+| **A stale `aegis-agent` bearer token** (agent regenerated its bearer out-of-band) | `nodes.Service.RefreshAgentBearer` (v0.8.7) decrypts the stored panel SSH key, SSHes into the node, reads `/etc/aegis/agent.env`, parses `AEGIS_AGENT_BEARER`, and updates `nodes.agent_bearer`. The BatchedApplier's `Apply` path (v0.8.8) auto-invokes this on a 401 from `POST /v1/apply` — the operator does not need to act. One retry only; 500/404 do NOT trigger refresh. |
 | **A backup-tampering attacker** | Every backup has a sidecar `<id>.dump.gz.sha256` file in `sha256sum -c` format. Operators can `sha256sum -c` the sidecar before a restore. |
 | **A typo in the operator's secrets file** | The `configure_secrets` role runs a round-trip decrypt after writing the plaintext, catching corruption. The role fails loudly on a mismatch, not silently. |
 | **A leaked CI secret** | The CI does not decrypt. The CI does not have access to the operator's age private key. CI never holds plaintext secrets. |
-| **A leaked `aegis-agent` bearer token** | Revoke by rotating `aegis.agent_bearer` in the sops+age file, re-running the role, and restarting the agents. The old token is invalidated the moment the panel restarts. |
+| **A tampered container image from GHCR** | Every release re-signs and re-verifies via cosign (v0.8.9, PR #190). The release workflow's `Settle GHCR after push` step (30s) handles `latest` tag-mutation drift; the re-sign step uses the build's recorded digest and emits a fresh transparency-log entry; the `cosign verify` step uses the same OIDC flags a consumer would. The trust anchor is `--certificate-oidc-issuer https://token.actions.githubusercontent.com` — verify with the same flag the release workflow uses. |
 
 Aegis is **not** designed to defend against:
 
@@ -90,11 +94,15 @@ Aegis is **not** designed to defend against:
   a standard Go service; we do not audit the runtime for
   Spectre-class vulnerabilities. Operators with high-assurance
   requirements should pin the Go toolchain version.
-- **A malicious panel maintainer.** The release pipeline is
-  single-maintainer in the v0.5.0 window. Cosign signing of
-  the panel images is a v0.5.x+ follow-up; until then, the
-  trust model is "trust the maintainer + the GitHub release
-  tag" (the standard OCI trust model).
+- **A malicious panel maintainer.** v0.8.9 adds cosign
+  re-sign + verify on every release, which closes the
+  "trust the maintainer" gap: every consumer can `cosign
+  verify --certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*"
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ghcr.io/qadversif/aegispanel:0.8.9` and the signature is
+  verifiable against the GitHub Actions OIDC issuer. The
+  trust model is now: OIDC issuer + OPA signature, not
+  "trust the maintainer".
 
 ## Cryptography
 
@@ -201,15 +209,25 @@ the credentials.
 - **Tags**: the release pipeline emits `[X.Y.Z, X.Y, latest]`
   (with `latest` skipped for prerelease tags, per
   `flavor: latest=auto`).
-- **Signing**: **not yet.** Cosign sign + verify is the
-  v0.5.x+ follow-up. Until then, the trust model is the same
-  as the OCI registry's authentication: TLS + GitHub's OIDC
-  token.
+- **Signing**: cosign re-sign + verify on every release (v0.8.9,
+  PR #190). After the first `cosign sign`, the workflow waits
+  30s (let GHCR OIDC settle), then re-signs each image and
+  runs `cosign verify` with the same OIDC flags a consumer
+  would use. The transparency-log entry is keyed to the
+  actual digest the build published. Verify with:
+  ```bash
+  cosign verify --certificate-identity-regexp \
+    "https://github.com/QAdversif/AegisPanel/.*" \
+    --certificate-oidc-issuer \
+    https://token.actions.githubusercontent.com \
+    ghcr.io/qadversif/aegispanel:0.8.9
+  ```
 - **Vulnerability scanning**: the CI runs `trivy` on every
   build. Critical / High CVEs fail the build. The
   `.trivyignore` file lists accepted false positives (e.g.
   the CVE on the `latest` tag's base image, when the patched
-  image is still propagating).
+  image is still propagating). `pnpm-audit` (frontend) and
+  `govulncheck` (Go) gate the build on dependency CVEs.
 
 ### Panel / agent binaries
 
