@@ -198,6 +198,118 @@ export const nodeProvisionSchema = z
 export type NodeProvisionInput = z.infer<typeof nodeProvisionSchema>;
 
 /**
+ * Schema for the v0.8.12+ merged "Add node + provision"
+ * dialog. The form is the v0.8.x create form with an
+ * optional "Provision after create" section. When
+ * `provisionNow` is `true`, the form sends
+ * `POST /api/v1/nodes` (create), then
+ * `POST /api/v1/nodes/{id}/provision` (provision)
+ * in sequence — the second call reuses the auth
+ * fields below. The `stored` auth method is
+ * rejected at the schema level for first-time
+ * installs (the panel has no key on file yet for
+ * a node in state `new`); the form surfaces the
+ * same constraint via the radio's disabled state.
+ *
+ * The conditional-required + XOR + tofu_policy rules
+ * below mirror `nodeProvisionSchema` (DRY: a
+ * helper enforces the same rules on the same fields
+ * when `provisionNow` is on).
+ */
+export const nodeAddSchema = z
+  .object({
+    // nodeCreateSchema fields (inlined for shape
+    // access; nodeCreateSchema itself is exported
+    // for callers that only need the create subset).
+    name: z.string().min(1).max(64),
+    region: z.string().min(1).max(32),
+    capacityHint: z.string().max(64).optional(),
+    address: hostPortSchema,
+    tags: z.array(tagSchema).max(16).optional(),
+    // v0.8.12: provision discriminator + auth fields.
+    // All optional at the schema level when
+    // `provisionNow` is `false`; conditionally
+    // required / XOR-validated by the superRefine
+    // below when `provisionNow` is `true`.
+    provisionNow: z.boolean().default(true),
+    authMethod: authMethodSchema.optional(),
+    ssh_private_key: z.string().optional(),
+    ssh_password: z.string().optional(),
+    ssh_port: z
+      .number()
+      .int()
+      .min(1, "ssh_port must be 1..65535")
+      .max(65535, "ssh_port must be 1..65535")
+      .optional(),
+    ssh_user: z.string().max(64).optional(),
+    tofu_policy: tofuPolicySchema.optional(),
+    expected_fingerprint: z.string().max(200).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.provisionNow) return;
+    // `stored` is for re-provisions (the panel has a
+    // key on file from a prior install). For
+    // first-time installs the panel has no key yet.
+    if (value.authMethod === "stored") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["authMethod"],
+        message:
+          "'Stored panel key' is for re-provisions only. Use 'key' or 'password' for the first install.",
+      });
+      return;
+    }
+    if (value.authMethod === "key") {
+      if (!value.ssh_private_key || value.ssh_private_key.trim() === "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ssh_private_key"],
+          message:
+            'ssh_private_key is required when auth_method is "key" (PEM, no passphrase).',
+        });
+      }
+      if (value.ssh_password && value.ssh_password !== "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ssh_password"],
+          message:
+            'ssh_password must be empty when auth_method is "key" (XOR with ssh_private_key).',
+        });
+      }
+    } else if (value.authMethod === "password") {
+      if (!value.ssh_password || value.ssh_password === "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ssh_password"],
+          message:
+            'ssh_password is required when auth_method is "password" (the VPS root password).',
+        });
+      }
+      if (value.ssh_private_key && value.ssh_private_key.trim() !== "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ssh_private_key"],
+          message:
+            'ssh_private_key must be empty when auth_method is "password" (XOR with ssh_password).',
+        });
+      }
+    }
+    if (
+      (value.tofu_policy === undefined || value.tofu_policy === "reject") &&
+      (!value.expected_fingerprint || value.expected_fingerprint.trim() === "")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["expected_fingerprint"],
+        message:
+          'expected_fingerprint is required when tofu_policy is "reject". Either paste the SHA256 fingerprint or switch tofu_policy to "accept-and-append".',
+      });
+    }
+  });
+
+export type NodeAddInput = z.infer<typeof nodeAddSchema>;
+
+/**
  * Schema for the v0.8.4 rotate-panel-key dialog.
  * The form is a single textarea (the operator's
  * existing SSH private key, PEM-encoded, no
