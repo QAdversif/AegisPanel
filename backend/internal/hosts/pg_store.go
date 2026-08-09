@@ -300,7 +300,29 @@ func (s *PgStore) HostsForInbound(ctx context.Context, nodeID, inboundID uuid.UU
 // collapses two endpoints on the same node; the
 // result is a fresh slice (no aliasing) and is
 // empty (not nil) for a host with no endpoints.
+// Returns `ErrNotFound` when the host itself does
+// not exist in the `hosts` table (matches the
+// MemoryStore contract — the two-query approach is
+// cheaper than a CTE for the v0.8.x workload where
+// the host existence is the rare case).
 func (s *PgStore) NodesForHost(ctx context.Context, hostID uuid.UUID) ([]uuid.UUID, error) {
+	// Host existence check first: an empty
+	// `host_endpoints` result is ambiguous ("no
+	// host" vs "host with no endpoints"). The
+	// MemoryStore distinguishes the two; we
+	// mirror that here so callers can rely on
+	// the contract. Cost: one extra round trip,
+	// but `hosts` is keyed by PK and the lookup
+	// is index-only.
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM hosts WHERE id = $1)`, hostID,
+	).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("query host exists: %w", err)
+	}
+	if !exists {
+		return nil, fmt.Errorf("id %s: %w", hostID, ErrNotFound)
+	}
 	const q = `
 		SELECT DISTINCT node_id
 		FROM host_endpoints
