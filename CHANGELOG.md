@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (per-user credential filter in the Builder)
+
+Closes the second half of the v0.7.x Phase 2
+multi-user TODO (the first half — the
+BatchedApplier fan-out narrowing by host — was
+v0.8.x PR #192). Without this filter, the
+Builder's per-inbound credential list carried
+every per-(user, inbound) row regardless of the
+user's host allow/block set, leaking users across
+nodes. The v0.8.10+ behavior: a non-empty
+allow-set is resolved per `BuildCoreConfigForNode`
+invocation (one DB round-trip per node flush, not
+per inbound), the per-inbound credential list is
+filtered by `Credential.UserID ∈ allow-set`, and
+the rendered `users: [...]` array only carries
+the allowed users.
+
+- **`internal/users.Service.AllowedUsersForNode(ctx, nodeID) ([]uuid.UUID, error)`** — the reverse-direction read of the v0.8.x `enqueueUserDelta` fan-out: which user IDs the host-allow/block filter admits for `nodeID`, instead of which node IDs the user is on. Uses `StatusActive` as the user-status filter (skips deleted/expired/disabled). Blocklist wins over allowlist (matching `enqueueUserDelta`). A nil `s.hosts` with a non-empty allow/block list yields an empty allow-set (fail-closed, matching the v0.8.x `enqueueUserDelta` pattern).
+
+- **`internal/cores/builder.ListUsersAllowedForNode` interface + `BuildCoreConfigForNode` filter** — the Builder calls the source once per build (one DB round-trip per node flush) and filters every per-inbound credential list. A nil source / nil result / lookup error keeps the v0.8.0-v0.8.9 default-allow contract (every credential passes). A non-empty result is the allow-set: a credential whose `UserID` is not in the set is dropped. A returned empty allow-set (the lookup succeeded with []) drops every credential for that node — the fail-closed "no users allowed" semantic.
+
+- **`internal/cores/builder.NewFlushFn` — new `usersSrc` argument** between `credSrc` and `renderer`. nil skips the per-user filter, the v0.8.0-v0.8.9 default-allow contract. Wired in `cmd/aegis/main.go` to pass `a.Users`.
+
+- **Tests**: 3 unit tests in `internal/users/service_test.go` (`TestService_AllowedUsersForNode` for the mixed-filter shape, `TestService_AllowedUsersForNode_NilHosts` for the fail-closed nil-lookup case, `TestService_AllowedUsersForNode_DefaultAllow` for the no-filter case). 5 new tests in `internal/cores/builder/builder_test.go` (`TestBuildCoreConfigForNode_PerUserFilter_FullAllow`, `PartialAllow`, `EmptyAllow` for the fail-closed sentinel, `NilUsers` for the v0.8.0-v0.8.9 contract, `LookupError` for the fail-soft log+default-allow). 8 existing `BuildCoreConfigForNode` tests updated for the new 6-arg signature.
+
+- **Wiring**: `cmd/aegis/main.go` passes `a.Users` to `builder.NewFlushFn`. The existing `WithHosts(a.Hosts)` chain stays — the per-user allow-set resolver depends on the host→node expansion to evaluate `User.HostsAllowlist` / `HostsBlocklist`.
+
+- **Migration notes for operators**: no schema migration. No new env vars. No new `AEGIS_*_BACKEND` config. The `AEGIS_WEBHOOKS_SECRET_AGE_*` envelope and the `AEGIS_*_BACKEND=pg` set from the v0.8.9 production deploy are sufficient. Operators who have populated `User.HostsAllowlist` with host IDs see the per-user filter activate immediately on the next BatchedApplier flush; operators who have not populated the fields see no behavioral change (the v0.8.0-v0.8.9 default-allow contract is preserved when `s.hosts` is wired but every user has empty allow/block lists).
+
+- **Docs**: `KNOWN_LIMITATIONS.md` "The per-credential Builder-side filter" entry closed (with the migration note for operators). `ROADMAP.md` `v0.8.x` row updated to mark "per-user credential filter in Builder" shipped. `docs/SECURITY.md` "Not designed to defend against" section updated: the per-user cross-node leak is now closed. `CHANGELOG.md` (this entry).
+
 ## [0.8.10] - 2026-08-09
 
 This is a **consolidation release** that closes the 3-PR gap

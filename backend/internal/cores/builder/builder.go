@@ -110,6 +110,43 @@ type ListCredentialsByInbound interface {
 	ListByInbound(ctx context.Context, inboundID uuid.UUID) ([]*credentials.Credential, error)
 }
 
+// ListUsersAllowedForNode is the slice of the users
+// service the v0.8.10+ per-user credential filter
+// needs. Returns the set of active user IDs the
+// host-allow/block filter admits for `nodeID` (per
+// the `users.Service.AllowedUsersForNode` method,
+// which in turn uses the v0.8.x host→node expansion
+// via `internal/hosts.Service.NodesForHost`).
+//
+// The builder calls this source once per
+// `BuildCoreConfigForNode` invocation (i.e. once per
+// BatchedApplier flush, not once per inbound) and
+// filters the per-inbound credential list by the
+// returned user-ID set. A nil implementation skips
+// the filter (default-allow; matches the v0.8.0-v0.8.9
+// render contract). A nil return from the lookup
+// also skips the filter (no users resolved, the
+// legacy behaviour keeps every credential). A
+// returned error is treated as fail-soft: log a
+// warning, treat as if nil were returned. The
+// v0.8.10+ behaviour — a non-empty allow-set that
+// does NOT contain a credential's user drops the
+// credential — only kicks in when the lookup
+// succeeds with a non-nil result.
+//
+// This is the second half of the v0.7.x Phase 2
+// multi-user TODO (see `KNOWN_LIMITATIONS.md` "Phase 2
+// multi-user sing-box render — open issues"): the
+// BatchedApplier fan-out was already narrowed by
+// host in v0.8.x (PR #192); this method narrows the
+// per-node credential list by the same filter, so a
+// user without access to the node does not appear
+// in the rendered `users: [...]` array. Wired in
+// `cmd/aegis/main.go` via `a.Users`.
+type ListUsersAllowedForNode interface {
+	AllowedUsersForNode(ctx context.Context, nodeID uuid.UUID) ([]uuid.UUID, error)
+}
+
 // CoreRenderer is the slice of a cores.CoreProvider
 // the FlushFn needs. Declared as an interface so
 // the builder stays free of any provider-specific
@@ -183,16 +220,91 @@ const experimentalInboundCredentialsKey = "inbound_credentials"
 // logged and treated as "no host for this inbound"
 // (HostID = ""), matching the fail-soft pattern the
 // credentials source already follows.
+//
+// v0.8.10+ (per-user credential filter): the
+// `usersSrc` argument supplies the per-node user
+// allow-set (see `ListUsersAllowedForNode`). The
+// builder calls it ONCE per `BuildCoreConfigForNode`
+// invocation (one DB round-trip per node flush, not
+// per inbound) and filters every per-inbound
+// credential list by the returned user-ID set. A
+// nil `usersSrc` skips the filter (the rendered
+// `users: [...]` array keeps every credential — the
+// v0.8.0-v0.8.9 default-allow behaviour, matching
+// the v0.8.0-v0.8.7 `inbSrc` / `hostSrc` nil-skip
+// convention). A nil return from the lookup is
+// treated the same as nil `usersSrc` (legacy
+// behaviour). A non-empty return is used as the
+// allow-set: a credential whose `UserID` is not in
+// the set is dropped. This closes the second half
+// of the v0.7.x Phase 2 multi-user TODO
+// (`KNOWN_LIMITATIONS.md` "Phase 2 multi-user
+// sing-box render — open issues"); the first half
+// (BatchedApplier fan-out narrowing by host) was
+// v0.8.x (PR #192).
 func BuildCoreConfigForNode(
 	ctx context.Context,
 	inbSrc ListInboundsByNode,
 	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
+	usersSrc ListUsersAllowedForNode,
 	nodeID uuid.UUID,
 ) (cores.CoreConfig, error) {
 	all, err := inbSrc.ListByNode(ctx, nodeID)
 	if err != nil {
 		return cores.CoreConfig{}, fmt.Errorf("builder: list inbounds for node %s: %w", nodeID, err)
+	}
+
+	// v0.8.10+ per-user credential filter: resolve
+	// the per-node user allow-set ONCE per build call
+	// (one DB round-trip per node flush, not per
+	// inbound). A nil `usersSrc` keeps the v0.8.0-v0.8.9
+	// default-allow behaviour (every credential
+	// passes). A nil return from the lookup is the
+	// same as nil `usersSrc`. A non-nil, non-empty
+	// set is used as the allow-set: a credential
+	// whose UserID is not in the set is dropped.
+	// A lookup error is fail-soft (log + treat as nil),
+	// matching the credentials source and host source.
+	var allowedUsers map[uuid.UUID]struct{}
+	if usersSrc != nil {
+		ids, uerr := usersSrc.AllowedUsersForNode(ctx, nodeID)
+		switch {
+		case uerr != nil:
+			// Fail-soft: the per-inbound credential
+			// queries already follow this pattern;
+			// the BatchedApplier's 20s flush window
+			// means a fatal error here would block
+			// every node from rendering during a
+			// transient pg blip.
+			log.Warn().Err(uerr).
+				Str("node", nodeID.String()).
+				Msg("builder: list users for node failed; falling back to default-allow (no per-user filter)")
+		case len(ids) > 0:
+			allowedUsers = make(map[uuid.UUID]struct{}, len(ids))
+			for _, id := range ids {
+				allowedUsers[id] = struct{}{}
+			}
+		default:
+			// Empty allow-set (the lookup succeeded
+			// and returned [] or nil): every
+			// credential is dropped. The downstream
+			// effect is "no users on this node" —
+			// the sing-box renderer emits an empty
+			// `users: [...]` array, the agent
+			// refuses all protocol auth on that
+			// inbound. This is the fail-closed
+			// semantic for a panel where every
+			// active user is filtered out by their
+			// host allow/block set.
+			//
+			// We use a non-nil empty map as the
+			// sentinel for "filter is active,
+			// allow-set is empty" — distinct from
+			// `allowedUsers == nil` (no source / no
+			// result / fail-soft = default-allow).
+			allowedUsers = make(map[uuid.UUID]struct{})
+		}
 	}
 
 	specs := make([]cores.InboundSpec, 0, len(all))
@@ -304,10 +416,40 @@ func BuildCoreConfigForNode(
 		// renderer expects. See the `multiUserCfg`
 		// doc comment in the singbox test file
 		// for the full rationale.
-		valueSlice := make([]credentials.Credential, len(creds))
-		for i, c := range creds {
-			if c != nil {
-				valueSlice[i] = *c
+		//
+		// v0.8.10+ per-user filter: when
+		// `allowedUsers` is non-nil (a real
+		// lookup succeeded with a non-empty
+		// result), drop credentials whose `UserID`
+		// is not in the set. A nil `allowedUsers`
+		// (no source / no result / fail-soft) keeps
+		// every credential — the v0.8.0-v0.8.9
+		// default-allow contract. An empty
+		// `allowedUsers` set (the lookup
+		// succeeded and returned []) drops every
+		// credential for this node — the
+		// fail-closed "no users allowed" semantic.
+		var valueSlice []credentials.Credential
+		if allowedUsers == nil {
+			valueSlice = make([]credentials.Credential, len(creds))
+			for i, c := range creds {
+				if c != nil {
+					valueSlice[i] = *c
+				}
+			}
+		} else {
+			valueSlice = make([]credentials.Credential, 0, len(creds))
+			for _, c := range creds {
+				if c == nil {
+					continue
+				}
+				if _, ok := allowedUsers[c.UserID]; !ok {
+					continue
+				}
+				valueSlice = append(valueSlice, *c)
+			}
+			if len(valueSlice) == 0 {
+				continue
 			}
 		}
 		credsByTag[tag] = valueSlice
@@ -351,23 +493,27 @@ func BuildCoreConfigForNode(
 //
 // The closure captures the inbounds source +
 // host→inbound lookup + credentials source +
-// renderer + node identity, so the BatchedApplier
-// can be created once per node and need not be
-// told which node it serves per flush. v0.8.x adds
-// the `hostSrc` argument; nil skips the host
-// lookup (HostID stays ""), matching the v0.8.0-v0.8.7
-// render contract.
+// users source + renderer + node identity, so the
+// BatchedApplier can be created once per node and
+// need not be told which node it serves per flush.
+// v0.8.x adds the `hostSrc` argument; nil skips the
+// host lookup (HostID stays ""), matching the
+// v0.8.0-v0.8.7 render contract. v0.8.10+ adds the
+// `usersSrc` argument; nil skips the per-user
+// credential filter (every credential passes), the
+// v0.8.0-v0.8.9 default-allow contract.
 func NewFlushFn(
 	inbSrc ListInboundsByNode,
 	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
+	usersSrc ListUsersAllowedForNode,
 	renderer CoreRenderer,
 	nodeID uuid.UUID,
 	nodeName string,
 ) cores.FlushFn {
 	return func(flushCtx context.Context, deltas []cores.Delta) error {
 		start := time.Now()
-		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, hostSrc, credSrc, nodeID)
+		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, hostSrc, credSrc, usersSrc, nodeID)
 		if err != nil {
 			log.Error().Err(err).Str("node", nodeName).
 				Msg("v0.5.0: BatchedApplier: builder failed; skipping Apply")

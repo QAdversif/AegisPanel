@@ -142,6 +142,53 @@ a separate PR. Outbound group rendering
 (`docs/comparison/remnawave.md:319`) is gated on
 user demand and is a separate PR.
 
+#### Per-user credential filter in the Builder — closed in this PR
+
+Closed in this PR (v0.8.10+). The per-user
+context the v0.7.x TODO said the FlushFn did not
+carry turned out to be unnecessary: the Builder
+already has the `nodeID` (it's the FlushFn's
+per-node key), so the read direction is "which
+user IDs the host-allow/block filter admits for
+this node", not "which node IDs the user is on".
+The new method is the reverse-direction read of
+the v0.8.x `enqueueUserDelta` fan-out, sharing
+the same `expandHostsToNodes` helper.
+
+- `internal/users.Service.AllowedUsersForNode(ctx,
+  nodeID) ([]uuid.UUID, error)` — the new
+  method. Uses `StatusActive` as the user-status
+  filter, blocklist-wins-over-allowlist, fail-closed
+  on a nil `s.hosts` with a non-empty allow/block
+  field (matching `enqueueUserDelta`).
+- `internal/cores/builder.ListUsersAllowedForNode`
+  interface + `BuildCoreConfigForNode` per-inbound
+  filter — one DB round-trip per build (per node
+  flush), not per inbound. A nil source / nil
+  result / lookup error keeps the v0.8.0-v0.8.9
+  default-allow contract (every credential
+  passes). A non-empty result is the allow-set.
+  An empty result (the lookup succeeded with [])
+  drops every credential for that node — the
+  fail-closed "no users allowed" semantic.
+- `internal/cores/builder.NewFlushFn` — new
+  `usersSrc` argument between `credSrc` and
+  `renderer`. Wired in `cmd/aegis/main.go` to
+  pass `a.Users`.
+
+**Migration note for operators**: no schema
+migration, no new env vars, no new
+`AEGIS_*_BACKEND` config. The per-user filter
+activates automatically on the next BatchedApplier
+flush once `a.Users` is wired. Operators who
+have populated `User.HostsAllowlist` /
+`HostsBlocklist` with host IDs see the filter
+take effect immediately; operators who have not
+populated the fields see no behavioral change
+(the v0.8.0-v0.8.9 default-allow contract is
+preserved when every user has empty allow/block
+lists).
+
 **Migration note for operators**: the
 `User.HostsAllowlist` / `HostsBlocklist` UUIDs
 are now host IDs, not node IDs. A panel
