@@ -197,6 +197,16 @@ type Store interface {
 	// invalidate every outstanding refresh for that user.
 	RevokeChain(ctx context.Context, userID string) error
 
+	// RevokeOne marks a single refresh token as used,
+	// idempotently. Used by the logout flow — the operator
+	// expects logout to "just work" even if the token has
+	// already been consumed by a refresh, was issued by a
+	// different device, or is unknown. The implementation
+	// must NOT return an error for any of those cases (the
+	// cookie is the authoritative cleanup signal, not the
+	// server-side row).
+	RevokeOne(ctx context.Context, tokenHash string) error
+
 	// CreateUser inserts a new admin user. The caller is
 	// responsible for filling every field on the passed
 	// User (ID, Username, Email, PasswordHash, Role, Scopes)
