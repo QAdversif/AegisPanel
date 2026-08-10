@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-08-10
+
+This is a **consolidation release** that closes the
+3-PR gap between `v0.8.11` (`ae9eefa0`) and `main`
+(`7a79213`). It contains two UX improvements (PR #201
+merged "Add node + Provision" dialog, PR #202 shadcn-vue
+`RadioGroup` primitive + NodesView auth-method migration)
+and one docs-sync follow-up (PR #203). PR #200 (the
+v0.8.11+ lint cleanup) is a chore with no user-visible
+surface change and is not enumerated here. No new
+backend API surface, no new OpenAPI, no new env vars,
+no new schema migrations. The on-disk prod is unchanged
+from the v0.8.9 deploy; the v0.8.12 tag is the canonical
+reference for any post-2026-08-10 hotfix branch and the
+cleanest snapshot for the v0.9.0 fresh-VM smoke test.
+
 ### Added (merged "Add node + Provision" dialog)
 
 Closes the v0.8.x-bucket UX follow-up "merged
@@ -64,7 +80,40 @@ deleted; visual parity preserved via the standard
 
 - **Migration notes for operators**: no backend changes, no schema migration, no new env vars. The new components are pure UI primitives; the wire format (`POST /api/v1/nodes` + `POST /api/v1/nodes/{id}/provision`) is unchanged. The auth-method reset side effect (clearing the other auth field when switching methods) is preserved.
 
-- **Docs**: `KNOWN_LIMITATIONS.md` "shadcn-vue RadioGroup primitive — v0.8.x" entry closed (with the migration note for operators). `docs/ROADMAP.md` v0.8.x row updated to mark the primitive shipped. `README.md` v0.8.x row updated. `docs/README.md` status table row updated. `CHANGELOG.md` (this entry).
+### Documentation (sync to v0.8.12)
+
+PR #203 closes the docs drift between the
+v0.8.12 codebase and the user-facing
+documentation that PR #201 (merged
+Add+Provision dialog) and PR #202 (shadcn-vue
+RadioGroup primitive) would otherwise leave
+behind. No code changes — `.md` only. Touches:
+
+- **`KNOWN_LIMITATIONS.md`** — "shadcn-vue
+  RadioGroup primitive — v0.8.x" entry closed
+  with the migration note (the new
+  `components/ui/RadioGroup.vue` +
+  `RadioGroupItem.vue` primitives carry
+  arrow-key + Space keyboard navigation,
+  ARIA group semantics, and the standard
+  `data-[state=checked]` / `data-[disabled]`
+  styling hooks).
+
+- **`docs/ROADMAP.md`** — v0.8.x row updated:
+  PR #202 added to the shipped list, removed
+  from the open list. The "inbound-templates
+  work" row is now the only v0.8.x bucket
+  item still open.
+
+- **`README.md`** (root) — v0.8.x milestone
+  row updated to reflect the primitive
+  shipped. The trailing "; shadcn-vue
+  `RadioGroup` primitive" line is removed.
+
+- **`docs/README.md`** — status table row
+  "⏳ v0.8.x+" → "✅ shipped (PR #202)".
+
+- **`CHANGELOG.md`** (this entry).
 
 ## [0.8.11] - 2026-08-10
 
