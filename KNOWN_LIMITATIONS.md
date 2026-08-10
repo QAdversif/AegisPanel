@@ -649,51 +649,109 @@ auditable.
 | Audit log + operator profile (read surface) | PR #66 (PR-M) |
 | Sub-token rotation + URL-prefix rotation | PR #47 |
 
+## v0.8.14 — closed in v0.8.14+ (PR follow-ups)
+
+### Admin password rotation — closed 2026-08-10 22:38 MSK
+
+The `aegis-fixture-admin-password` rotation was
+performed on the prod panel (the live server.click). The new
+password is a 28-char `secrets.choice`-generated
+value over a 70-char alphabet (letters + digits +
+`!@#$%^&*-_+=`); recorded ONLY in
+`~/.aegis/deploy.local.md` (outside the repo, per
+the operator's privacy rule). Verified via the
+public API: `POST /api/v1/auth/login` returns 200
+with the new password and 401 with the old
+fixture. The rotation script is reusable
+(`C:\Users\adversif\.aegis\scripts\admin-passwd-rotate.py`)
+and uses the `aegis admin passwd admin` subcommand
+with the bufio.Reader 4096B-drain workaround
+(`subprocess.Popen` + `time.sleep(1.0)` between
+writes). The `age` envelope on the panel env file
+is unaffected (the JWT signing key is independent
+of the admin password). Existing bearer tokens
+keep working until the 15-min TTL expires;
+existing refresh tokens keep working until the
+30-day idle TTL expires (or a chain-revocation
+event). **v1.0.0 GA is unblocked.**
+
+### Dialog content overflow on content-heavy dialogs — closed in this PR
+
+The merged "Add node + Provision" dialog (PR #201)
+and the Inbounds / Hosts / Webhooks dialogs (which
+override the base `max-w-lg` to `max-w-2xl` /
+`max-w-3xl` / `max-w-4xl`) carry a content stack
+that exceeds the viewport height on a 1280×720
+laptop. The base `DialogContent.vue` (shadcn-vue
+wrapper over `radix-vue`) is fixed at
+`max-w-lg translate-x-[-50%] translate-y-[-50%]`
+with NO `max-h-` and NO `overflow-y-` — so the
+content clips below the viewport and the operator
+has no way to reach the submit button. The fix:
+add `max-h-[90vh] overflow-y-auto` to the base
+class. `overflow-y-auto` (not `scroll`) only
+shows the scrollbar when content actually
+overflows, so small dialogs (ProfileView confirm,
+credential delete, etc.) keep the default
+borderless look. The X close button stays
+anchored in the top-right because it is
+`absolute` relative to the same panel; the
+scroll viewport is the panel itself, not the
+consumer's `<slot />`. No consumer override was
+broken (the per-dialog `max-w-2xl` /
+`max-w-3xl` / `max-w-4xl` overrides are
+additive on the same Tailwind class — last-wins
+semantics for the width, additive for the new
+max-h / overflow).
+
 ## v0.8.14 — currently open
 
-### Admin password rotation is the only remaining GA-blocker
+### 401 on `POST /api/v1/nodes/{id}/provision` from stale in-memory session (under investigation)
 
-The `aegis-fixture-admin-password` is the v0.8.9-era
-seed password that every fresh install of the
-container is born with. It is documented in
-`deploy/ansible/group_vars/all.yml` (the operator
-onboarding aid) and is therefore **public knowledge**
-— anyone who has read the v0.8.x deploy path can
-reproduce it. Every prod install (the live server.click,
-2026-08-09; the canonical reference deploy) is
-running with this fixture password.
+The user-reported symptom (a 401 in the browser
+console after clicking "Установить агента" in the
+merged Add+Provision dialog) is reproducible only
+from a stale in-memory Pinia session. The
+backend's auth chain is verified clean:
 
-The rotation is a live op, not a code change:
+- `POST /api/v1/auth/login` with a fresh login
+  returns 200 + a valid `aegis_rt` cookie.
+- `GET /api/v1/nodes/` with the access token
+  returns 200 (the nodes list, including the
+  newly-created Demo node).
+- `POST /api/v1/nodes/{id}/provision` with the
+  same access token returns 200 (install
+  attempted) or 400 (body validation, e.g. "exactly
+  one of ssh_private_key or ssh_password is
+  required") or 502 ("install failed at stage
+  `input`"), depending on the SSH handshake —
+  NEVER 401. `ScopeNodes` is correctly granted
+  to the admin role.
+- `POST /api/v1/nodes/{id}/provision` with a
+  malformed token returns 401 "invalid token".
+- `POST /api/v1/nodes/{id}/provision` with no
+  Authorization header returns 401 "missing
+  bearer token".
 
-1. The `aegis admin passwd` subcommand (Linux build
-   at `/usr/local/bin/aegis` on the panel host) takes
-   the current password + a new password on stdin.
-   The `bufio.Reader` default 4096B buffer drains
-   the entire pipe in one Read, so the standard
-   "echo newpass" + "echo newpass" pattern can land
-   both lines before the read starts. The workaround
-   is Python `subprocess.Popen` with `time.sleep(1.0)`
-   between the two writes; see
-   `~/.aegis/deploy.local.md` "Deploy 2026-08-09" §2
-   for the worked example.
-2. After rotation, the new password is recorded in
-   `~/.aegis/deploy.local.md` (outside the repo, per
-   the operator's privacy rule). The `age` envelope
-   on the panel env file is NOT affected (the JWT
-   signing key is independent of the admin password).
-3. No new admin sessions are required to be logged
-   out (the change is a "set new value" not a
-   "rotate to a new value + revoke old"). Existing
-   bearer tokens keep working until the 15-min TTL
-   expires; existing refresh tokens keep working
-   until the 30-day idle TTL expires (or a
-   chain-revocation event).
-
-This is **Priority 9 from the deep-state analysis**
-and the only remaining GA-blocker for v1.0.0.
-v0.8.14 is fully shipped; the v1.0.0 GA tag is
-unblocked the moment the admin password is rotated
-on the prod panel.
+The 401 in the browser is therefore the
+"missing bearer token" branch — the access token
+is empty in the request interceptor at the
+moment the user clicks submit. The most likely
+root cause is an expired access token (15-min
+TTL) on a tab the user kept open, with a
+refresh-cookie round-trip that did not complete
+in time (the `useAuthStore().clear()` fallback
+in the response interceptor fires when
+`refreshTokens()` returns `null`). The user
+mitigation is: re-log-in once, the cookie round-
+trip restarts, subsequent requests succeed.
+The follow-up PR will harden the response
+interceptor to surface a "session expired,
+re-login" toast instead of a generic 401, and
+will add a v0.8.x integration test that
+reproduces the stale-session 401 + auto-recovers
+via a single re-login. No backend change is
+required (the auth chain is correct).
 
 ## What's NOT a limitation
 
