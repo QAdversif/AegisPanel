@@ -78,37 +78,29 @@ func clearRefreshCookie(w http.ResponseWriter, s *Service) {
 	})
 }
 
-// readRefreshToken pulls the refresh token from either the
-// HttpOnly cookie (preferred — the v0.8.13+ path) or the
-// JSON body (the v0.8.0-v0.8.12 backwards-compat path, kept
-// for one release so a pre-cookie client can still refresh
-// during the upgrade window). The body path is the first
-// to be deleted; see the v0.8.13 changelog entry.
+// readRefreshToken pulls the refresh token from the
+// HttpOnly cookie. v0.8.14+ is cookie-only — the v0.8.13
+// body-fallback path is gone. The v0.8.13 release kept
+// the body parse as a one-release backwards-compat shim
+// for v0.8.0-v0.8.12 clients; v0.8.14 closes that
+// window. A client without the cookie gets a 400 on
+// /auth/refresh and 204 (idempotent) on /auth/logout.
 //
-// Empty string is returned when neither source has a value.
+// Empty string is returned when the cookie is missing
+// or empty; the caller is expected to treat that as
+// "no token".
 func readRefreshToken(r *http.Request) string {
-	if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
-		return c.Value
+	c, err := r.Cookie(refreshCookieName)
+	if err != nil || c.Value == "" {
+		return ""
 	}
-	// Fallback: parse the body. The handler caller is
-	// expected to bound this with the same
-	// ValidateRefreshTokenFormat check, so an
-	// attacker-controlled body cannot return a 64-char
-	// string that bypasses the cookie-only fast path.
-	var req refreshRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	return req.RefreshToken
+	return c.Value
 }
 
 // loginRequest is the POST /auth/login body. Both fields are required.
 type loginRequest struct {
 	Username string `json:"username" example:"admin"`
 	Password string `json:"password" example:"aegis-dev-password"`
-}
-
-// refreshRequest is the POST /auth/refresh body.
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token" example:"a3f1...64hex"`
 }
 
 // meResponse is the GET /auth/me body.
@@ -118,37 +110,40 @@ type meResponse struct {
 	Scopes   []string `json:"scopes" example:"admin,read,write"`
 }
 
-// loginResponse is the POST /auth/login body on success. The
-// v0.8.13+ flow ALSO sets a `Set-Cookie: aegis_rt=...;
-// HttpOnly; Secure; SameSite=Strict` on the same response
-// (see setRefreshCookie), and the frontend reads the
-// refresh token from the cookie, NOT the body. The body
-// field is kept for one release as a backwards-compat
-// path so a pre-v0.8.13 client can still log in during
-// the upgrade window; the body field will be removed in
-// v0.8.14. The cookie is the authoritative channel
-// because it is unreachable from JavaScript (XSS
-// mitigation) and the browser attaches it to /api/v1
-// requests automatically (no per-request boilerplate
-// for the frontend).
+// loginResponse is the POST /auth/login body on success.
+// v0.8.14+: the response ONLY carries the access token
+// (and the standard `token_type` / `expires_at` /
+// `scopes` envelope). The refresh token is NOT in the
+// body — it is set as a `Set-Cookie: aegis_rt=...;
+// HttpOnly; Secure; SameSite=Strict` header on the same
+// response (see setRefreshCookie), and that cookie is
+// the only authoritative channel the server reads on
+// /auth/refresh. The body-field drop is the v0.8.14
+// commitment that closes the v0.8.13 backwards-compat
+// shim: from this release forward, the refresh token
+// is unreachable from JavaScript (XSS mitigation) and
+// the browser attaches it to /api/v1 requests
+// automatically (no per-request boilerplate for the
+// frontend).
 type loginResponse struct {
-	AccessToken  string    `json:"access_token" example:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."`
-	RefreshToken string    `json:"refresh_token" example:"a3f1...64hex"`
-	TokenType    string    `json:"token_type" example:"Bearer"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	Scopes       []string  `json:"scopes" example:"admin,read,write"`
+	AccessToken string    `json:"access_token" example:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."`
+	TokenType   string    `json:"token_type" example:"Bearer"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Scopes      []string  `json:"scopes" example:"admin,read,write"`
 }
 
 // handleLogin returns an http.HandlerFunc that authenticates a
 // user and returns an access+refresh pair. Wrong credentials
 // collapse to 401 with a generic message — never 404, never 200.
 //
-// v0.8.13+ also sets a `Set-Cookie: aegis_rt=...; HttpOnly;
-// Secure; SameSite=Strict; Path=/; Max-Age=2592000` header
-// on the same response. The frontend reads the refresh from
-// that cookie, not the JSON body — the body's `refresh_token`
-// field is kept for one release as a backwards-compat path
-// (see the v0.8.13 entry in CHANGELOG.md).
+// v0.8.14+: the response sets a `Set-Cookie: aegis_rt=...;
+// HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`
+// header on the same response, and the body only carries the
+// access token (no `refresh_token` field — that was the
+// v0.8.13 backwards-compat shim, closed in v0.8.14). The
+// frontend reads the refresh from the cookie, not the body.
+// The cookie is unreachable from JS (XSS mitigation) and the
+// browser attaches it to /api/v1 requests automatically.
 func (s *Service) handleLogin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
@@ -171,27 +166,26 @@ func (s *Service) handleLogin() http.HandlerFunc {
 		}
 		setRefreshCookie(w, s, result.RefreshToken)
 		writeJSON(w, loginResponse{
-			AccessToken:  result.AccessToken,
-			RefreshToken: result.RefreshToken,
-			TokenType:    "Bearer",
-			ExpiresAt:    result.ExpiresAt,
-			Scopes:       result.Scopes.Strings(),
+			AccessToken: result.AccessToken,
+			TokenType:   "Bearer",
+			ExpiresAt:   result.ExpiresAt,
+			Scopes:      result.Scopes.Strings(),
 		})
 	}
 }
 
 // handleRefresh exchanges a refresh token for a new pair.
-// v0.8.13+: the refresh token is read from the HttpOnly
-// cookie (preferred), with the JSON body as a backwards-
-// compat fallback for the v0.8.0-v0.8.12 client. The
-// response sets a fresh cookie with the rotated refresh
-// token (the server-side `ConsumeRefresh` is a one-time
-// claim, so the new pair is mandatory).
+// v0.8.14+: the refresh token is read from the HttpOnly
+// cookie (the only authoritative channel — the v0.8.13
+// body-fallback is closed). The response sets a fresh
+// cookie with the rotated refresh token (the server-side
+// `ConsumeRefresh` is a one-time claim, so the new pair
+// is mandatory). A request with no cookie returns 400.
 func (s *Service) handleRefresh() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := readRefreshToken(r)
 		if token == "" {
-			writeJSONError(w, http.StatusBadRequest, "refresh token is required (cookie or body)")
+			writeJSONError(w, http.StatusBadRequest, "refresh token cookie is required")
 			return
 		}
 		result, err := s.Refresh(r.Context(), token)
@@ -211,11 +205,10 @@ func (s *Service) handleRefresh() http.HandlerFunc {
 		}
 		setRefreshCookie(w, s, result.RefreshToken)
 		writeJSON(w, loginResponse{
-			AccessToken:  result.AccessToken,
-			RefreshToken: result.RefreshToken,
-			TokenType:    "Bearer",
-			ExpiresAt:    result.ExpiresAt,
-			Scopes:       result.Scopes.Strings(),
+			AccessToken: result.AccessToken,
+			TokenType:   "Bearer",
+			ExpiresAt:   result.ExpiresAt,
+			Scopes:      result.Scopes.Strings(),
 		})
 	}
 }
@@ -349,25 +342,27 @@ func writeJSON(w http.ResponseWriter, v any) {
 // token (server-side) and clears the cookie (client-side).
 //
 // Server-side revoke: the refresh token is read from the
-// cookie (preferred) or the body (backwards-compat); the
-// matching `admin_refresh_tokens` row is marked `used_at =
-// NOW()` (the one-time-claim pattern), so even if the
-// browser cookie lingers the token is now useless. The
-// access token (15-min lifetime) is NOT revoked on the
-// server — JWT access tokens are stateless by design, and
-// the next 401-refresh-retry attempt would fail anyway
-// because the refresh is now consumed.
+// HttpOnly cookie (the v0.8.14+ authoritative channel —
+// the v0.8.13 body-fallback is closed). The matching
+// `admin_refresh_tokens` row is marked `used_at = NOW()`
+// (the one-time-claim pattern), so even if the browser
+// cookie lingers the token is now useless. The access
+// token (15-min lifetime) is NOT revoked on the server —
+// JWT access tokens are stateless by design, and the next
+// 401-refresh-retry attempt would fail anyway because
+// the refresh is now consumed.
 //
 // Client-side clear: `Set-Cookie: aegis_rt=; Max-Age=-1`
 // expires the cookie. The browser drops it on the next
 // page load. The access token the frontend holds in
-// memory (or in localStorage, pre-v0.8.13) is also dropped
-// by the frontend's `auth.logout()` Pinia action.
+// memory (Pinia ref) is also dropped by the frontend's
+// `auth.logout()` Pinia action.
 //
 // 204 No Content on success — the caller doesn't need a
-// body, only the status. 401 on a missing/invalid refresh
-// token (we still clear the cookie in that case so the
-// browser forgets the bad value).
+// body, only the status. The handler clears the cookie
+// in every code path (including the no-cookie /
+// already-cleared case) so a bot probing /logout cannot
+// distinguish "never logged in" from "logged out".
 func (s *Service) handleLogout() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := readRefreshToken(r)

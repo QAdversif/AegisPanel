@@ -55,10 +55,13 @@ export interface paths {
         put?: never;
         /**
          * Authenticate
-         * @description Exchange username + password for an access token and a refresh
-         *     token. Wrong credentials always return 401 — the error never
-         *     distinguishes "unknown user" from "wrong password" so
-         *     attackers cannot enumerate.
+         * @description Exchange username + password for an access token. The
+         *     refresh token is set as a `Set-Cookie: aegis_rt=...`
+         *     HttpOnly cookie on the same response (the only
+         *     authoritative channel — the v0.8.13 body-field shim is
+         *     closed in v0.8.14). Wrong credentials always return 401 —
+         *     the error never distinguishes "unknown user" from
+         *     "wrong password" so attackers cannot enumerate.
          */
         post: {
             parameters: {
@@ -76,6 +79,13 @@ export interface paths {
                 /** @description OK */
                 200: {
                     headers: {
+                        /**
+                         * @description `aegis_rt=<token>; HttpOnly; SameSite=Strict;
+                         *     Path=/; Max-Age=2592000; Secure` in production.
+                         *     The refresh token the browser attaches to every
+                         *     subsequent /api/v1 request. 30-day idle TTL.
+                         */
+                        "Set-Cookie"?: string;
                         [name: string]: unknown;
                     };
                     content: {
@@ -134,6 +144,12 @@ export interface paths {
          *     every outstanding refresh for the user is invalidated,
          *     the response is 401, and a `WARN` log line is emitted. This
          *     is the most likely signal of token theft.
+         *
+         *     v0.8.14+: the refresh token is read from the `aegis_rt`
+         *     HttpOnly cookie (the only authoritative channel — the
+         *     v0.8.13 body-fallback is closed). The POST body is
+         *     ignored. The response sets a fresh cookie with the rotated
+         *     refresh token.
          */
         post: {
             parameters: {
@@ -142,22 +158,27 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["RefreshRequest"];
-                };
-            };
+            requestBody?: never;
             responses: {
                 /** @description OK */
                 200: {
                     headers: {
+                        /**
+                         * @description `aegis_rt=<token>; HttpOnly; SameSite=Strict;
+                         *     Path=/; Max-Age=2592000; Secure` in production.
+                         *     The rotated refresh token (single-use claim).
+                         */
+                        "Set-Cookie"?: string;
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": components["schemas"]["LoginResponse"];
                     };
                 };
-                /** @description Malformed body */
+                /**
+                 * @description Missing `aegis_rt` cookie. v0.8.14+ is cookie-only —
+                 *     the v0.8.13 body-fallback is closed.
+                 */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -177,6 +198,80 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Error"];
                     };
+                };
+                /** @description Internal error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description Revoke the current refresh token (server-side) and clear
+         *     the `aegis_rt` cookie (client-side).
+         *
+         *     Server-side: the matching `admin_refresh_tokens` row is
+         *     marked `used_at = NOW()` (the one-time-claim pattern), so
+         *     even if the browser cookie lingers the token is useless.
+         *
+         *     Client-side: `Set-Cookie: aegis_rt=; Max-Age=-1` expires
+         *     the cookie. The frontend then drops the in-memory access
+         *     token from its Pinia store.
+         *
+         *     v0.8.14+: the refresh token is read from the cookie
+         *     (the only authoritative channel). No body. The endpoint
+         *     is intentionally public (no `Bearer` middleware) so a
+         *     user with an expired access token can still clear their
+         *     refresh cookie. 204 No Content on every path (no
+         *     cookie / unknown cookie / already-revoked) so a bot
+         *     probing /logout cannot distinguish "never logged in"
+         *     from "logged out".
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /**
+                 * @description Logout succeeded (or no cookie present). The
+                 *     `Set-Cookie: aegis_rt=; Max-Age=-1` header is
+                 *     emitted on every response so the browser forgets
+                 *     any dead value.
+                 */
+                204: {
+                    headers: {
+                        /**
+                         * @description `aegis_rt=; Max-Age=-1; HttpOnly; SameSite=Strict;
+                         *     Path=/; Secure` in production.
+                         */
+                        "Set-Cookie"?: string;
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
                 /** @description Internal error */
                 500: {
@@ -4048,22 +4143,9 @@ export interface components {
              */
             password: string;
         };
-        RefreshRequest: {
-            /**
-             * @description Opaque 32-byte hex token (64 chars lowercase). Only the
-             *     SHA-256 hash is stored server-side.
-             * @example 4f2a8b...64hex
-             */
-            refresh_token: string;
-        };
         LoginResponse: {
             /** @description HS256 JWT access token. 15-min TTL. */
             access_token: string;
-            /**
-             * @description Opaque refresh token. 30-day TTL. Single-use; rotation
-             *     on every refresh.
-             */
-            refresh_token: string;
             /** @enum {string} */
             token_type: "Bearer";
             /** Format: date-time */
