@@ -97,6 +97,65 @@ func (s *PgStore) GetByName(ctx context.Context, name string) (*InboundTemplate,
 	return s.scanOne(ctx, `WHERE name = $1`, name)
 }
 
+// GetManyByID returns a map keyed by template id with
+// the matching *InboundTemplate. The lookup is a
+// single batch query (`WHERE id = ANY($1)`); ids that
+// don't resolve are omitted from the result. An empty
+// `ids` slice returns an empty (not nil) map.
+func (s *PgStore) GetManyByID(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*InboundTemplate, error) {
+	if len(ids) == 0 {
+		return map[uuid.UUID]*InboundTemplate{}, nil
+	}
+	const q = baseSelect + `
+		WHERE id = ANY($1)`
+	rows, err := s.pool.Query(ctx, q, ids)
+	if err != nil {
+		return nil, fmt.Errorf("query templates by id batch: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]*InboundTemplate, len(ids))
+	for rows.Next() {
+		var (
+			id          uuid.UUID
+			name        string
+			protocol    string
+			paramsRaw   []byte
+			description *string
+			createdAt   time.Time
+			updatedAt   time.Time
+		)
+		if err := rows.Scan(
+			&id, &name, &protocol, &paramsRaw, &description,
+			&createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan template: %w", err)
+		}
+		t := &InboundTemplate{
+			ID:        id,
+			Name:      name,
+			Protocol:  Protocol(protocol),
+			CreatedAt: createdAt,
+			UpdatedAt: updatedAt,
+		}
+		if description != nil {
+			t.Description = *description
+		}
+		if len(paramsRaw) > 0 {
+			if err := json.Unmarshal(paramsRaw, &t.Params); err != nil {
+				return nil, fmt.Errorf("template params: %w", err)
+			}
+		}
+		if t.Params == nil {
+			t.Params = map[string]any{}
+		}
+		out[id] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return out, nil
+}
+
 // List returns every template, sorted by Name
 // ascending.
 func (s *PgStore) List(ctx context.Context) ([]*InboundTemplate, error) {
