@@ -3,6 +3,7 @@
     "dashboard": "Сводка",
     "nodes": "Ноды",
     "inbounds": "Инбаунды",
+    "inboundTemplates": "Шаблоны инбаундов",
     "hosts": "Хосты",
     "plans": "Тарифы",
     "users": "Пользователи",
@@ -649,5 +650,34 @@
       "credentialValue": "Значение",
       "credentialValueHelp": "1-512 символов. Валидация per-protocol формы — на стороне sing-box renderer'а."
     }
+  },
+  "inboundTemplates": {
+    "subtitle": "Именованные переиспользуемые конфигурации протоколов, привязываемые к инбаундам.",
+    "name": "Имя",
+    "protocol": "Протокол",
+    "description": "Описание",
+    "descriptionHint": "Опциональная заметка. До 256 символов.",
+    "params": "Параметры",
+    "paramsHint": "Произвольный JSON. Per-protocol форму валидирует sing-box renderer.",
+    "updatedAt": "Обновлено",
+    "new": "Новый шаблон",
+    "empty": "Шаблонов пока нет.",
+    "searchPlaceholder": "Поиск шаблонов…",
+    "createTitle": "Новый шаблон инбаунда",
+    "createDescription": "Создать именованную переиспользуемую конфигурацию протокола. Рендерер читает `params` из этой строки для каждого инбаунда, который на неё ссылается.",
+    "editTitle": "Изменить шаблон инбаунда",
+    "loadFailed": "Не удалось загрузить шаблоны",
+    "createFailed": "Создание не удалось",
+    "updateFailed": "Обновление не удалось",
+    "deleteFailed": "Удаление не удалось",
+    "created": "Шаблон создан",
+    "updated": "Шаблон обновлён",
+    "deleted": "Шаблон удалён",
+    "noChanges": "Изменений нет",
+    "deleteTitle": "Удалить шаблон инбаунда",
+    "deleteDescription": "Удалить «{name}»? Инбаунды, ссылающиеся на этот шаблон, откатятся на свои inline `params`. Действие необратимо.",
+    "assignToInbound": "Шаблон",
+    "assignToInboundNone": "Без шаблона (inline params)",
+    "assignToInboundHint": "Если задан, sing-box renderer читает `params` из шаблона вместо inline-`params` этого инбаунда. Протокол должен совпадать."
   }
 }

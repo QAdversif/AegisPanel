@@ -27,13 +27,14 @@ import {
   createInbound,
   deleteInbound,
   getInbound,
+  listInboundTemplates,
   listInboundsForNode,
   listNodes,
   updateInbound,
 } from '@/api/services'
 import { useToastStore } from '@/stores/toast'
 import { toApiError } from '@/api/client'
-import type { Inbound, Node, Protocol } from '@/types'
+import type { Inbound, InboundTemplate, Node, Protocol } from '@/types'
 import { useZodForm } from '@/composables/useZodForm'
 
 import Badge from '@/components/ui/Badge.vue'
@@ -73,6 +74,7 @@ const placeholderJson = '{\n  "flow": "xtls-rprx-vision"\n}'
 
 const inbounds = ref<Inbound[]>([])
 const nodes = ref<Node[]>([])
+const templates = ref<InboundTemplate[]>([])
 const loading = ref(false)
 const selectedNodeId = ref<string>('')
 
@@ -80,6 +82,37 @@ const nodeOptions = computed(() => [
   { id: '', name: t('inbounds.allNodes') },
   ...nodes.value,
 ])
+
+// Refresh the templates list independently
+// of the inbounds list. Templates are
+// panel-wide (not per-node), so the dropdown
+// in the create / edit dialogs always shows
+// the full set. A failure here is silent —
+// the dropdown falls back to "no template".
+async function refreshTemplates(): Promise<void> {
+  try {
+    templates.value = await listInboundTemplates()
+  } catch {
+    templates.value = []
+  }
+}
+
+// Filter the templates list by protocol so
+// the dropdown only shows templates whose
+// protocol matches the inbound's selected
+// protocol. The Go-side validation (PR #211)
+// rejects a TemplateID whose template's
+// protocol differs; the form pre-filters to
+// avoid a guaranteed 400 round-trip. A
+// mismatched protocol that slips through
+// (e.g. the operator changes `protocol`
+// after picking a template) is still
+// rejected by the backend, just with a
+// worse error message.
+function templatesForProtocol(p: Protocol | undefined): InboundTemplate[] {
+  if (!p) return []
+  return templates.value.filter((tpl) => tpl.protocol === p)
+}
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -107,6 +140,7 @@ async function refresh(): Promise<void> {
 
 onMounted(() => {
   void refresh()
+  void refreshTemplates()
 })
 
 // --- dialog state -------------------------------------------------------
@@ -142,13 +176,29 @@ const baseFormSchema = z.object({
   enabled: z.boolean().default(true),
   tagsText: z.string().default(''),
   paramsText: z.string().default(''),
+  // v0.8.13+: optional FK to an
+  // `inbound_templates` row. Empty string
+  // = no template (the v0.8.0-v0.8.12
+  // default; the inbound uses its inline
+  // `params`). A valid UUID = the renderer
+  // reads `template.params` instead. The Go
+  // service (PR #211) enforces template
+  // existence + protocol match.
+  templateId: z.string().default(''),
 })
 
 const createFormSchema = baseFormSchema
 
 // Edit form lets the operator leave fields
 // untouched. PUT semantics are "send only what
-// changed" so the cross-field rules do not apply.
+// changed" so the cross-field rules do not
+// apply. `templateId` is optional on edit;
+// the empty-string sentinel
+// (`templateId: ''`) means "do not change";
+// a valid UUID means "set the FK"; `null`
+// (not currently surfaced in the form UI)
+// would mean "clear the FK" — the wire
+// format is the same as Create.
 const editFormSchema = baseFormSchema.partial().extend({
   nodeId: z.string().uuid().optional(),
 })
@@ -201,6 +251,7 @@ function inboundToRow(i: Inbound): {
   enabled: boolean
   tagsText: string
   paramsText: string
+  templateId: string
 } {
   return {
     nodeId: i.nodeId,
@@ -212,6 +263,13 @@ function inboundToRow(i: Inbound): {
     enabled: i.enabled,
     tagsText: (i.tags ?? []).join(', '),
     paramsText: paramsToText(i.params),
+    // v0.8.13+: pre-fill the Template
+    // dropdown with the inbound's
+    // current FK. An inbound without
+    // a templateId gets the empty
+    // string (the "no template"
+    // option in the dropdown).
+    templateId: i.templateId ?? '',
   }
 }
 
@@ -227,6 +285,10 @@ interface CreateFormValues {
   enabled: boolean
   tagsText: string
   paramsText: string
+  // Empty string = no template (the
+  // v0.8.0-v0.8.12 default). A valid UUID =
+  // use the template's params.
+  templateId: string
 }
 
 const createForm = useZodForm({
@@ -241,6 +303,7 @@ const createForm = useZodForm({
     enabled: true,
     tagsText: '',
     paramsText: '',
+    templateId: '',
   } as CreateFormValues,
   onSubmit: async (values) => {
     const params = parseParams(values.paramsText)
@@ -262,6 +325,15 @@ const createForm = useZodForm({
         enabled: values.enabled,
         tags: parseTagList(values.tagsText),
         params: params.value,
+        // Empty string = no template
+        // (the v0.8.0-v0.8.12 default;
+        // omit the field on the wire).
+        // A valid UUID = use the template's
+        // params. The zod schema accepts
+        // any string; we sanitise here.
+        ...(values.templateId
+          ? { templateId: values.templateId }
+          : {}),
       })
       createOpen.value = false
       toast.add({ title: t('inbounds.created'), variant: 'success' })
@@ -288,6 +360,17 @@ interface EditFormValues {
   enabled?: boolean
   tagsText?: string
   paramsText?: string
+  // Empty string = do not change
+  // (v0.8.0-v0.8.12 contract; matches the
+  // PATCH "absent key = no change" rule).
+  // A valid UUID = set the FK to this
+  // template. &uuid.Nil would mean
+  // "clear the FK"; the form UI does not
+  // surface that path (the operator can
+  // leave the dropdown on the current
+  // template and the PATCH skips the
+  // field).
+  templateId?: string
 }
 
 const editForm = useZodForm({
@@ -334,6 +417,18 @@ const editForm = useZodForm({
       if (values.paramsText !== undefined) {
         payload.params = params.value
       }
+      // v0.8.13+: TemplateID. The empty string
+      // sentinel means "do not change" (matches
+      // the PATCH-absent-key contract). A non-empty
+      // string means "set the FK to this template";
+      // the form's UUID selector only allows
+      // valid UUIDs, so we pass the value verbatim.
+      // To clear the FK the operator would have to
+      // select the empty option explicitly (not
+      // currently surfaced in the form UI).
+      if (values.templateId !== undefined && values.templateId !== '') {
+        payload.templateId = values.templateId
+      }
       await updateInbound(current.nodeId, current.id, payload)
       editOpen.value = false
       editing.value = null
@@ -360,6 +455,7 @@ function blankEditValues(): EditFormValues {
     enabled: true,
     tagsText: '',
     paramsText: '',
+    templateId: '',
   }
 }
 
@@ -628,6 +724,35 @@ const columns: ColumnDef<Inbound, unknown>[] = [
               </template>
             </FormField>
             <FormField
+              name="templateId"
+              :label="t('inboundTemplates.assignToInbound')"
+              :hint="t('inboundTemplates.assignToInboundHint')"
+            >
+              <template #default="{ id, onBlur }">
+                <Select
+                  :model-value="(createForm.values as CreateFormValues).templateId"
+                  @update:model-value="(v: string) => createForm.setFieldValue('templateId', v)"
+                  @blur="onBlur"
+                >
+                  <SelectTrigger :id="id">
+                    <SelectValue :placeholder="t('inboundTemplates.assignToInboundNone')" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">
+                      {{ t('inboundTemplates.assignToInboundNone') }}
+                    </SelectItem>
+                    <SelectItem
+                      v-for="tpl in templatesForProtocol((createForm.values as CreateFormValues).protocol)"
+                      :key="tpl.id"
+                      :value="tpl.id"
+                    >
+                      {{ tpl.name }} <span class="text-muted-foreground">({{ tpl.protocol }})</span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </template>
+            </FormField>
+            <FormField
               name="listen"
               :label="t('inbounds.listen')"
               :hint="t('inbounds.listenHint')"
@@ -782,6 +907,34 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                     </SelectItem>
                     <SelectItem value="trojan">
                       trojan
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </template>
+            </FormField>
+            <FormField
+              name="templateId"
+              :label="t('inboundTemplates.assignToInbound')"
+            >
+              <template #default="{ id, onBlur }">
+                <Select
+                  :model-value="(editForm.values as EditFormValues).templateId ?? ''"
+                  @update:model-value="(v: string) => editForm.setFieldValue('templateId', v)"
+                  @blur="onBlur"
+                >
+                  <SelectTrigger :id="id">
+                    <SelectValue :placeholder="t('inboundTemplates.assignToInboundNone')" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">
+                      {{ t('inboundTemplates.assignToInboundNone') }}
+                    </SelectItem>
+                    <SelectItem
+                      v-for="tpl in templatesForProtocol((editForm.values as EditFormValues).protocol ?? editing?.protocol)"
+                      :key="tpl.id"
+                      :value="tpl.id"
+                    >
+                      {{ tpl.name }} <span class="text-muted-foreground">({{ tpl.protocol }})</span>
                     </SelectItem>
                   </SelectContent>
                 </Select>

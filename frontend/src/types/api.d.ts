@@ -1842,6 +1842,291 @@ export interface paths {
         };
         trace?: never;
     };
+    "/inbound-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List inbound templates
+         * @description Every template (named, reusable protocol
+         *     configuration) the operator has configured.
+         *     Templates are global, not per-node: any
+         *     inbound on any node can reference one via
+         *     the `templateId` FK. v0.8.13 does not
+         *     paginate.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InboundTemplateListResponse"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create an inbound template
+         * @description Create a new named, reusable protocol
+         *     configuration. The server generates the
+         *     id and timestamps; the caller supplies
+         *     the operator-visible fields (name,
+         *     protocol, params, description). The
+         *     protocol must be one of vless, hysteria2,
+         *     shadowsocks, trojan; the `params` field
+         *     is a free-form JSON blob whose shape is
+         *     owned by the sing-box provider.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InboundTemplateCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InboundTemplate"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Template name already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/inbound-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get an inbound template */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InboundTemplate"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete an inbound template
+         * @description Hard delete. The `inbounds.template_id`
+         *     column has an `ON DELETE SET NULL` FK
+         *     (migration 0021), so deleting a template
+         *     that still has inbounds pointing at it
+         *     drops the FK to NULL on those inbounds;
+         *     the sing-box renderer falls back to
+         *     each inbound's inline `params` (the
+         *     v0.8.0-v0.8.12 default). No data loss
+         *     for the affected inbounds; the operator
+         *     just loses the shared-params link.
+         *     The UI shows a confirm dialog that
+         *     lists the affected inbound count before
+         *     DELETE.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /**
+         * Update an inbound template
+         * @description Partial update (the same PATCH semantics the
+         *     v0.2 CRUD surfaces use). All fields are
+         *     optional; the absence of a key means "leave
+         *     unchanged".
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["InboundTemplateUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InboundTemplate"];
+                    };
+                };
+                /** @description Validation error */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Missing or invalid bearer token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/webhooks": {
         parameters: {
             query?: never;
@@ -4139,6 +4424,21 @@ export interface components {
             params?: {
                 [key: string]: unknown;
             };
+            /**
+             * Format: uuid
+             * @description v0.8.13+: optional FK to an
+             *     `inbound_templates` row. When non-null,
+             *     the sing-box renderer reads
+             *     `template.params` instead of `inbound.params`.
+             *     The CRUD layer (PR #211) enforces
+             *     template existence and protocol match;
+             *     a protocol mismatch returns 400 with
+             *     `field=templateId`. Pre-v0.8.13 inbounds
+             *     have `templateId = null` (the v0.8.0-v0.8.12
+             *     default, every inbound uses its inline
+             *     `params`).
+             */
+            templateId?: string | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4155,6 +4455,15 @@ export interface components {
             params?: {
                 [key: string]: unknown;
             };
+            /**
+             * Format: uuid
+             * @description v0.8.13+: optional FK to an
+             *     `inbound_templates` row. See
+             *     `Inbound.templateId` for the full
+             *     semantics. Omit (or send `null`) for
+             *     the v0.8.0-v0.8.12 default.
+             */
+            templateId?: string | null;
         };
         InboundUpdateRequest: {
             name?: string;
@@ -4167,6 +4476,22 @@ export interface components {
             params?: {
                 [key: string]: unknown;
             };
+            /**
+             * Format: uuid
+             * @description v0.8.13+: optional FK to an
+             *     `inbound_templates` row. Send `null`
+             *     to clear the template reference on
+             *     the inbound. Send a new UUID to
+             *     reassign. Omit (do not include the
+             *     key at all) to leave the current
+             *     template reference unchanged.
+             *     Protocol-match validation runs
+             *     against the inbound's effective
+             *     protocol (the patch's `protocol`
+             *     field, if also set, otherwise the
+             *     existing one). See PR #211.
+             */
+            templateId?: string | null;
         };
         InboundListResponse: {
             inbounds: components["schemas"]["Inbound"][];
@@ -4687,6 +5012,49 @@ export interface components {
             statusCode?: number | null;
             error?: string | null;
             attempts: number;
+        };
+        InboundTemplate: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            protocol: components["schemas"]["Protocol"];
+            /**
+             * @description Protocol-specific configuration. The shape
+             *     is owned by the sing-box provider; v0.8.13
+             *     surfaces a generic JSON editor for it.
+             *     When an inbound's `templateId` resolves to
+             *     this template, the sing-box renderer reads
+             *     these `params` instead of the inbound's
+             *     inline `params`.
+             */
+            params: {
+                [key: string]: unknown;
+            };
+            description?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        InboundTemplateCreateRequest: {
+            name: string;
+            protocol: components["schemas"]["Protocol"];
+            /** @default {} */
+            params: {
+                [key: string]: unknown;
+            };
+            description?: string;
+        };
+        InboundTemplateUpdateRequest: {
+            name?: string;
+            protocol?: components["schemas"]["Protocol"];
+            params?: {
+                [key: string]: unknown;
+            };
+            description?: string;
+        };
+        InboundTemplateListResponse: {
+            templates: components["schemas"]["InboundTemplate"][];
         };
     };
     responses: never;

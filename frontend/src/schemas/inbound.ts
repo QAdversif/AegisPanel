@@ -43,6 +43,13 @@ export const inboundCreateSchema = z.object({
   enabled: z.boolean().default(true),
   tags: z.array(tagSchema).max(16).optional(),
   params: z.record(z.unknown()).optional(),
+  // v0.8.13+: optional FK to an
+  // `inbound_templates` row. When set, the
+  // sing-box renderer reads `template.params`
+  // instead of `inbound.params`. The Go
+  // service (PR #211) enforces template
+  // existence + protocol match.
+  templateId: uuidSchema.optional().nullable(),
 })
 
 export type InboundCreateInput = z.infer<typeof inboundCreateSchema>
