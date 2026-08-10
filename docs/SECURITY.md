@@ -47,8 +47,8 @@ window. Credit in the CHANGELOG is the standard acknowledgement.
 Only the latest minor release receives security fixes. The
 project follows semver:
 
-- **v0.8.x** is the current GA target line (v0.8.9 is the
-  latest tagged release, 2026-08-08). Security fixes land on
+- **v0.8.x** is the current GA target line (v0.8.12 is the
+  latest tagged release, 2026-08-10). Security fixes land on
   `main` and ship in the next `v0.8.y` patch release.
 - **v0.7.x** and earlier are **not** supported. Operators on
   an older release should upgrade. The pre-#119 secrets surface

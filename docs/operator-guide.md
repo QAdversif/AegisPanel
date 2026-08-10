@@ -106,8 +106,8 @@ sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env > /tmp/aegis-env
 #  docs/RUNBOOKS/deploy.md §6.4 for a worked python env-flag builder)
 
 # 5. Pull the panel image
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.9'
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.12'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.12'
 
 # 6. Start the panel + UI containers (one-shot docker run with the
 #    -e flags from step 4)
