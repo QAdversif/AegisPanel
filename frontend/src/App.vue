@@ -25,6 +25,16 @@ onMounted(() => {
   // the panel is reachable. The auth store may have
   // already done this during login.
   void auth.ping()
+  // v0.8.13+ rehydration hook: the Pinia store is
+  // in-memory only (no localStorage for tokens), so
+  // a page refresh drops the access token. Fire one
+  // /auth/me call — the 401-refresh-retry path
+  // handles the "no access token" case transparently
+  // if the HttpOnly cookie is still valid. If the
+  // cookie is also gone, the user is logged out and
+  // the router re-routes to /login on the next guard
+  // check.
+  void auth.boot()
 })
 </script>
 
