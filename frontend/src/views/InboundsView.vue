@@ -184,7 +184,7 @@ const baseFormSchema = z.object({
   // reads `template.params` instead. The Go
   // service (PR #211) enforces template
   // existence + protocol match.
-  templateId: z.string().default(''),
+  templateId: z.string().default('none'),
 })
 
 const createFormSchema = baseFormSchema
@@ -266,10 +266,14 @@ function inboundToRow(i: Inbound): {
     // v0.8.13+: pre-fill the Template
     // dropdown with the inbound's
     // current FK. An inbound without
-    // a templateId gets the empty
-    // string (the "no template"
-    // option in the dropdown).
-    templateId: i.templateId ?? '',
+    // a templateId gets the "none"
+    // sentinel (the "no template"
+    // option in the dropdown). The
+    // sentinel maps to the wire
+    // format `templateId: null` on
+    // submit (see createForm.onSubmit
+    // / editForm.onSubmit).
+    templateId: i.templateId ?? 'none',
   }
 }
 
@@ -303,7 +307,7 @@ const createForm = useZodForm({
     enabled: true,
     tagsText: '',
     paramsText: '',
-    templateId: '',
+    templateId: 'none',
   } as CreateFormValues,
   onSubmit: async (values) => {
     const params = parseParams(values.paramsText)
@@ -325,13 +329,19 @@ const createForm = useZodForm({
         enabled: values.enabled,
         tags: parseTagList(values.tagsText),
         params: params.value,
-        // Empty string = no template
+        // "none" sentinel = no template
         // (the v0.8.0-v0.8.12 default;
         // omit the field on the wire).
         // A valid UUID = use the template's
         // params. The zod schema accepts
         // any string; we sanitise here.
-        ...(values.templateId
+        // (The sentinel was "none" because
+        // radix-vue SelectItem does not allow
+        // an empty-string `value` prop; the
+        // form-level sentinel lets the Select
+        // bind to a non-empty value while the
+        // wire format stays clean.)
+        ...(values.templateId !== 'none'
           ? { templateId: values.templateId }
           : {}),
       })
@@ -417,16 +427,22 @@ const editForm = useZodForm({
       if (values.paramsText !== undefined) {
         payload.params = params.value
       }
-      // v0.8.13+: TemplateID. The empty string
-      // sentinel means "do not change" (matches
-      // the PATCH-absent-key contract). A non-empty
+      // v0.8.13+: TemplateID. The "none" sentinel
+      // means "do not change" (matches the
+      // PATCH-absent-key contract). A non-"none"
       // string means "set the FK to this template";
-      // the form's UUID selector only allows
-      // valid UUIDs, so we pass the value verbatim.
-      // To clear the FK the operator would have to
-      // select the empty option explicitly (not
-      // currently surfaced in the form UI).
-      if (values.templateId !== undefined && values.templateId !== '') {
+      // the form's UUID selector only allows valid
+      // UUIDs, so we pass the value verbatim. To
+      // clear the FK the operator would have to
+      // select the "none" option explicitly after
+      // an inbound that had a template, which is
+      // not currently surfaced in the form UI.
+      // (The sentinel was "none" because radix-vue
+      // SelectItem does not allow an empty-string
+      // `value` prop; the form-level sentinel lets
+      // the Select bind to a non-empty value while
+      // the wire format stays clean.)
+      if (values.templateId !== undefined && values.templateId !== 'none') {
         payload.templateId = values.templateId
       }
       await updateInbound(current.nodeId, current.id, payload)
@@ -455,7 +471,7 @@ function blankEditValues(): EditFormValues {
     enabled: true,
     tagsText: '',
     paramsText: '',
-    templateId: '',
+    templateId: 'none',
   }
 }
 
@@ -738,7 +754,7 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                     <SelectValue :placeholder="t('inboundTemplates.assignToInboundNone')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">
+                    <SelectItem value="none">
                       {{ t('inboundTemplates.assignToInboundNone') }}
                     </SelectItem>
                     <SelectItem
@@ -926,7 +942,7 @@ const columns: ColumnDef<Inbound, unknown>[] = [
                     <SelectValue :placeholder="t('inboundTemplates.assignToInboundNone')" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">
+                    <SelectItem value="none">
                       {{ t('inboundTemplates.assignToInboundNone') }}
                     </SelectItem>
                     <SelectItem
