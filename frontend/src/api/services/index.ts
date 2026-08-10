@@ -6,6 +6,7 @@
 export * from './auth'
 export * from './nodes'
 export * from './inbounds'
+export * from './inboundtemplates'
 export * from './hosts'
 export * from './plans'
 export * from './subscription'
