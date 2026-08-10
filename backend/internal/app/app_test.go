@@ -113,6 +113,7 @@ func TestBuild_AllMemoryBackends(t *testing.T) {
 		{"Nodes", a.Nodes != nil},
 		{"Hosts", a.Hosts != nil},
 		{"Inbounds", a.Inbounds != nil},
+		{"InboundTemplates", a.InboundTemplates != nil},
 		{"Users", a.Users != nil},
 		{"Plans", a.Plans != nil},
 		{"Subs", a.Subs != nil},
