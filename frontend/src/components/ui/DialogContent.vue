@@ -20,9 +20,19 @@ import { cn } from '@/lib/utils'
 
 const props = defineProps<{ class?: string }>()
 
+// v0.8.14 fix: `max-h-[90vh] overflow-y-auto` on the
+// dialog panel so content-heavy dialogs (e.g. the merged
+// "Add node + Provision" flow) scroll inside the panel
+// instead of clipping below the viewport. The X close
+// button stays anchored in the top-right because it is
+// `absolute` relative to this same panel; the scroll
+// viewport is the panel itself, not the consumer's
+// `<slot />`. `overflow-y-auto` (not `scroll`) only
+// shows the scrollbar when content actually overflows,
+// so small dialogs keep the default borderless look.
 const classes = computed(() =>
   cn(
-    'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
+    'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg max-h-[90vh] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg',
     props.class,
   ),
 )

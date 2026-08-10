@@ -1,0 +1,1 @@
+fix(ui): dialog content overflow on content-heavy dialogs (v0.8.x)
