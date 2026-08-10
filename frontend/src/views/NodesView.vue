@@ -84,6 +84,8 @@ import DropdownMenuContent from "@/components/ui/DropdownMenuContent.vue";
 import DropdownMenuItem from "@/components/ui/DropdownMenuItem.vue";
 import Input from "@/components/ui/Input.vue";
 import Textarea from "@/components/ui/Textarea.vue";
+import RadioGroup from "@/components/ui/RadioGroup.vue";
+import RadioGroupItem from "@/components/ui/RadioGroupItem.vue";
 import Form from "@/components/Form.vue";
 import FormField from "@/components/FormField.vue";
 
@@ -1033,55 +1035,32 @@ const canWrite = computed(() => {
               :hint="t('nodes.authMethodHint')"
             >
               <template #default="{ id, value, onBlur, hasError }">
-                <div
+                <RadioGroup
                   :id="id"
-                  class="nodes__auth-radios"
-                  :class="hasError && 'nodes__auth-radios--error'"
-                  role="radiogroup"
+                  :model-value="(value as string) ?? 'key'"
                   :aria-label="t('nodes.authMethod')"
-                  @blur="onBlur"
+                  :class="hasError && 'rounded-md border border-destructive p-1'"
+                  @update:model-value="
+                    (v: string) => {
+                      createForm.setFieldValue(
+                        'authMethod',
+                        v as 'key' | 'password' | 'stored',
+                      );
+                      createForm.setFieldValue('ssh_private_key', '');
+                      createForm.setFieldValue('ssh_password', '');
+                      onBlur();
+                    }
+                  "
                 >
-                  <label
-                    class="nodes__auth-radio"
-                    :class="{ 'nodes__auth-radio--active': value === 'key' }"
-                  >
-                    <input
-                      type="radio"
-                      name="authMethod"
-                      value="key"
-                      :checked="value === 'key'"
-                      @change="
-                        () => {
-                          createForm.setFieldValue('authMethod', 'key');
-                          createForm.setFieldValue('ssh_private_key', '');
-                          createForm.setFieldValue('ssh_password', '');
-                        }
-                      "
-                    >
+                  <RadioGroupItem value="key">
                     <KeySquare class="h-4 w-4" />
                     <span>{{ t("nodes.authMethodKey") }}</span>
-                  </label>
-                  <label
-                    class="nodes__auth-radio"
-                    :class="{ 'nodes__auth-radio--active': value === 'password' }"
-                  >
-                    <input
-                      type="radio"
-                      name="authMethod"
-                      value="password"
-                      :checked="value === 'password'"
-                      @change="
-                        () => {
-                          createForm.setFieldValue('authMethod', 'password');
-                          createForm.setFieldValue('ssh_private_key', '');
-                          createForm.setFieldValue('ssh_password', '');
-                        }
-                      "
-                    >
+                  </RadioGroupItem>
+                  <RadioGroupItem value="password">
                     <Lock class="h-4 w-4" />
                     <span>{{ t("nodes.authMethodPassword") }}</span>
-                  </label>
-                </div>
+                  </RadioGroupItem>
+                </RadioGroup>
               </template>
             </FormField>
             <FormField
@@ -1388,85 +1367,44 @@ const canWrite = computed(() => {
             :hint="t('nodes.authMethodHint')"
           >
             <template #default="{ id, value, onBlur, hasError }">
-              <div
+              <RadioGroup
                 :id="id"
-                class="nodes__auth-radios"
-                :class="hasError && 'nodes__auth-radios--error'"
-                role="radiogroup"
+                :model-value="(value as string) ?? 'key'"
                 :aria-label="t('nodes.authMethod')"
-                @blur="onBlur"
+                :class="hasError && 'rounded-md border border-destructive p-1'"
+                @update:model-value="
+                  (v: string) => {
+                    provisionForm.setFieldValue(
+                      'authMethod',
+                      v as 'key' | 'password' | 'stored',
+                    );
+                    provisionForm.setFieldValue('ssh_private_key', '');
+                    provisionForm.setFieldValue('ssh_password', '');
+                    onBlur();
+                  }
+                "
               >
-                <label
-                  class="nodes__auth-radio"
-                  :class="{ 'nodes__auth-radio--active': value === 'key' }"
-                >
-                  <input
-                    type="radio"
-                    name="authMethod"
-                    value="key"
-                    :checked="value === 'key'"
-                    @change="
-                      () => {
-                        provisionForm.setFieldValue('authMethod', 'key');
-                        provisionForm.setFieldValue('ssh_private_key', '');
-                        provisionForm.setFieldValue('ssh_password', '');
-                      }
-                    "
-                  >
+                <RadioGroupItem value="key">
                   <KeySquare class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodKey") }}</span>
-                </label>
-                <label
-                  class="nodes__auth-radio"
-                  :class="{ 'nodes__auth-radio--active': value === 'password' }"
-                >
-                  <input
-                    type="radio"
-                    name="authMethod"
-                    value="password"
-                    :checked="value === 'password'"
-                    @change="
-                      () => {
-                        provisionForm.setFieldValue('authMethod', 'password');
-                        provisionForm.setFieldValue('ssh_private_key', '');
-                        provisionForm.setFieldValue('ssh_password', '');
-                      }
-                    "
-                  >
+                </RadioGroupItem>
+                <RadioGroupItem value="password">
                   <Lock class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodPassword") }}</span>
-                </label>
-                <label
-                  class="nodes__auth-radio"
-                  :class="{
-                    'nodes__auth-radio--active': value === 'stored',
-                    'nodes__auth-radio--disabled':
-                      provisioning?.state !== 'offline',
-                  }"
+                </RadioGroupItem>
+                <RadioGroupItem
+                  value="stored"
+                  :disabled="provisioning?.state !== 'offline'"
                   :title="
                     provisioning?.state !== 'offline'
                       ? t('nodes.authMethodStoredDisabledTitle')
                       : ''
                   "
                 >
-                  <input
-                    type="radio"
-                    name="authMethod"
-                    value="stored"
-                    :checked="value === 'stored'"
-                    :disabled="provisioning?.state !== 'offline'"
-                    @change="
-                      () => {
-                        provisionForm.setFieldValue('authMethod', 'stored');
-                        provisionForm.setFieldValue('ssh_private_key', '');
-                        provisionForm.setFieldValue('ssh_password', '');
-                      }
-                    "
-                  >
                   <KeyRound class="h-4 w-4" />
                   <span>{{ t("nodes.authMethodStored") }}</span>
-                </label>
-              </div>
+                </RadioGroupItem>
+              </RadioGroup>
             </template>
           </FormField>
           <FormField
@@ -2045,54 +1983,6 @@ const canWrite = computed(() => {
   outline: none;
   box-shadow: 0 0 0 2px hsl(var(--ring));
   border-color: hsl(var(--ring));
-}
-
-.nodes__auth-radios {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  border: 1px solid hsl(var(--input));
-  border-radius: 0.375rem;
-  padding: 0.5rem;
-}
-
-.nodes__auth-radios--error {
-  border-color: hsl(var(--destructive));
-}
-
-.nodes__auth-radio {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid transparent;
-  border-radius: 0.375rem;
-  cursor: pointer;
-  font-size: 0.875rem;
-  user-select: none;
-}
-
-.nodes__auth-radio:hover:not(.nodes__auth-radio--disabled) {
-  background: hsl(var(--muted));
-}
-
-.nodes__auth-radio--active {
-  background: hsl(var(--muted));
-  border-color: hsl(var(--ring));
-}
-
-.nodes__auth-radio--disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.nodes__auth-radio input[type="radio"] {
-  margin: 0;
-  cursor: inherit;
-}
-
-.nodes__auth-radio--disabled input[type="radio"] {
-  cursor: not-allowed;
 }
 
 /* v0.8.4: rotate-panel-key success card. The
