@@ -352,6 +352,41 @@ func (s *PgStore) RevokeChain(ctx context.Context, userID string) error {
 	return nil
 }
 
+// RevokeOne idempotently marks a single refresh token as
+// used, swallowing the no-row case. The logout flow
+// requires this: a user clicking "sign out" must succeed
+// regardless of whether their cookie matches a live
+// server-side row (different device, already-consumed,
+// unknown). The implementation is a single UPDATE that
+// never errors on `0 rows affected` — pgx returns
+// `pgconn.CommandTag` with RowsAffected() == 0 for both
+// "matched but the WHERE excluded the row" and "no such
+// row", and we deliberately do not distinguish.
+func (s *PgStore) RevokeOne(ctx context.Context, tokenHash string) error {
+	hashBytes, err := hexDecode(tokenHash)
+	if err != nil {
+		// Malformed hash from a cookie the browser
+		// never sent, or a deliberate attack: the
+		// idempotency promise covers "no such row"
+		// but not "garbage that would crash the
+		// SQL driver". Return the decode error
+		// so the caller (handleLogout) can log it
+		// and still proceed to clear the cookie —
+		// the cookie is the authoritative cleanup
+		// signal.
+		return fmt.Errorf("decode token hash: %w", err)
+	}
+	const q = `
+		UPDATE admin_refresh_tokens
+		SET used_at = NOW()
+		WHERE token_hash = $1
+		  AND used_at IS NULL`
+	if _, err := s.pool.Exec(ctx, q, hashBytes); err != nil {
+		return fmt.Errorf("revoke one: %w", err)
+	}
+	return nil
+}
+
 // FindRefreshUser returns the userID bound to a refresh token
 // hash WITHOUT marking it consumed. Returns ErrInvalidToken
 // if the hash is unknown.

@@ -98,6 +98,9 @@ func bearerToken(r *http.Request) string {
 //
 //	POST /auth/login              public
 //	POST /auth/refresh            public
+//	POST /auth/logout             public (clears the cookie; the
+//	                                 refresh itself is read from the
+//	                                 cookie, not the bearer header)
 //	GET  /auth/me                 Bearer-protected
 //	POST /auth/me/password        Bearer-protected
 func (s *Service) Mount() http.Handler {
@@ -105,6 +108,15 @@ func (s *Service) Mount() http.Handler {
 
 	r.Post("/login", s.handleLogin())
 	r.Post("/refresh", s.handleRefresh())
+	// Logout is intentionally public: a user with an
+	// expired access token must still be able to clear
+	// their refresh cookie. The refresh itself is read
+	// from the HttpOnly cookie (the authoritative
+	// channel) — the handler does not require a bearer
+	// access token. A missing / unknown cookie still
+	// returns 204 so a bot probing /logout cannot
+	// distinguish "never logged in" from "logged out".
+	r.Post("/logout", s.handleLogout())
 
 	// Protected sub-group.
 	r.Group(func(r chi.Router) {

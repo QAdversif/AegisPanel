@@ -20,6 +20,14 @@ type Service struct {
 	signer *Signer
 	store  Store
 	now    func() time.Time
+	// cookieSecure controls the `Secure` attribute on the
+	// refresh-token cookie. Production deployments over
+	// HTTPS set this to true (the cookie is rejected by
+	// the browser on the http:// dev URL); dev / staging
+	// set it to false so the cookie survives over plain
+	// http://localhost. The flag is plumbed by main.go
+	// from cfg.Env == "production"; see SetCookieSecure.
+	cookieSecure bool
 }
 
 // NewService wires a Service from a Signer and a Store. The store
@@ -31,6 +39,22 @@ func NewService(signer *Signer, store Store) *Service {
 		now:    time.Now,
 	}
 }
+
+// SetCookieSecure toggles the `Secure` attribute on the
+// refresh-token cookie. Called by main.go during boot:
+//
+//	if cfg.Env == "production" {
+//	    authSvc.SetCookieSecure(true)
+//	}
+//
+// The dev default (false) is intentional — http://localhost
+// is the standard local-dev path, and a Secure cookie is
+// silently dropped by the browser. The httptest.NewServer
+// default in CI is also plain HTTP for the same reason;
+// cookie behaviour under TLS is covered by a dedicated
+// integration test that toggles this flag and asserts
+// the `Secure` attribute is present.
+func (s *Service) SetCookieSecure(v bool) { s.cookieSecure = v }
 
 // SetClock replaces the time source. Test-only.
 func (s *Service) SetClock(now func() time.Time) { s.now = now }
@@ -109,6 +133,21 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*LoginResul
 // Used by the /me endpoint.
 func (s *Service) Me(ctx context.Context, claims *Claims) (*User, error) {
 	return s.lookupByID(ctx, claims.Subject)
+}
+
+// RevokeOne is the logout-time hook. It is best-effort:
+// a missing / already-consumed / unknown token returns
+// nil so the caller (handleLogout) can always clear the
+// cookie. A real rotation+chain-revocation path runs at
+// the next refresh attempt — if the cookie was stale the
+// refresh call sees a dead token and falls through to the
+// `clear cookie + 401` branch, which is the right outcome.
+func (s *Service) RevokeOne(ctx context.Context, refreshToken string) error {
+	if refreshToken == "" {
+		return nil
+	}
+	hash := HashRefreshToken(refreshToken)
+	return s.store.RevokeOne(ctx, hash)
 }
 
 // issuePair mints a new (access, refresh) pair for the given user.
