@@ -41,6 +41,31 @@ installs).
 
 - **Migration notes for operators**: no backend changes, no schema migration, no new env vars. The two existing API endpoints (`POST /api/v1/nodes` and `POST /api/v1/nodes/{id}/provision`) are unchanged; the merged dialog is a UX-layer composition. Operators who preferred the two-step flow can uncheck the "Provision after registering" checkbox to keep the v0.8.11 behaviour.
 
+### Added (shadcn-vue RadioGroup primitive + migrate NodesView auth-method radios)
+
+Closes the v0.8.x-bucket UX follow-up "shadcn-vue
+`RadioGroup` primitive". The two hand-rolled radio
+groups in `NodesView.vue` (the three-way auth-method
+picker in the per-row provision dialog, plus the
+two-way picker in the merged "Add node + Provision"
+dialog) are now rendered through new shadcn-vue
+primitives. The previously hand-rolled
+`.nodes__auth-radios*` CSS block (~46 lines) is
+deleted; visual parity preserved via the standard
+`bg-muted` + `border-ring` data-attribute pattern.
+
+- **`frontend/src/components/ui/RadioGroup.vue`** — thin wrapper over `radix-vue`'s `RadioGroupRoot`. Forwards `modelValue` (the active item's value), `defaultValue`, `disabled`, `required`, `orientation`, `dir`, `loop`, `name`. Emits `update:modelValue` with the new value. Default slot is the items. `class` prop is `string | boolean | undefined` so the `hasError && '...'` idiom from `FormField` slots typechecks.
+
+- **`frontend/src/components/ui/RadioGroupItem.vue`** — thin wrapper over `radix-vue`'s `RadioGroupItem` + `RadioGroupIndicator`. Renders a `<button role="radio">` with a 16x16 circular border + a 10x10 inner dot (mounted via `RadioGroupIndicator` so it only shows when checked). Forwards `value`, `disabled`, `required`, `class`. Default slot is the visible label (text + optional icon). Standard shadcn-vue `cn()` class composition; the active-item highlight + disabled-state visuals are data-attribute selectors (`data-[state=checked]:border-ring data-[state=checked]:bg-muted`, `data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50`).
+
+- **`frontend/src/views/NodesView.vue`** — the two `<input type="radio">` groups (in the create dialog's auth-method field and the per-row provision dialog's auth-method field) are replaced with `<RadioGroup>` + `<RadioGroupItem>`. The reset-other-field side effect (clearing `ssh_private_key` + `ssh_password` when the auth method changes) moves from each input's `@change` handler to the RadioGroup's `@update:modelValue` handler. The `disabled` state on the "Stored panel key" option (only enabled when `provisioning?.state === 'offline'`) is now a native `data-[disabled]` styling hook instead of a hand-rolled class. Net: -110 lines (154 deletions, 44 insertions across the template; 46 lines of dead `.nodes__auth-radios*` CSS removed).
+
+- **UX impact**: the radios now support **arrow-key + Space keyboard navigation** within the group (radix-vue default — the hand-rolled radios had Tab-only navigation). ARIA group semantics are correct by construction: `role="radiogroup"`, `role="radio"`, `aria-checked`, `aria-disabled` are all wired by `radix-vue`. No visual diff for the operator; active-item highlight + disabled-state visuals are preserved 1-в-1.
+
+- **Migration notes for operators**: no backend changes, no schema migration, no new env vars. The new components are pure UI primitives; the wire format (`POST /api/v1/nodes` + `POST /api/v1/nodes/{id}/provision`) is unchanged. The auth-method reset side effect (clearing the other auth field when switching methods) is preserved.
+
+- **Docs**: `KNOWN_LIMITATIONS.md` "shadcn-vue RadioGroup primitive — v0.8.x" entry closed (with the migration note for operators). `docs/ROADMAP.md` v0.8.x row updated to mark the primitive shipped. `README.md` v0.8.x row updated. `docs/README.md` status table row updated. `CHANGELOG.md` (this entry).
+
 ## [0.8.11] - 2026-08-10
 
 This is a **consolidation release** that closes the
