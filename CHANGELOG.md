@@ -7,6 +7,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-08-10
+
+This is a **consolidation + security tightening release**
+that closes the v0.8.13 backwards-compat shim for the
+HttpOnly refresh-cookie storage. The v0.8.13 release
+shipped the cookie in PR #214 + PR #215 + PR #216, but
+kept the refresh token in the JSON body of
+`/auth/login` and `/auth/refresh` for one release so
+a pre-v0.8.13 client could still log in during the
+upgrade window. v0.8.14 closes that window: from
+this release forward, the refresh token is **only**
+in the `Set-Cookie: aegis_rt=...` header. The body
+field is gone, the body-fallback parse on
+`/auth/refresh` is gone, and the openapi spec
+documents the cookie as the only authoritative
+channel.
+
+The v0.8.13 → v0.8.14 upgrade is wire-format-clean
+for a v0.8.13 frontend (the body field is removed
+but the frontend never read it — PR #215 reads
+the cookie via `withCredentials: true`). The
+v0.8.14 frontend + v0.8.13 panel is the broken
+combination (panel does not set the cookie); the
+rolling-upgrade pattern is the standard "server
+before client" sequence.
+
+This release also adds the previously-undocumented
+`POST /api/v1/auth/logout` endpoint to the openapi
+spec. The endpoint was shipped in PR #214 (it was
+required for the cookie-based logout flow) but the
+openapi documentation lagged.
+
+### Changed (auth — refresh token is cookie-only)
+
+Closes the v0.8.13 backwards-compat shim. The
+refresh token is now exclusively in the
+`Set-Cookie: aegis_rt=...; HttpOnly; SameSite=Strict;
+Path=/; Max-Age=2592000; Secure` header set by
+`/auth/login` and `/auth/refresh`. The body field
+that v0.8.13 emitted for one release is dropped.
+
+- **`backend/internal/auth/handler.go`** — drop the
+  `RefreshToken` field from the `loginResponse`
+  struct (login + refresh). Drop the `refreshRequest`
+  struct (only used in the body-fallback parse).
+  Simplify `readRefreshToken` to cookie-only (no
+  body parse, no `json.NewDecoder(r.Body).Decode`
+  call). The 400-on-missing-cookie message is now
+  `refresh token cookie is required` (was `cookie
+  or body`). The `handleLogin` / `handleRefresh` /
+  `handleLogout` docstrings are updated to reflect
+  the v0.8.14 state. The `handleLogin` /
+  `handleRefresh` response bodies carry only
+  `access_token`, `token_type`, `expires_at`,
+  and `scopes`.
+- **`backend/internal/auth/cookie_test.go`** —
+  `doLogin` reads the refresh from the cookie (the
+  body field is gone, so the prior `resp.RefreshToken`
+  read was a nil-deref waiting to happen). The
+  body-fallback test is inverted to
+  `TestHandleRefresh_BodyIsNotRead`: a body-only
+  request gets 400, the response MUST NOT set a
+  `aegis_rt` cookie (a body-derived cookie would
+  be the regression). The
+  `TestHandleRefresh_RefreshFailure_ClearsCookie`
+  test now uses a bogus cookie (no body) — the
+  server clears it on 401. Drop the now-unused
+  `encoding/json` import.
+- **`docs/openapi.yaml`** — remove the `RefreshRequest`
+  schema (no body shape any more), remove the
+  `refresh_token` property from the `LoginResponse`
+  schema + drop it from the `required` list, add
+  `Set-Cookie` response headers to `/auth/login`
+  200 and `/auth/refresh` 200, document the
+  `POST /auth/logout` endpoint that PR #214
+  shipped but did not document.
+- **`frontend/src/api/services/auth.ts`** — drop
+  the `refreshToken` field from the `LoginResponse`
+  TS interface. Update the `logout()` comment to
+  reflect the v0.8.14 state (body-fallback closed).
+- **`frontend/src/stores/auth.ts`** — update the
+  `login()` comment that explained the v0.8.13
+  shim to "closed in v0.8.14".
+- **`frontend/src/api/client.ts`** — update the
+  response-interceptor comment about
+  `refresh_token` (gone from the camelized
+  response shape in v0.8.14).
+- **`frontend/src/types/api.d.ts`** — regenerated
+  by `npm run codegen`. The `/auth/logout`
+  operation is now in the `operations` map;
+  `LoginResponse` no longer has `refresh_token`;
+  `RefreshRequest` is removed.
+
+- **Migration notes for operators**: v0.8.14 is a
+  **drop-in replacement for v0.8.13** on the
+  server side. The rolling-upgrade pattern is
+  the standard "server before client":
+  1. Upgrade the panel image to v0.8.14 first.
+     A v0.8.13 frontend continues to work
+     unchanged (it doesn't read the body field,
+     and it sends no body to `/auth/refresh`).
+  2. Upgrade the UI image to v0.8.14+ to drop
+     the `refreshToken` type from the generated
+     `LoginResponse`. A v0.8.14 frontend + a
+     v0.8.13 panel is the broken combination
+     (the panel would not set the cookie, and
+     the frontend's 401-refresh-retry path would
+     see no cookie).
+  After the rolling upgrade, the wire format
+  is unambiguous: `POST /auth/login` and
+  `POST /auth/refresh` responses carry only the
+  access token in the body, the refresh token
+  is in the `Set-Cookie: aegis_rt=...` header.
+
 ## [0.8.13] - 2026-08-10
 
 This is a **feature release** that closes the
