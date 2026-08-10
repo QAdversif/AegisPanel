@@ -117,8 +117,7 @@ CREATE INDEX inbound_templates_protocol_idx ON inbound_templates (protocol);
 -- renderer picks `template.params` over
 -- `inbound.params` when the FK is set; existing
 -- inbounds are unaffected.
-ALTER TABLE inbounds
-    ADD COLUMN template_id UUID REFERENCES inbound_templates(id) ON DELETE SET NULL;
+ALTER TABLE inbounds ADD COLUMN template_id UUID REFERENCES inbound_templates(id) ON DELETE SET NULL;
 
 CREATE INDEX inbounds_template_id_idx ON inbounds (template_id);
 
