@@ -7,13 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added (inbound-templates — data-model + service + handler foundation)
+## [0.8.13] - 2026-08-10
+
+This is a **feature release** that closes the
+v0.8.x-bucket "inbound-templates work" row. 5 PRs
+shipped: **PR #205** (data-model + service +
+handler foundation), **PR #209** (docs sync),
+**PR #210** (sing-box renderer integration),
+**PR #211** (inbounds service validation),
+**PR #212** (frontend UI). Adds a per-tenant
+`Params` defaults layer: an operator can define a
+named, reusable protocol configuration once and
+assign it to any number of `inbounds` rows on any
+node. The sing-box renderer reads `template.params`
+instead of the inbound's inline `params` when
+`inbound.template_id` is set, so the operator does
+not paste the same JSON into every inbound.
+
+This is the first release where a single feature
+landed in 5 separate PRs in a planned sequence
+(foundation → docs sync → renderer → validation →
+frontend), each PR independently reviewable,
+mergeable, and revertable. The data-model + UI
+are both backwards-compatible: every existing
+inbound has `template_id = NULL` and continues to
+use its inline `params` (the v0.8.0-v0.8.12 path
+is the default; the template path is opt-in per
+inbound).
+
+### Added (inbound-templates — data-model + service + handler + renderer + validation + UI)
 
 Closes the v0.8.x-bucket "inbound-templates
-work" entry's data-model + service + handler
-side. The follow-up PRs will land the
-renderer integration, the inbounds service
-validation, and the frontend UI.
+work" entry end-to-end. The 5-PR sequence:
+
+- **PR #205 (foundation)** — migration 0021
+  plus `internal/inboundtemplates/` package
+  plus inbounds `TemplateID` field plus wiring
+  (data-model plus service plus handler). Storage
+  backend is shared with Inbounds (no new
+  `AEGIS_*_BACKEND` env var). 8 unit tests + 4
+  pg integration tests in the new package.
+- **PR #210 (renderer)** — sing-box
+  `BuildCoreConfigForNode` reads
+  `template.params` when `inbound.template_id`
+  is set. New `LookupTemplatesByID` interface
+  in `internal/cores/builder/builder.go`; new
+  `GetManyByID` on `inboundtemplates.Store` (a
+  single `WHERE id = ANY($1)` batch query).
+  One DB round-trip per flush (per-flush, not
+  per-inbound — matches the v0.8.10 per-user
+  credential filter pattern). Per-inbound
+  fallback to inline `params` on a stale
+  `TemplateID` (template deleted between
+  flushes) or a lookup error. 6 new builder
+  tests.
+- **PR #211 (validation)** — inbounds service
+  rejects an inbound whose `TemplateID` points
+  at a template of a different `protocol`.
+  New `WithTemplates` setter on `inbounds.Service`
+  (nil-safe — the v0.8.0-v0.8.12 contract is
+  preserved when no templates service is wired,
+  e.g. in unit tests that don't care about
+  templates). New `validateTemplateID` helper
+  returns `ValidationError` with `field=templateId`
+  on missing template, on `&uuid.Nil{}`, or on
+  protocol mismatch. 10 new service tests
+  (5 Create + 4 Update + 1 multi-field Update).
+- **PR #212 (frontend)** — new
+  `InboundTemplatesView` page (list + create +
+  edit + delete, mirroring `PlansView.vue`
+  shape) + "Template" dropdown in
+  `InboundsView`'s create + edit forms. The
+  dropdown is protocol-filtered (the UI
+  pre-filter for the PR #211 contract — a
+  mismatched protocol cannot be picked in the
+  first place, but the backend validation
+  remains the authoritative 400-path). i18n
+  (en + ru): `nav.inboundTemplates` + 22-key
+  `inboundTemplates` section. New
+  `inboundtemplates.ts` API service + zod
+  schema + openapi.yaml + regenerated
+  `api.d.ts`. 14 files, +1794/-3.
+- **PR #209 (docs sync)** — CHANGELOG
+  `[Unreleased]`, `KNOWN_LIMITATIONS.md`
+  (Inbound-templates entry moves from "open"
+  to "partially shipped in v0.8.13+ (PR #205
+  foundation)"), `README.md` (root) v0.8.12 +
+  v0.8.x inbound-templates note, `ROADMAP.md`
+  v0.8.x row, `docs/README.md` status table,
+  `docs/operator-guide.md` `:0.8.9` → `:0.8.12`,
+  `quickstart.md`, `SECURITY.md` supported
+  versions. The follow-up PR #212's docs are
+  closed in this release's entry (the
+  `KNOWN_LIMITATIONS.md` Inbound-templates
+  entry will be re-closed in the v0.8.13
+  follow-up docs-sync PR if any are needed;
+  v0.8.13 ships with the inbound-templates
+  feature still marked "partially shipped" in
+  KNOWN_LIMITATIONS pending the v0.8.13-followup
+  docs-sync PR).
 
 - **Migration `0021_inbound_templates.sql`** —
   new `inbound_templates` table (`id`, `name`,
@@ -34,25 +126,30 @@ validation, and the frontend UI.
   mirrors the `inbounds` package's shape. Public
   surface: `Service` (CRUD + audit + webhooks;
   `ScopeNodes`-guarded HTTP handler), `Store`
-  interface (MemoryStore + PgStore), `InboundTemplate`
-  model with `Params map[string]any` plus
-  `Protocol` closed set matching the migration's
-  CHECK. The handler is mounted at
-  `/api/v1/inbound-templates` with 5 paths
-  (GET /, POST /, GET /{id}, PUT /{id},
+  interface (MemoryStore + PgStore),
+  `InboundTemplate` model with
+  `Params map[string]any` plus `Protocol` closed
+  set matching the migration's CHECK. The handler
+  is mounted at `/api/v1/inbound-templates` with
+  5 paths (GET /, POST /, GET /{id}, PUT /{id},
   DELETE /{id}). 8 unit tests + 4 pg integration
-  tests.
+  tests. The new `GetManyByID` method (PR #210)
+  is a single `WHERE id = ANY($1)` batch query;
+  the renderer is the primary consumer.
 
 - **Inbounds model update** — the `Inbound`
   model + `CreateInput` + `UpdateInput` + the
   JSON request shapes gain `TemplateID
-  *uuid.UUID`. Stored verbatim, no protocol-match
-  validation yet (that's the follow-up PR; the
-  renderer's `template_id → params` lookup is
-  also a follow-up). The inline `inbound.params`
-  is kept for backwards compat — existing
-  inbounds without a `template_id` continue
-  using the v0.8.0-v0.8.12 path.
+  *uuid.UUID`. PR #211 closes the protocol-match
+  contract: the validation fires at Create (when
+  `in.TemplateID != nil`) and at Update (when
+  `*in.TemplateID != uuid.Nil`, BEFORE the
+  assignment to `existing.TemplateID`). The
+  inline `inbound.params` is kept for backwards
+  compat — existing inbounds without a
+  `template_id` continue using the v0.8.0-v0.8.12
+  path; the renderer's nil-`templateSrc` branch
+  also keeps the v0.8.0-v0.8.12 default.
 
 - **Webhooks** — 3 new event types
   `inbound_template.{created, updated, deleted}`
@@ -63,10 +160,50 @@ validation, and the frontend UI.
   `internal/router/router.go` + tests wire the
   new service into the App + the
   `/api/v1/inbound-templates` mount + the
-  `ScopeNodes` guard. Storage backend is shared
-  with Inbounds (no new env var; the templates
+  `ScopeNodes` guard. The v0.8.13+ wiring
+  additionally calls `a.Inbounds.WithTemplates(
+  a.InboundTemplates)` after both services are
+  constructed (the PR #211 nil-safe setter
+  pattern). Storage backend is shared with
+  Inbounds (no new env var; the templates
   feature flips on/off with the operator's
   existing `AEGIS_INBOUNDS_BACKEND`).
+
+- **Frontend `InboundTemplatesView` page** —
+  new lazy-loaded `/inbound-templates` route
+  mounted under the existing `AppLayout` (the
+  `LayoutTemplate` icon from `lucide-vue-next`,
+  nav entry between "Inbounds" and "Hosts").
+  The view is a DataTable with name (link) +
+  protocol (Badge) + description (truncated
+  hint) + updatedAt + actions menu. Three
+  dialogs: Create (name + protocol Select +
+  description Textarea + params Textarea with
+  JSON validation on submit), Edit (same shape,
+  pre-filled from the row; partial PATCH
+  semantics — only fields that changed are
+  sent; an empty patch surfaces a "no changes
+  to save" toast), Delete (confirm dialog with
+  the affected-inbounds fallback message).
+  Search box filters on name + protocol +
+  description.
+
+- **Frontend Template dropdown in InboundsView**
+  — both Create and Edit dialogs gain a
+  "Template" Select between `protocol` and
+  `listen`. The Select options are filtered to
+  the currently-selected protocol via
+  `templatesForProtocol(protocol)` (the UI
+  pre-filter for the PR #211 protocol-match
+  contract; a mismatched protocol that slips
+  through — e.g. the operator changes `protocol`
+  after picking a template — is still rejected
+  by the backend, just with a worse error
+  message). The empty option is "No template
+  (use inline params)" — the v0.8.0-v0.8.12
+  default. PATCH follows the absent-key
+  contract: the dropdown's value is sent only
+  when non-empty (omit = no change).
 
 - **Migration notes for operators** — no
   operator action required at the migration
@@ -82,23 +219,24 @@ validation, and the frontend UI.
   refuse to apply this migration in production
   mode with `AEGIS_INBOUNDS_BACKEND=memory` —
   the same protection that guards every
-  v0.8.x migration.
+  v0.8.x migration. After upgrading the panel
+  image, the templates feature is live
+  immediately (the migration is idempotent; the
+  FK is `ON DELETE SET NULL` so deleting a
+  template drops the FK to NULL on referencing
+  inbounds, which fall back to inline `params`).
 
-- **Out of scope (deferred to follow-up PRs)**:
-  the sing-box renderer's
-  `BuildCoreConfigForNode` reading
-  `template.params` when `inbound.template_id`
-  is set (the actual feature — until that lands,
-  the new `template_id` column is stored but
-  the rendered config still uses the inline
-  `inbound.params`); the inbounds service
-  validation that the template's protocol must
-  match the inbound's (FK does not enforce this;
-  the renderer's look-up does); the frontend
-  UI (new `InboundTemplatesView` page + a
-  "Template" dropdown in `InboundsView`'s
-  create/edit form); the openapi.yaml + codegen
-  refresh.
+- **Per-protocol schema enforcement** — sing-box
+  remains the authoritative per-protocol schema
+  validator. The panel stores `params` as
+  opaque JSONB; the templates feature does not
+  duplicate the renderer's per-protocol field
+  validation. A future v0.8.x+ PR may add a
+  per-protocol JSON Schema for the panel's
+  params editor (mirroring sing-box's
+  `protocol configuration` block schema); v0.8.13
+  ships with the generic JSON textarea the
+  v0.2.0 era added.
 
 ## [0.8.12] - 2026-08-10
 
