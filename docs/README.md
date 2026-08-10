@@ -35,8 +35,8 @@ title: Aegis documentation
 | Component | Status |
 | --- | --- |
 | Architecture (this doc tree) | ✅ Finalised (v9.5) |
-| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.9 |
-| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups, credentials) | ✅ v0.8.9 |
+| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.12 |
+| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups, credentials) | ✅ v0.8.12 |
 | Local dev environment (docker compose) | ✅ v0.5.0 |
 | Core (sing-box provider, GitHub-API SHA-256 install) | ✅ v0.5.0 |
 | sops+age secrets (`configure_secrets` Ansible role + decrypt-on-operator pattern) | ✅ v0.5.0 (canonical manual path refined in v0.8.x) |
@@ -68,7 +68,7 @@ title: Aegis documentation
 | BatchedApplier 401→auto-refresh integration | ✅ v0.8.8 |
 | Host → node mapping in Builder filter | ✅ v0.8.x (PR #192) |
 | Subscription URL display in UsersView (admin copy-link UX) | ✅ v0.8.x (PR #193) |
-| Inbound-templates work (per-tenant `Params` defaults) | ⏳ v0.8.x+ |
+| Inbound-templates work (per-tenant `Params` defaults) | 🔧 partial (PR #205 foundation: data model + service + handler; renderer integration + inbounds validation + frontend UI pending) |
 | Merged "Add node + Provision" dialog | ✅ shipped (v0.8.12+) |
 | shadcn-vue `RadioGroup` primitive | ✅ shipped (PR #202) |
 | Pre-existing eslint warnings cleanup (chore PR) | ⏳ v0.8.x+ |
