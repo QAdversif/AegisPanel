@@ -13,6 +13,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/cores"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
 )
@@ -46,6 +47,16 @@ type Service struct {
 	now      func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 	audits   *audits.Service   // v0.7.x deferred call-site.
+	// v0.8.13+: inbound_templates validator. nil
+	// = backwards-compat with v0.8.0-v0.8.12, where
+	// no template_id was ever stored on an inbound;
+	// the validation is a no-op. Production wiring
+	// (cmd/aegis + internal/app) always calls
+	// WithTemplates(a.InboundTemplates) after both
+	// services are constructed, so the nil branch
+	// is dead in production but kept for tests that
+	// don't care about the template path.
+	templates *inboundtemplates.Service
 	// batchedAppliers is the v0.5.0 outbound
 	// render+apply fan-out. nil = feature disabled.
 	// See AEGIS_BATCHED_APPLIER_ENABLED.
@@ -83,6 +94,28 @@ func (s *Service) WithBatchApplier(aps map[uuid.UUID]*cores.BatchedApplier) *Ser
 // nil-safe pattern as WithWebhooks.
 func (s *Service) WithAudits(svc *audits.Service) *Service {
 	s.audits = svc
+	return s
+}
+
+// WithTemplates installs the inbound_templates
+// validator used to enforce the v0.8.13+ rules:
+//
+//   - every inbound with a non-nil TemplateID
+//     must reference an existing template;
+//   - the template's protocol must match the
+//     inbound's protocol (sing-box renders one
+//     protocol family per inbound; cross-protocol
+//     templates are a config error, not a runtime
+//     fallback).
+//
+// Same nil-safe pattern as WithWebhooks / WithAudits.
+// nil = the validation is a no-op (the v0.8.0-v0.8.12
+// contract, where no inbound ever had a template_id).
+// Production wiring in internal/app always calls
+// WithTemplates; the nil branch is for unit tests
+// that don't care about the template path.
+func (s *Service) WithTemplates(svc *inboundtemplates.Service) *Service {
+	s.templates = svc
 	return s
 }
 
@@ -212,6 +245,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 	}
 	if err := validateTags(in.Tags); err != nil {
 		return nil, err
+	}
+	// v0.8.13+: when a TemplateID is supplied,
+	// the referenced template must exist and its
+	// protocol must match the inbound's protocol.
+	// nil TemplateID = the v0.8.0-v0.8.12 default
+	// (no template; inline Params). The check is
+	// skipped entirely when s.templates is nil
+	// (see WithTemplates for the rationale).
+	if in.TemplateID != nil {
+		if err := s.validateTemplateID(ctx, *in.TemplateID, in.Protocol); err != nil {
+			return nil, err
+		}
 	}
 	enabled := true
 	if in.Enabled != nil {
@@ -358,6 +403,20 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 		if *in.TemplateID == uuid.Nil {
 			existing.TemplateID = nil
 		} else {
+			// v0.8.13+: validate before the
+			// assignment so a failed check
+			// leaves existing.TemplateID
+			// untouched. The protocol to
+			// compare against is the
+			// effective protocol: the
+			// patch's in.Protocol (if
+			// non-nil) was applied earlier
+			// in this method, otherwise it
+			// is the inbound's existing
+			// protocol.
+			if err := s.validateTemplateID(ctx, *in.TemplateID, existing.Protocol); err != nil {
+				return nil, err
+			}
 			id := *in.TemplateID
 			existing.TemplateID = &id
 		}
@@ -468,4 +527,60 @@ func cloneParams(in map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// validateTemplateID enforces the v0.8.13+ rules
+// on the inbound's TemplateID:
+//
+//   - the templates service must be wired
+//     (production always does via WithTemplates;
+//     a nil service is the v0.8.0-v0.8.12 contract
+//     and skips the check, matching the renderer
+//     PR's "nil templateSrc keeps the v0.8.0-v0.8.12
+//     default" decision);
+//   - the template must exist;
+//   - the template's protocol must match the
+//     inbound's protocol. Cross-protocol templates
+//     are a config error: sing-box renders one
+//     protocol family per inbound, and the
+//     sing-box provider would reject the
+//     mismatched blob downstream. Better to
+//     fail-fast at the CRUD boundary.
+//
+// Returns a *ValidationError on failure so the
+// HTTP layer can map field=templateId into a
+// 400-class response. Any other error (e.g. a pg
+// blip in the templates store) is wrapped with
+// %w so the handler can distinguish "bad input"
+// from "infrastructure".
+func (s *Service) validateTemplateID(ctx context.Context, templateID uuid.UUID, inboundProto Protocol) error {
+	if s.templates == nil {
+		// v0.8.0-v0.8.12 contract: no template_id
+		// validation when the templates service
+		// is not wired. See Service.WithTemplates.
+		return nil
+	}
+	if templateID == uuid.Nil {
+		return &ValidationError{Field: "templateId", Message: "must be a non-zero UUID"}
+	}
+	tpl, err := s.templates.Get(ctx, templateID)
+	if err != nil {
+		if errors.Is(err, inboundtemplates.ErrNotFound) {
+			return &ValidationError{
+				Field:   "templateId",
+				Message: "template not found: " + templateID.String(),
+			}
+		}
+		return fmt.Errorf("lookup template %s: %w", templateID, err)
+	}
+	if string(tpl.Protocol) != string(inboundProto) {
+		return &ValidationError{
+			Field: "templateId",
+			Message: fmt.Sprintf(
+				"template protocol %q does not match inbound protocol %q",
+				tpl.Protocol, inboundProto,
+			),
+		}
+	}
+	return nil
 }

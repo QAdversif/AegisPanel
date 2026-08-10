@@ -271,6 +271,18 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.InboundTemplates = inboundtemplates.NewService(inboundTemplatesStore)
 
+	// v0.8.13+: the inbounds service validates
+	// every inbound.TemplateID against the
+	// templates service (template must exist;
+	// protocol must match). Wire the templates
+	// service into inbounds after both are
+	// constructed. The setter is nil-safe: a
+	// nil templates service is the v0.8.0-v0.8.12
+	// contract and the validation is a no-op in
+	// that case (no inbound ever has a
+	// template_id pre-v0.8.13).
+	a.Inbounds.WithTemplates(a.InboundTemplates)
+
 	// 6. Hosts references nodes + inbounds.
 	hostsStore := MustBuild(pool, StoreBuilder[hosts.Store]{
 		Name:    "hosts",
