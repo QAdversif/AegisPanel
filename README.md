@@ -1,7 +1,7 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.9** (latest tagged release, 2026-08-08) ships the
+> services. **v0.8.12** (latest tagged release, 2026-08-10) ships the
 > full admin surface end-to-end: sing-box on every node, BYO Node
 > bootstrap with real `aegis-agent`, user / host / plan CRUD,
 > subscription render in sing-box / Clash / base64 / HTML formats,
@@ -16,7 +16,12 @@
 > `aegis admin node rotate-panel-key` CLI + HTTP mirror,
 > "Show stored key" debug surface, JSON-logs-in-production config
 > guard, `nodes.Service.RefreshAgentBearer` operator-recovery
-> path, BatchedApplier 401→auto-refresh integration, and
+> path, BatchedApplier 401→auto-refresh integration,
+> shadcn-vue `RadioGroup` primitive in the auth-method picker,
+> merged "Add node + Provision" dialog, the
+> **inbound-templates foundation** (per-tenant `Params` defaults —
+> the data model + service + handler + 5 API paths; the renderer
+> integration + frontend UI are the next follow-up PRs), and
 > **cosign re-sign + verify on every release** (3 new
 > `release.yml` steps: 30s settle + re-sign panel + re-sign UI;
 > closes the v0.8.x `cosign re-signing on every release` row).
@@ -122,7 +127,7 @@ The release ladder:
 | `v0.8.7` | **shipped** | Refresh agent bearer: `nodes.Service.RefreshAgentBearer` (PR #188) |
 | `v0.8.8` | **shipped** | BatchedApplier 401→auto-refresh integration (PR #189) |
 | `v0.8.9` | **shipped** | Release workflow hardening: cosign re-sign + verify on every release (PR #190). Pure workflow change, no code touched. |
-| `v0.8.x` | in progress | Host → node mapping in Builder filter (PR #192 shipped); subscription URL display in UsersView (PR #193 shipped); per-user credential filter in Builder (shipped in v0.8.10+ — closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag); merged "Add node + Provision" dialog (shipped in v0.8.12+ — the two-step flow becomes a single form with a "Provision this node after registering" checkbox); operations polish (pre-existing eslint warnings cleanup as a `chore` PR — shipped in PR #200); shadcn-vue `RadioGroup` primitive (PR #202 — `components/ui/RadioGroup.vue` + `RadioGroupItem.vue`, `NodesView.vue` auth-method pickers migrated); inbound-templates work (per-tenant `Params` defaults) |
+| `v0.8.x` | in progress | Host → node mapping in Builder filter (PR #192 shipped); subscription URL display in UsersView (PR #193 shipped); per-user credential filter in Builder (shipped in v0.8.10+ — closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag); merged "Add node + Provision" dialog (shipped in v0.8.12+ — the two-step flow becomes a single form with a "Provision this node after registering" checkbox); operations polish (pre-existing eslint warnings cleanup as a `chore` PR — shipped in PR #200); shadcn-vue `RadioGroup` primitive (PR #202 — `components/ui/RadioGroup.vue` + `RadioGroupItem.vue`, `NodesView.vue` auth-method pickers migrated); inbound-templates work (per-tenant `Params` defaults, **PR #205 foundation shipped post-v0.8.12** — `inbound_templates` table + `inbounds.template_id` nullable FK + new `internal/inboundtemplates/` package with 5 API paths under `/api/v1/inbound-templates`; the sing-box renderer's `BuildCoreConfigForNode` reading `template.params` when `template_id` is set is the next follow-up PR — until that lands the new column is stored but the rendered config still uses the inline `inbound.params`) |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release (per-user credential filter no longer blocks — see [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) for the remaining items) |
 
