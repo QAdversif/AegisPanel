@@ -698,7 +698,7 @@ func singboxWiring(
 		// carries the allowed users. Closes the
 		// second half of the v0.7.x Phase 2
 		// multi-user TODO.
-		flushFn := builder.NewFlushFn(a.Inbounds, a.Hosts, a.Credentials, a.Users, p, nodeID, nodeName)
+		flushFn := builder.NewFlushFn(a.Inbounds, a.Hosts, a.Credentials, a.Users, a.InboundTemplates, p, nodeID, nodeName)
 		a.AddNodeBatchedApplier(ctx, nodeID, nodeName, flushFn)
 	}
 	return nil
