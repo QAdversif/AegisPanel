@@ -15,6 +15,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/plans"
@@ -159,7 +160,10 @@ func buildRouterForTest(t *testing.T, subPath string) http.Handler {
 	plansStore := plans.NewMemoryStore(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
 	plansSvc := plans.NewService(plansStore)
 
-	return Build(context.Background(), nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil /* webhooksSvc */, nil /* credentialsSvc */, nil)
+	inboundTemplatesStore := inboundtemplates.NewMemoryStore()
+	inboundTemplatesSvc := inboundtemplates.NewService(inboundTemplatesStore)
+
+	return Build(context.Background(), nil, authSvc, nodesSvc, hostsSvc, inboundsSvc, inboundTemplatesSvc, subscriptionSvc, usersSvc, panelCfgSvc, auditsSvc, plansSvc, nil /* bootstrapSvc */, nil /* backupsSvc */, nil /* webhooksSvc */, nil /* credentialsSvc */, nil)
 }
 
 // contains is a small strings.Contains alias to keep
