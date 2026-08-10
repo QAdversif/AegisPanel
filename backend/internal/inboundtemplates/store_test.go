@@ -303,3 +303,74 @@ func TestMemoryStore_ConcurrentReadWrite(t *testing.T) {
 func nameFromIndex(i int) string {
 	return "tpl-" + strings.Repeat("x", i%5+1) + "-" + uuid.NewString()[:8]
 }
+
+// TestService_GetManyByID_BatchLookup pins the
+// batch-fetch contract the renderer relies on
+// (single round-trip per flush, partial-miss is
+// not an error, empty input returns empty map).
+func TestService_GetManyByID_BatchLookup(t *testing.T) {
+	t.Parallel()
+	s := newTestService(t)
+
+	// Seed three templates; the renderer will
+	// batch-look these up after a flush.
+	ids := make([]uuid.UUID, 0, 3)
+	for i, name := range []string{"vless-eu", "hy2-asia", "ss-fallback"} {
+		tpl, err := s.Create(context.Background(), CreateInput{
+			Name:     name,
+			Protocol: ProtocolVLESS,
+			Params:   map[string]any{"flow": "xtls-rprx-vision", "tag": i},
+		})
+		if err != nil {
+			t.Fatalf("seed %q: %v", name, err)
+		}
+		ids = append(ids, tpl.ID)
+	}
+
+	// Happy path: all three resolve, Params are
+	// returned unmodified.
+	got, err := s.GetManyByID(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("get many: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d templates, want 3", len(got))
+	}
+	for i, id := range ids {
+		tpl, ok := got[id]
+		if !ok {
+			t.Fatalf("missing id %s in result", id)
+		}
+		if v, _ := tpl.Params["tag"].(int); v != i {
+			t.Fatalf("params[tag] for %s: got %v, want %d", id, tpl.Params["tag"], i)
+		}
+	}
+
+	// Partial miss: one known + one unknown. The
+	// result must contain the known one and
+	// silently drop the unknown (the renderer
+	// does the same).
+	unknown := uuid.New()
+	got2, err := s.GetManyByID(context.Background(), []uuid.UUID{ids[0], unknown})
+	if err != nil {
+		t.Fatalf("partial miss: %v", err)
+	}
+	if len(got2) != 1 {
+		t.Fatalf("partial miss: got %d, want 1", len(got2))
+	}
+	if _, ok := got2[ids[0]]; !ok {
+		t.Fatalf("partial miss: missing known id %s", ids[0])
+	}
+	if _, ok := got2[unknown]; ok {
+		t.Fatalf("partial miss: unknown id %s leaked into result", unknown)
+	}
+
+	// Empty input: no allocation, no error.
+	got3, err := s.GetManyByID(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("empty input: %v", err)
+	}
+	if len(got3) != 0 {
+		t.Fatalf("empty input: got %d, want 0", len(got3))
+	}
+}
