@@ -236,6 +236,15 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		logger.Warn().Msg("auth: using in-memory store with the dev seed (username: admin, password: aegis-dev-password). DO NOT use in production.")
 	}
 	a.Auth = auth.NewService(authSigner, authStore)
+	// v0.8.13+: the refresh-token cookie's `Secure`
+	// attribute is conditional on the deployment env.
+	// Production is HTTPS-only; the dev / staging HTTP
+	// path needs Secure=false or the browser silently
+	// drops the cookie. See
+	// `auth.Service.SetCookieSecure` for the rationale.
+	if cfg.Env == "production" {
+		a.Auth.SetCookieSecure(true)
+	}
 
 	// 4. Nodes.
 	nodesStore := MustBuild(pool, StoreBuilder[nodes.Store]{
