@@ -42,6 +42,12 @@ const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'nav.inbounds', requiresAuth: true, layout: 'app' },
   },
   {
+    path: '/inbound-templates',
+    name: 'inbound-templates',
+    component: () => import('@/views/InboundTemplatesView.vue'),
+    meta: { titleKey: 'nav.inboundTemplates', requiresAuth: true, layout: 'app' },
+  },
+  {
     path: '/hosts',
     name: 'hosts',
     component: () => import('@/views/HostsView.vue'),

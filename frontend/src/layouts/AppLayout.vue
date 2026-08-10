@@ -22,7 +22,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { Database, History, KeyRound, LayoutDashboard, Link2, LogOut, Menu, Moon, Package, Server, Settings, Shield, Sun, User, Users, Webhook, Wifi } from 'lucide-vue-next'
+import { Database, History, KeyRound, LayoutDashboard, LayoutTemplate, Link2, LogOut, Menu, Moon, Package, Server, Settings, Shield, Sun, User, Users, Webhook, Wifi } from 'lucide-vue-next'
 
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -63,6 +63,7 @@ const navItems: NavItem[] = [
   { key: 'dashboard', to: '/', label: t('nav.dashboard'), icon: LayoutDashboard, enabled: true },
   { key: 'nodes', to: '/nodes', label: t('nav.nodes'), icon: Server, enabled: true },
   { key: 'inbounds', to: '/inbounds', label: t('nav.inbounds'), icon: Shield, enabled: true },
+  { key: 'inboundTemplates', to: '/inbound-templates', label: t('nav.inboundTemplates'), icon: LayoutTemplate, enabled: true },
   { key: 'hosts', to: '/hosts', label: t('nav.hosts'), icon: Wifi, enabled: true },
   { key: 'plans', to: '/plans', label: t('nav.plans'), icon: Package, enabled: true },
   { key: 'subscription', to: '/subscription', label: t('nav.subscription'), icon: Link2, enabled: true },

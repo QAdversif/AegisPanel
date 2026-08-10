@@ -1144,6 +1144,177 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /inbound-templates:
+    get:
+      tags: [inbound-templates]
+      summary: List inbound templates
+      description: |
+        Every template (named, reusable protocol
+        configuration) the operator has configured.
+        Templates are global, not per-node: any
+        inbound on any node can reference one via
+        the `templateId` FK. v0.8.13 does not
+        paginate.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundTemplateListResponse'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [inbound-templates]
+      summary: Create an inbound template
+      description: |
+        Create a new named, reusable protocol
+        configuration. The server generates the
+        id and timestamps; the caller supplies
+        the operator-visible fields (name,
+        protocol, params, description). The
+        protocol must be one of vless, hysteria2,
+        shadowsocks, trojan; the `params` field
+        is a free-form JSON blob whose shape is
+        owned by the sing-box provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundTemplateCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundTemplate'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Template name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /inbound-templates/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [inbound-templates]
+      summary: Get an inbound template
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundTemplate'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      tags: [inbound-templates]
+      summary: Update an inbound template
+      description: |
+        Partial update (the same PATCH semantics the
+        v0.2 CRUD surfaces use). All fields are
+        optional; the absence of a key means "leave
+        unchanged".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundTemplateUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundTemplate'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [inbound-templates]
+      summary: Delete an inbound template
+      description: |
+        Hard delete. The `inbounds.template_id`
+        column has an `ON DELETE SET NULL` FK
+        (migration 0021), so deleting a template
+        that still has inbounds pointing at it
+        drops the FK to NULL on those inbounds;
+        the sing-box renderer falls back to
+        each inbound's inline `params` (the
+        v0.8.0-v0.8.12 default). No data loss
+        for the affected inbounds; the operator
+        just loses the shared-params link.
+        The UI shows a confirm dialog that
+        lists the affected inbound count before
+        DELETE.
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /webhooks:
     get:
       tags: [webhooks]
@@ -2847,6 +3018,22 @@ components:
             Protocol-specific configuration. The shape is owned
             by the sing-box provider; v0.2.0 surfaces a generic
             JSON editor for it.
+        templateId:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            v0.8.13+: optional FK to an
+            `inbound_templates` row. When non-null,
+            the sing-box renderer reads
+            `template.params` instead of `inbound.params`.
+            The CRUD layer (PR #211) enforces
+            template existence and protocol match;
+            a protocol mismatch returns 400 with
+            `field=templateId`. Pre-v0.8.13 inbounds
+            have `templateId = null` (the v0.8.0-v0.8.12
+            default, every inbound uses its inline
+            `params`).
         createdAt:
           type: string
           format: date-time
@@ -2885,6 +3072,16 @@ components:
         params:
           type: object
           additionalProperties: true
+        templateId:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            v0.8.13+: optional FK to an
+            `inbound_templates` row. See
+            `Inbound.templateId` for the full
+            semantics. Omit (or send `null`) for
+            the v0.8.0-v0.8.12 default.
 
     InboundUpdateRequest:
       type: object
@@ -2916,6 +3113,23 @@ components:
         params:
           type: object
           additionalProperties: true
+        templateId:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            v0.8.13+: optional FK to an
+            `inbound_templates` row. Send `null`
+            to clear the template reference on
+            the inbound. Send a new UUID to
+            reassign. Omit (do not include the
+            key at all) to leave the current
+            template reference unchanged.
+            Protocol-match validation runs
+            against the inbound's effective
+            protocol (the patch's `protocol`
+            field, if also set, otherwise the
+            existing one). See PR #211.
 
     InboundListResponse:
       type: object
@@ -3871,4 +4085,82 @@ components:
           nullable: true
         attempts:
           type: integer
+
+    InboundTemplate:
+      type: object
+      required: [id, name, protocol, params, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        params:
+          type: object
+          additionalProperties: true
+          description: |
+            Protocol-specific configuration. The shape
+            is owned by the sing-box provider; v0.8.13
+            surfaces a generic JSON editor for it.
+            When an inbound's `templateId` resolves to
+            this template, the sing-box renderer reads
+            these `params` instead of the inbound's
+            inline `params`.
+        description:
+          type: string
+          nullable: true
+          maxLength: 256
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    InboundTemplateCreateRequest:
+      type: object
+      required: [name, protocol, params]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        params:
+          type: object
+          additionalProperties: true
+          default: {}
+        description:
+          type: string
+          maxLength: 256
+
+    InboundTemplateUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        protocol:
+          $ref: '#/components/schemas/Protocol'
+        params:
+          type: object
+          additionalProperties: true
+        description:
+          type: string
+          maxLength: 256
+
+    InboundTemplateListResponse:
+      type: object
+      required: [templates]
+      properties:
+        templates:
+          type: array
+          items:
+            $ref: '#/components/schemas/InboundTemplate'
 
