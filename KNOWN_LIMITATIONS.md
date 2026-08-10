@@ -248,14 +248,30 @@ composition. Operators who preferred the
 v0.8.11 two-step flow can uncheck the
 "Provision after registering" checkbox.
 
-#### shadcn-vue RadioGroup primitive — v0.8.x
+#### shadcn-vue RadioGroup primitive — closed in v0.8.12+
 
-The radio group in the v0.8.1 provision form is
-hand-rolled. The codebase does not yet have
-`RadioGroup` in `components/ui/`; the future
-primitive would carry keyboard nav (arrow keys
-cycle the group), ARIA group semantics, and
-disabled-state visuals. v0.8.x.
+Closed in v0.8.12+ (PR #202). The two hand-rolled
+radio groups in `NodesView.vue` (the three-way
+auth-method picker in the per-row provision dialog,
+plus the two-way picker in the merged "Add node +
+Provision" dialog) are now rendered through new
+shadcn-vue primitives: `components/ui/RadioGroup.vue`
+(thin wrapper over `radix-vue`'s `RadioGroupRoot`,
+forwards `modelValue` + `defaultValue` + `disabled` +
+`required` + `orientation` + `dir` + `loop` + `name` +
+`class`, emits `update:modelValue`) and
+`components/ui/RadioGroupItem.vue` (wrapper over
+`RadioGroupItem` and `RadioGroupIndicator`; renders
+a `<button role="radio">` with a 16x16 circular border
+plus a 10x10 inner dot; default slot is the label).
+The new primitives inherit arrow-key + Space keyboard
+navigation, ARIA `role="radiogroup"` / `role="radio"` /
+`aria-checked` / `aria-disabled` semantics, and
+`data-[state=checked]` + `data-[disabled]` styling hooks
+for free. The previously hand-rolled
+`.nodes__auth-radios*` CSS block (~46 lines) is
+deleted; visual parity preserved via the standard
+`bg-muted` + `border-ring` data-attribute pattern.
 
 ### Operations polish (deferred from v0.5.0 / v0.7.0)
 
