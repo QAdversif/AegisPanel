@@ -106,8 +106,8 @@ sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env > /tmp/aegis-env
 #  docs/RUNBOOKS/deploy.md §6.4 for a worked python env-flag builder)
 
 # 5. Pull the panel image
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.12'
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.12'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.14'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.14'
 
 # 6. Start the panel + UI containers (one-shot docker run with the
 #    -e flags from step 4)
@@ -118,7 +118,7 @@ ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net
   -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
   -p 127.0.0.1:8080:8080 \
   <the -e flags from step 4> \
-  ghcr.io/qadversif/aegispanel:0.8.9"
+  ghcr.io/qadversif/aegispanel:0.8.14"
 
 # 7. Smoke test
 curl -fsS http://panel.example.com:8080/api/v1/health
@@ -394,7 +394,7 @@ keep all three.
 Pin the panel image tag in `group_vars/all.yml`:
 
 ```yaml
-aegis_panel_image_tag: "0.5.0"   # no 'v' prefix; release.yml rewrites in #111
+aegis_panel_image_tag: "0.8.14"   # no 'v' prefix; release.yml rewrites in #111
 ```
 
 Then re-run the `install_panel` role. The role is idempotent:
@@ -403,9 +403,37 @@ Then re-run the `install_panel` role. The role is idempotent:
 config matches the new compose.
 
 The release pipeline (`ghcr.io/qadversif/aegispanel`) pushes the
-bare semver (`0.5.0`), the major.minor shorthand (`0.5`), and
+bare semver (`0.8.14`), the major.minor shorthand (`0.8`), and
 `latest` (only for non-prerelease tags, per
 `flavor: latest=auto`).
+
+### v0.8.13 → v0.8.14 upgrade (the body-field shim closure)
+
+v0.8.14 closes the v0.8.13 backwards-compat shim that
+kept the refresh token in the JSON body of
+`/auth/login` and `/auth/refresh`. The upgrade is
+**wire-format-clean for a v0.8.13 frontend** (the
+body field is removed but the frontend never read
+it). The broken combination is a v0.8.14 frontend
+plus v0.8.13 panel. The canonical rolling-upgrade
+pattern is the standard "server before client":
+
+1. Bounce the panel container to v0.8.14 first.
+   A v0.8.13 frontend continues to work unchanged
+   (it doesn't read the body field, and it sends
+   no body to `/auth/refresh`).
+2. Bounce the UI container to v0.8.14+ to drop
+   the `refreshToken` type from the generated
+   `LoginResponse`.
+
+After the rolling upgrade, the wire format is
+unambiguous: `POST /auth/login` and `POST
+/auth/refresh` responses carry only the access
+token in the body, the refresh token is in the
+`Set-Cookie: aegis_rt=...` header. The audit-3.1
+fix chain (HttpOnly cookie + frontend
+`withCredentials` + Caddy CSP) is end-to-end
+active.
 
 ## Observability
 
@@ -511,7 +539,7 @@ is exactly what a memory-only dev install wants.
   cabinet API** — see [ROADMAP.md](./ROADMAP.md) for the
   milestone status of each.
 - **S3-compatible backup storage** — local-only backups are the
-  v0.5.0-v0.8.9 contract. The `Store/Backend` interface in
+  v0.5.0-v0.8.14 contract. The `Store/Backend` interface in
   `internal/backups/` is the extension point; the S3 implementation
   is a future PR.
 - **A high-availability topology.** Aegis is single-instance.
