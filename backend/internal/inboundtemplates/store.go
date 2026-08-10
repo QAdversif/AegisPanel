@@ -37,6 +37,19 @@ type Store interface {
 	// ascending. The slice is freshly allocated;
 	// callers may mutate it.
 	List(ctx context.Context) ([]*InboundTemplate, error)
+	// v0.8.13+ builder integration: GetManyByID
+	// returns a map keyed by template id with the
+	// template's Params. Template ids that don't
+	// resolve are omitted from the result (the
+	// caller treats a missing entry as "use the
+	// inbound's inline params"). A nil map + nil
+	// error is a valid empty result; an empty input
+	// slice returns an empty (not nil) map. The
+	// builder calls this once per flush with the
+	// deduplicated TemplateIDs of every inbound on
+	// the node — the lookup is O(1) per template
+	// via the byID map.
+	GetManyByID(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*InboundTemplate, error)
 	// ListByProtocol returns every template with
 	// the given protocol across the panel, sorted
 	// by Name ascending. Used by the admin UI's
@@ -165,6 +178,23 @@ func (s *MemoryStore) List(_ context.Context) ([]*InboundTemplate, error) {
 		out = append(out, cloneTemplate(t))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// GetManyByID returns a map keyed by template id with
+// the matching *InboundTemplate. Template ids that
+// don't resolve are omitted from the result. An empty
+// `ids` slice returns an empty (not nil) map. The
+// builder's per-flush call goes through this method.
+func (s *MemoryStore) GetManyByID(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]*InboundTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[uuid.UUID]*InboundTemplate, len(ids))
+	for _, id := range ids {
+		if t, ok := s.byID[id]; ok {
+			out[id] = cloneTemplate(t)
+		}
+	}
 	return out, nil
 }
 

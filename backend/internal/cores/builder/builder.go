@@ -56,6 +56,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 )
 
 // ListInboundsByNode is the slice of the inbounds
@@ -145,6 +146,33 @@ type ListCredentialsByInbound interface {
 // `cmd/aegis/main.go` via `a.Users`.
 type ListUsersAllowedForNode interface {
 	AllowedUsersForNode(ctx context.Context, nodeID uuid.UUID) ([]uuid.UUID, error)
+}
+
+// LookupTemplatesByID is the slice of the inbound-
+// templates service the v0.8.13+ inbound-templates
+// renderer integration needs. The builder calls it
+// once per `BuildCoreConfigForNode` invocation with
+// the deduplicated `TemplateID`s of every inbound on
+// the node; the result is consulted for each
+// inbound's `params[tag]` entry (the inbound's
+// inline `params` is the fallback when the lookup
+// doesn't return a row for the inbound's TemplateID).
+//
+// The lookup is a single batch query at the storage
+// layer (`WHERE id = ANY($1)`); the interface
+// accepts a slice to keep the call-site simple and
+// the storage layer efficient. Template ids that
+// don't resolve are omitted from the result; the
+// builder treats a missing entry as "use the
+// inbound's inline params" (fail-soft, same pattern
+// as the host source and users source). A nil
+// implementation keeps the v0.8.0-v0.8.12 default
+// behaviour (every inbound uses its inline `params`).
+// A lookup error is fail-soft: log a warning, treat
+// as if nil were returned. Wired in
+// `cmd/aegis/main.go` via `a.InboundTemplates`.
+type LookupTemplatesByID interface {
+	GetManyByID(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*inboundtemplates.InboundTemplate, error)
 }
 
 // CoreRenderer is the slice of a cores.CoreProvider
@@ -242,17 +270,100 @@ const experimentalInboundCredentialsKey = "inbound_credentials"
 // sing-box render — open issues"); the first half
 // (BatchedApplier fan-out narrowing by host) was
 // v0.8.x (PR #192).
+//
+// v0.8.13+ (inbound-templates renderer integration):
+// the `templateSrc` argument supplies the
+// per-template params (see `LookupTemplatesByID`).
+// The builder collects the deduplicated `TemplateID`s
+// of every inbound on the node, asks the source for
+// the matching templates in ONE round-trip, and
+// uses each template's `Params` as the
+// `params[tag]` value when the inbound's
+// `TemplateID` resolves in the result. A nil
+// `templateSrc` keeps the v0.8.0-v0.8.12 default
+// (every inbound uses its inline `params`). A nil
+// return from the lookup is treated the same as nil
+// `templateSrc` (the per-inbound inline `params` is
+// the fallback for every inbound — the v0.8.0-v0.8.12
+// behaviour). A missing entry in the result (the
+// template was deleted or the inbound's TemplateID
+// is stale) falls back to the inbound's inline
+// `params` per inbound — fail-soft, matching the
+// `hostSrc` and `usersSrc` fail-soft patterns. A
+// lookup error is fail-soft: log a warning, treat
+// as if nil were returned. The renderer's
+// per-inbound params is then consumed by the
+// sing-box provider's `RenderConfig` exactly as the
+// inline `params` was — no provider-side change.
 func BuildCoreConfigForNode(
 	ctx context.Context,
 	inbSrc ListInboundsByNode,
 	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
 	usersSrc ListUsersAllowedForNode,
+	templateSrc LookupTemplatesByID,
 	nodeID uuid.UUID,
 ) (cores.CoreConfig, error) {
 	all, err := inbSrc.ListByNode(ctx, nodeID)
 	if err != nil {
 		return cores.CoreConfig{}, fmt.Errorf("builder: list inbounds for node %s: %w", nodeID, err)
+	}
+
+	// v0.8.13+ inbound-templates renderer integration:
+	// collect the deduplicated TemplateIDs of every
+	// inbound on the node, then ask the source for
+	// the matching templates in ONE round-trip. The
+	// result is consulted in the per-inbound loop
+	// below: when an inbound's TemplateID is set and
+	// resolves in the result, the template's Params
+	// replaces the inbound's inline Params as the
+	// `params[tag]` value. A nil `templateSrc` keeps
+	// the v0.8.0-v0.8.12 default (every inbound
+	// uses its inline Params). A nil return from the
+	// lookup is the same as nil `templateSrc` (every
+	// inbound falls back to its inline Params). A
+	// missing entry in the result (the template was
+	// deleted or the inbound's TemplateID is stale)
+	// also falls back to the inbound's inline Params
+	// per-inbound. A lookup error is fail-soft (log
+	// + treat as nil), matching the credentials
+	// source, host source, and users source patterns.
+	// The result is `map[uuid.UUID]map[string]any`
+	// (keyed by TemplateID) — an inbound's TemplateID
+	// is the lookup key in the per-inbound loop.
+	var templateParams map[uuid.UUID]map[string]any
+	if templateSrc != nil {
+		ids := make([]uuid.UUID, 0)
+		seen := make(map[uuid.UUID]struct{}, len(all))
+		for _, inb := range all {
+			if inb == nil || inb.TemplateID == nil {
+				continue
+			}
+			tid := *inb.TemplateID
+			if _, ok := seen[tid]; ok {
+				continue
+			}
+			seen[tid] = struct{}{}
+			ids = append(ids, tid)
+		}
+		if len(ids) > 0 {
+			tpls, terr := templateSrc.GetManyByID(ctx, ids)
+			switch {
+			case terr != nil:
+				log.Warn().Err(terr).
+					Str("node", nodeID.String()).
+					Int("templates", len(ids)).
+					Msg("builder: template lookup failed; falling back to inline inbound.params for every inbound")
+			case len(tpls) > 0:
+				templateParams = make(map[uuid.UUID]map[string]any, len(tpls))
+				for tid, tpl := range tpls {
+					if tpl == nil {
+						continue
+					}
+					templateParams[tid] = tpl.Params
+				}
+			}
+		}
 	}
 
 	// v0.8.10+ per-user credential filter: resolve
@@ -360,9 +471,41 @@ func BuildCoreConfigForNode(
 		// map still renders correctly (the sing-box
 		// renderer's requireString on uuid will
 		// fail with a useful error, not a nil deref).
-		if inb.Params != nil {
+		//
+		// v0.8.13+ inbound-templates: when the
+		// inbound has a TemplateID and the lookup
+		// returned a row for it, use the template's
+		// Params instead of the inbound's inline
+		// Params. The inbound's inline Params stays
+		// in the DB for backwards compat (the
+		// v0.8.0-v0.8.12 default path) but is
+		// ignored by the renderer when TemplateID is
+		// set + resolves. A missing entry in the
+		// lookup result (template deleted, stale
+		// TemplateID) falls back to the inbound's
+		// inline Params — same fail-soft pattern as
+		// the users source and host source.
+		switch {
+		case inb.TemplateID != nil && templateParams != nil:
+			if tp, ok := templateParams[*inb.TemplateID]; ok {
+				params[tag] = tp
+				break
+			}
+			// Stale TemplateID — fall through to the
+			// inline-params path with a warning.
+			log.Warn().
+				Str("node", nodeID.String()).
+				Str("inbound", tag).
+				Str("template_id", inb.TemplateID.String()).
+				Msg("builder: template_id set on inbound but template not found; falling back to inline params")
+			if inb.Params != nil {
+				params[tag] = inb.Params
+			} else {
+				params[tag] = map[string]any{}
+			}
+		case inb.Params != nil:
 			params[tag] = inb.Params
-		} else {
+		default:
 			params[tag] = map[string]any{}
 		}
 		// Phase 2: fetch the per-(user, inbound)
@@ -501,19 +644,26 @@ func BuildCoreConfigForNode(
 // v0.8.0-v0.8.7 render contract. v0.8.10+ adds the
 // `usersSrc` argument; nil skips the per-user
 // credential filter (every credential passes), the
-// v0.8.0-v0.8.9 default-allow contract.
+// v0.8.0-v0.8.9 default-allow contract. v0.8.13+
+// adds the `templateSrc` argument; nil keeps the
+// v0.8.0-v0.8.12 default (every inbound uses its
+// inline `params`); a non-nil source reads the
+// per-template params at flush time and uses them
+// for every inbound that has a `TemplateID` resolving
+// in the result.
 func NewFlushFn(
 	inbSrc ListInboundsByNode,
 	hostSrc LookupHostForInbound,
 	credSrc ListCredentialsByInbound,
 	usersSrc ListUsersAllowedForNode,
+	templateSrc LookupTemplatesByID,
 	renderer CoreRenderer,
 	nodeID uuid.UUID,
 	nodeName string,
 ) cores.FlushFn {
 	return func(flushCtx context.Context, deltas []cores.Delta) error {
 		start := time.Now()
-		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, hostSrc, credSrc, usersSrc, nodeID)
+		coreCfg, err := BuildCoreConfigForNode(flushCtx, inbSrc, hostSrc, credSrc, usersSrc, templateSrc, nodeID)
 		if err != nil {
 			log.Error().Err(err).Str("node", nodeName).
 				Msg("v0.5.0: BatchedApplier: builder failed; skipping Apply")

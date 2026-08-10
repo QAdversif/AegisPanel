@@ -106,6 +106,22 @@ func (s *Service) ListByProtocol(ctx context.Context, p Protocol) ([]*InboundTem
 	return s.store.ListByProtocol(ctx, p)
 }
 
+// GetManyByID returns a map keyed by template id with
+// the matching *InboundTemplate. v0.8.13+ builder
+// integration: the renderer calls this once per flush
+// with the deduplicated TemplateIDs of every inbound
+// on the node; the result is consulted for each
+// inbound's `params[tag]` entry (the inbound's
+// inline `params` is the fallback when the lookup
+// doesn't return a row for the inbound's TemplateID).
+// Template ids that don't resolve are omitted from
+// the result; the builder treats a missing entry as
+// "use the inbound's inline params" (fail-soft, same
+// pattern as the host source and users source).
+func (s *Service) GetManyByID(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*InboundTemplate, error) {
+	return s.store.GetManyByID(ctx, ids)
+}
+
 // CreateInput is the payload the HTTP handler
 // passes in. The caller can leave ID zero and let
 // the service assign one, or pre-assign if they
