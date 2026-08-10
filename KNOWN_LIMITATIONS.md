@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.1
+# Known Limitations — AegisPanel v0.8.14
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,27 +6,38 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.1** (the
-auto-deploy bootstrap batch). v0.8.1 ships the shared
-`internal/crypto/envelope` package (X25519 +
-ChaCha20-Poly1305, multi-recipient for key rotation),
-the `brace-expansion` 5.0.8 → 5.0.9 CVE bump, the
-backend password-based first auth for the BYO Node
-flow with a persistent panel key that the panel
-generates on first install and re-uses on every
-re-provision (encrypted with the operator's age
-envelope, pushed to the node's
-`$HOME/.ssh/authorized_keys`), and the matching
-three-way radio in the admin UI. v0.8.0 shipped
-the Phase 2 multi-user sing-box render end-to-end
-(data model + renderer + builder + subscription
-per-user render + audit-log call-site wiring + the
-9-PR dependency batch). v0.8.1 is the next release
-in the auto-deploy series; the next candidate is
-v0.8.2 (server-side `/me` fix + HTTP admin surface
-for the credentials table).
+The current state of the project is **v0.8.14** (the
+audit-3.1 fix chain + body-field shim closure). v0.8.14
+is a **consolidation + security tightening release** that
+closes the v0.8.13 backwards-compat shim: the refresh
+token is **only** in the `Set-Cookie: aegis_rt=...`
+header. The audit-3.1 fix chain (HttpOnly refresh cookie
+plus frontend in-memory only and Caddy CSP) is end-to-end
+active. Migration `0021_inbound_templates.sql` is part of
+v0.8.13+ — it auto-applies on the next panel image bounce
+because the migrations dir is host-mounted and
+`app.Build` runs the migrations as a side effect at
+WORKDIR=`/app`. The v0.8.x bucket is fully shipped
+(host→node mapping #192, subscription URL #193,
+per-user credential filter #198, merged Add+Provision
+dialog #201, eslint cleanup #200, shadcn-vue RadioGroup
+PR #202, inbound-templates PRs #205/#209/#210/#211/#212,
+audit-3.1 #214/#215/#216, body-field drop #217). The
+next candidate is v0.9.0 (smoke test on fresh VM in CI)
+followed by v1.0.0 GA (admin password rotation is the
+remaining GA-blocker).
 
-## v0.8.1 — currently open
+## v0.8.1 — closed (historical: the v0.8.1 + earlier open items)
+
+The v0.8.1 lead-in was the last release that opened new
+items. Every entry in this section is now closed; the
+"Closed in this PR" / "shipped in vX.Y.Z" notes in each
+subsection name the PR. v0.8.2 through v0.8.14 each
+closed a batch of these and added the next milestone's
+items (which are also closed by v0.8.14). The only
+remaining GA-blocker is the **admin password rotation**
+(see "v0.8.14 — currently open" at the bottom of this
+file).
 
 ### Operations
 
@@ -637,6 +648,52 @@ auditable.
 | Argon2id for the admin password (operational gap closed by `aegis admin` CLI; production seed guard) | PR #63 (PR-J) |
 | Audit log + operator profile (read surface) | PR #66 (PR-M) |
 | Sub-token rotation + URL-prefix rotation | PR #47 |
+
+## v0.8.14 — currently open
+
+### Admin password rotation is the only remaining GA-blocker
+
+The `aegis-fixture-admin-password` is the v0.8.9-era
+seed password that every fresh install of the
+container is born with. It is documented in
+`deploy/ansible/group_vars/all.yml` (the operator
+onboarding aid) and is therefore **public knowledge**
+— anyone who has read the v0.8.x deploy path can
+reproduce it. Every prod install (aibeg.click,
+2026-08-09; the canonical reference deploy) is
+running with this fixture password.
+
+The rotation is a live op, not a code change:
+
+1. The `aegis admin passwd` subcommand (Linux build
+   at `/usr/local/bin/aegis` on the panel host) takes
+   the current password + a new password on stdin.
+   The `bufio.Reader` default 4096B buffer drains
+   the entire pipe in one Read, so the standard
+   "echo newpass" + "echo newpass" pattern can land
+   both lines before the read starts. The workaround
+   is Python `subprocess.Popen` with `time.sleep(1.0)`
+   between the two writes; see
+   `~/.aegis/deploy.local.md` "Deploy 2026-08-09" §2
+   for the worked example.
+2. After rotation, the new password is recorded in
+   `~/.aegis/deploy.local.md` (outside the repo, per
+   the operator's privacy rule). The `age` envelope
+   on the panel env file is NOT affected (the JWT
+   signing key is independent of the admin password).
+3. No new admin sessions are required to be logged
+   out (the change is a "set new value" not a
+   "rotate to a new value + revoke old"). Existing
+   bearer tokens keep working until the 15-min TTL
+   expires; existing refresh tokens keep working
+   until the 30-day idle TTL expires (or a
+   chain-revocation event).
+
+This is **Priority 9 from the deep-state analysis**
+and the only remaining GA-blocker for v1.0.0.
+v0.8.14 is fully shipped; the v1.0.0 GA tag is
+unblocked the moment the admin password is rotated
+on the prod panel.
 
 ## What's NOT a limitation
 
