@@ -5,7 +5,6 @@ package auth
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,6 +39,11 @@ func newCookieRouter(t *testing.T, secure bool) http.Handler {
 // every call (test-only fixture) so we don't bother
 // returning it. Tests that need an access token can use
 // the canned `login(t, r)` helper from handler_test.go.
+//
+// v0.8.14+: the body no longer carries a `refresh_token`
+// field — the only authoritative channel is the
+// `Set-Cookie: aegis_rt=...` header on the same response.
+// doLogin reads the refresh from the cookie.
 func doLogin(t *testing.T, r http.Handler) (string, *http.Cookie) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/login",
@@ -49,10 +53,6 @@ func doLogin(t *testing.T, r http.Handler) (string, *http.Cookie) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("login: status = %d, body = %s", w.Code, w.Body.String())
 	}
-	var resp loginResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode login: %v", err)
-	}
 	cookies := w.Result().Cookies()
 	var refresh *http.Cookie
 	for _, c := range cookies {
@@ -61,14 +61,16 @@ func doLogin(t *testing.T, r http.Handler) (string, *http.Cookie) {
 			break
 		}
 	}
-	return resp.RefreshToken, refresh
+	if refresh == nil {
+		t.Fatalf("login did not set a refresh cookie: %s", w.Body.String())
+	}
+	return refresh.Value, refresh
 }
 
 // TestHandleLogin_SetsCookie pins the v0.8.13+ contract:
 // a successful login MUST set a HttpOnly + SameSite=Strict
-// refresh-token cookie. The body still carries the refresh
-// for one release (backwards compat); the cookie is the
-// authoritative channel the frontend reads.
+// refresh-token cookie. v0.8.14+: the body no longer carries
+// the refresh — the cookie is the only authoritative channel.
 func TestHandleLogin_SetsCookie(t *testing.T) {
 	r := newCookieRouter(t, true)
 	_, c := doLogin(t, r)
@@ -150,36 +152,41 @@ func TestHandleRefresh_AcceptsCookie(t *testing.T) {
 	}
 }
 
-// TestHandleRefresh_FallsBackToBody pins the v0.8.13
-// backwards-compat: a pre-cookie client can still send
-// the refresh in the body, and the server still rotates
-// the cookie (so the next refresh uses the cookie path).
-func TestHandleRefresh_FallsBackToBody(t *testing.T) {
+// TestHandleRefresh_BodyIsNotRead pins the v0.8.14
+// contract: a /auth/refresh request that carries the
+// refresh token ONLY in the JSON body (no cookie) MUST
+// be rejected with 400. The v0.8.13 backwards-compat
+// body-fallback is closed; the cookie is the only
+// authoritative channel.
+func TestHandleRefresh_BodyIsNotRead(t *testing.T) {
 	r := newCookieRouter(t, true)
 	oldRT, _ := doLogin(t, r)
 
-	// Refresh via the body path (no cookie).
-	body, _ := json.Marshal(refreshRequest{RefreshToken: oldRT})
+	// Refresh via the body path (no cookie). The
+	// request body uses the v0.8.13 shape so we
+	// know the server is not silently accepting it
+	// because of a missing-field parse, only
+	// because the body was not read at all.
+	body := []byte(`{"refresh_token":"` + oldRT + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/refresh", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body fallback closed in v0.8.14); body = %s", w.Code, w.Body.String())
 	}
-	// The response MUST set a cookie so the next
-	// request can use the cookie-only path. The
-	// v0.8.13 client ignores the body and reads the
-	// cookie; the v0.8.12 client continues to use
-	// the body.
-	var hasCookie bool
+	// The 400 path MUST NOT set or clear the cookie:
+	// the request had no cookie in the first place
+	// (the test exercises the body-only path), so
+	// there's nothing to clear. A spurious clear-
+	// cookie header here would still be benign, but
+	// a SET-cookie header would re-introduce a
+	// value derived from a body that the server
+	// did not parse — that would be the regression.
 	for _, c := range w.Result().Cookies() {
-		if c.Name == refreshCookieName {
-			hasCookie = true
+		if c.Name == refreshCookieName && c.MaxAge >= 0 {
+			t.Errorf("body-only refresh SET aegis_rt cookie (MaxAge=%d); the v0.8.14 contract forbids a body-derived cookie", c.MaxAge)
 		}
-	}
-	if !hasCookie {
-		t.Error("refresh via body did not set a cookie (next request cannot use the cookie path)")
 	}
 }
 
@@ -189,6 +196,10 @@ func TestHandleRefresh_FallsBackToBody(t *testing.T) {
 // the response MUST clear the cookie so the browser
 // stops sending the dead value on the next 401-retry
 // (which would otherwise loop).
+//
+// v0.8.14+: the cookie is the only authoritative
+// channel — the request carries a bogus cookie value
+// (no body), and the server's 401 response clears it.
 func TestHandleRefresh_RefreshFailure_ClearsCookie(t *testing.T) {
 	r := newCookieRouter(t, true)
 	// Log in to seed the store, then use a totally
@@ -196,8 +207,8 @@ func TestHandleRefresh_RefreshFailure_ClearsCookie(t *testing.T) {
 	doLogin(t, r)
 
 	garbage := strings.Repeat("0", 64) // valid 64-hex, just no row
-	body, _ := json.Marshal(refreshRequest{RefreshToken: garbage})
-	req := httptest.NewRequest(http.MethodPost, "/refresh", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: refreshCookieName, Value: garbage})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
