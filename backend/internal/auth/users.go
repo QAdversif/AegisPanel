@@ -302,6 +302,25 @@ func (m *MemoryStore) RevokeChain(_ context.Context, userID string) error {
 	return nil
 }
 
+// RevokeOne implements Store. Idempotently marks a single
+// refresh token as used. The logout flow requires this —
+// a user clicking "sign out" must succeed even if the
+// cookie is unknown / already-used / different-device.
+// We deliberately swallow the missing-row case: the
+// cookie is the authoritative cleanup signal, not the
+// server-side row.
+func (m *MemoryStore) RevokeOne(_ context.Context, tokenHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.refresh[tokenHash]
+	if !ok {
+		return nil
+	}
+	entry.used = true
+	m.refresh[tokenHash] = entry
+	return nil
+}
+
 // FindRefreshUser implements Store. Returns the userID bound to
 // a refresh token hash WITHOUT changing the row. Returns
 // ErrInvalidToken if the hash is unknown.
