@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added (inbound-templates — data-model + service + handler foundation)
+
+Closes the v0.8.x-bucket "inbound-templates
+work" entry's data-model + service + handler
+side. The follow-up PRs will land the
+renderer integration, the inbounds service
+validation, and the frontend UI.
+
+- **Migration `0021_inbound_templates.sql`** —
+  new `inbound_templates` table (`id`, `name`,
+  `protocol`, `params` JSONB, `description`,
+  `created_at`, `updated_at`; `UNIQUE(name)`,
+  `CHECK(protocol IN ('vless', 'hysteria2',
+  'shadowsocks', 'trojan'))`) + a new nullable
+  FK column
+  `inbounds.template_id REFERENCES
+  inbound_templates(id) ON DELETE SET NULL` +
+  `inbound_templates_protocol_idx` +
+  `inbounds_template_id_idx`. The migration is
+  backwards-compatible: every existing inbound
+  has `template_id = NULL` and continues to use
+  its inline `params`.
+
+- **New `internal/inboundtemplates/` package** —
+  mirrors the `inbounds` package's shape. Public
+  surface: `Service` (CRUD + audit + webhooks;
+  `ScopeNodes`-guarded HTTP handler), `Store`
+  interface (MemoryStore + PgStore), `InboundTemplate`
+  model with `Params map[string]any` plus
+  `Protocol` closed set matching the migration's
+  CHECK. The handler is mounted at
+  `/api/v1/inbound-templates` with 5 paths
+  (GET /, POST /, GET /{id}, PUT /{id},
+  DELETE /{id}). 8 unit tests + 4 pg integration
+  tests.
+
+- **Inbounds model update** — the `Inbound`
+  model + `CreateInput` + `UpdateInput` + the
+  JSON request shapes gain `TemplateID
+  *uuid.UUID`. Stored verbatim, no protocol-match
+  validation yet (that's the follow-up PR; the
+  renderer's `template_id → params` lookup is
+  also a follow-up). The inline `inbound.params`
+  is kept for backwards compat — existing
+  inbounds without a `template_id` continue
+  using the v0.8.0-v0.8.12 path.
+
+- **Webhooks** — 3 new event types
+  `inbound_template.{created, updated, deleted}`
+  added to `AllowedEventTypes`. Existing webhook
+  subscriptions are unaffected.
+
+- **Wiring** — `internal/app/app.go` +
+  `internal/router/router.go` + tests wire the
+  new service into the App + the
+  `/api/v1/inbound-templates` mount + the
+  `ScopeNodes` guard. Storage backend is shared
+  with Inbounds (no new env var; the templates
+  feature flips on/off with the operator's
+  existing `AEGIS_INBOUNDS_BACKEND`).
+
+- **Migration notes for operators** — no
+  operator action required at the migration
+  step (the column is `NULL`-able, every existing
+  inbound keeps its inline `params`). The new
+  endpoint is optional — operators can keep
+  using the v0.8.0-v0.8.12 inline-params path
+  indefinitely. The 3 new webhook event types
+  are listed in `AllowedEventTypes`; existing
+  webhook subscriptions are unaffected. No new
+  env vars. No new `AEGIS_*_BACKEND` config. The
+  v0.8.6+ hard guard on memory backends will
+  refuse to apply this migration in production
+  mode with `AEGIS_INBOUNDS_BACKEND=memory` —
+  the same protection that guards every
+  v0.8.x migration.
+
+- **Out of scope (deferred to follow-up PRs)**:
+  the sing-box renderer's
+  `BuildCoreConfigForNode` reading
+  `template.params` when `inbound.template_id`
+  is set (the actual feature — until that lands,
+  the new `template_id` column is stored but
+  the rendered config still uses the inline
+  `inbound.params`); the inbounds service
+  validation that the template's protocol must
+  match the inbound's (FK does not enforce this;
+  the renderer's look-up does); the frontend
+  UI (new `InboundTemplatesView` page + a
+  "Template" dropdown in `InboundsView`'s
+  create/edit form); the openapi.yaml + codegen
+  refresh.
+
 ## [0.8.12] - 2026-08-10
 
 This is a **consolidation release** that closes the
