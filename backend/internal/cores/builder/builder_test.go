@@ -19,6 +19,7 @@ import (
 
 	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 )
 
 // fakeInboundsSource satisfies ListInboundsByNode for
@@ -72,7 +73,7 @@ func (f *fakeCredentialsSource) ListByInbound(_ context.Context, id uuid.UUID) (
 func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 	src := &fakeInboundsSource{}
 	creds := &fakeCredentialsSource{}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestBuildCoreConfigForNode_NoInbounds(t *testing.T) {
 func TestBuildCoreConfigForNode_SourceError(t *testing.T) {
 	src := &fakeInboundsSource{err: errors.New("pg: connection refused")}
 	creds := &fakeCredentialsSource{}
-	_, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
+	_, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, uuid.New())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -165,7 +166,7 @@ func TestBuildCoreConfigForNode_Mapping(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,7 +223,7 @@ func TestBuildCoreConfigForNode_NilParams(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, &fakeCredentialsSource{}, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +277,7 @@ func TestBuildCoreConfigForNode_WithCredentials(t *testing.T) {
 		},
 	}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestBuildCoreConfigForNode_NilCredentialsSource(t *testing.T) {
 			},
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("nil credSrc must not fail the build: %v", err)
 	}
@@ -360,7 +361,7 @@ func TestBuildCoreConfigForNode_CredentialsError(t *testing.T) {
 	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{vlessInbound}}
 	creds := &fakeCredentialsSource{err: errors.New("pg: transient blip")}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("per-inbound credSrc error must not fail the build: %v", err)
 	}
@@ -395,7 +396,7 @@ func TestBuildCoreConfigForNode_EmptyCredentialsIsFallback(t *testing.T) {
 			vlessInbound.ID: {}, // explicitly empty
 		},
 	}
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, uuid.New())
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -468,7 +469,7 @@ func TestBuildCoreConfigForNode_PerUserFilter_FullAllow(t *testing.T) {
 		nodeID: {userA, userB},
 	}}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -513,7 +514,7 @@ func TestBuildCoreConfigForNode_PerUserFilter_PartialAllow(t *testing.T) {
 		nodeID: {userAllowed},
 	}}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -557,7 +558,7 @@ func TestBuildCoreConfigForNode_PerUserFilter_EmptyAllow(t *testing.T) {
 		nodeID: nil, // lookup succeeded, empty allow-set
 	}}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -590,7 +591,7 @@ func TestBuildCoreConfigForNode_PerUserFilter_NilUsers(t *testing.T) {
 		},
 	}}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, nil, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -628,7 +629,7 @@ func TestBuildCoreConfigForNode_PerUserFilter_LookupError(t *testing.T) {
 	}}
 	users := &fakeUsersSource{err: errors.New("simulated pg blip")}
 
-	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nodeID)
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, creds, users, nil, nodeID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -639,5 +640,253 @@ func TestBuildCoreConfigForNode_PerUserFilter_LookupError(t *testing.T) {
 	}
 	if len(arr) != 1 {
 		t.Errorf("lookup-error (fail-soft): creds = %d, want 1 (got = %v)", len(arr), arr)
+	}
+}
+
+// --- v0.8.13+ inbound-templates renderer integration ---
+
+// fakeTemplatesSource satisfies builder.LookupTemplatesByID.
+// `tpls` is the lookup result; `err` is the (optional)
+// lookup error. `calls` counts invocations so the
+// per-flush call-site pattern (one round-trip per
+// node flush, not per inbound) is testable.
+type fakeTemplatesSource struct {
+	tpls  map[uuid.UUID]*inboundtemplates.InboundTemplate
+	err   error
+	calls int
+}
+
+func (f *fakeTemplatesSource) GetManyByID(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]*inboundtemplates.InboundTemplate, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[uuid.UUID]*inboundtemplates.InboundTemplate, len(ids))
+	for _, id := range ids {
+		if t, ok := f.tpls[id]; ok {
+			out[id] = t
+		}
+	}
+	return out, nil
+}
+
+// v0.8.13+ happy path: the inbound's TemplateID
+// resolves in the source's result, and the template's
+// Params replaces the inbound's inline Params as
+// the `params[tag]` value the sing-box renderer reads.
+// One round-trip per flush, not per inbound.
+func TestBuildCoreConfigForNode_TemplateUsed(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	tplID := uuid.New()
+
+	inbTemplateID := tplID
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-eu", Protocol: "vless", Enabled: true,
+			TemplateID: &inbTemplateID,
+			Params:     map[string]any{"flow": "inline-xtls"}},
+	}}
+	tpl := &inboundtemplates.InboundTemplate{
+		ID:       tplID,
+		Name:     "vless-reality-eu",
+		Protocol: "vless",
+		Params:   map[string]any{"flow": "template-xtls-rprx-vision"},
+	}
+	templates := &fakeTemplatesSource{tpls: map[uuid.UUID]*inboundtemplates.InboundTemplate{
+		tplID: tpl,
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, templates, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if templates.calls != 1 {
+		t.Errorf("template lookup calls = %d, want 1 (one round-trip per flush, not per inbound)", templates.calls)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	gotParams, ok := params["vless-eu"].(map[string]any)
+	if !ok {
+		t.Fatalf("params[vless-eu] missing or wrong type: %T", params["vless-eu"])
+	}
+	if got, want := gotParams["flow"], "template-xtls-rprx-vision"; got != want {
+		t.Errorf("params[flow] = %v, want %v (template should win over inline)", got, want)
+	}
+}
+
+// v0.8.13+ default path: inbound without TemplateID
+// uses its inline Params, the v0.8.0-v0.8.12 contract.
+// The source is nil (skipped entirely) � the
+// builder never even calls it.
+func TestBuildCoreConfigForNode_TemplateNotSet(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-eu", Protocol: "vless", Enabled: true,
+			Params: map[string]any{"flow": "inline-xtls"}},
+	}}
+	templates := &fakeTemplatesSource{tpls: map[uuid.UUID]*inboundtemplates.InboundTemplate{}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, templates, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if templates.calls != 0 {
+		t.Errorf("template lookup called %d times for nil-TemplateID inbound, want 0", templates.calls)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	gotParams, ok := params["vless-eu"].(map[string]any)
+	if !ok {
+		t.Fatalf("params[vless-eu] missing")
+	}
+	if got, want := gotParams["flow"], "inline-xtls"; got != want {
+		t.Errorf("params[flow] = %v, want %v (no TemplateID > inline)", got, want)
+	}
+}
+
+// v0.8.13+ nil source: keeps the v0.8.0-v0.8.12
+// default (every inbound uses its inline Params).
+// Same coverage as `TemplateNotSet` but with the
+// explicit nil source � the canonical v0.8.13+ wiring
+// before the templates service is available.
+func TestBuildCoreConfigForNode_TemplateNilSource(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-eu", Protocol: "vless", Enabled: true,
+			Params: map[string]any{"flow": "inline-xtls"}},
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, nil, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	gotParams := params["vless-eu"].(map[string]any)
+	if got, want := gotParams["flow"], "inline-xtls"; got != want {
+		t.Errorf("params[flow] = %v, want %v (nil source > inline)", got, want)
+	}
+}
+
+// v0.8.13+ fail-soft: the template lookup returns an
+// error. The builder logs the failure and falls back
+// to every inbound's inline Params � matching the
+// host source + users source fail-soft contract.
+// A fatal error here would block every node from
+// rendering during a transient pg blip, the same
+// pattern the existing sources follow.
+func TestBuildCoreConfigForNode_TemplateLookupError(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	tplID := uuid.New()
+	inbTemplateID := tplID
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-eu", Protocol: "vless", Enabled: true,
+			TemplateID: &inbTemplateID,
+			Params:     map[string]any{"flow": "inline-xtls"}},
+	}}
+	templates := &fakeTemplatesSource{err: errors.New("simulated pg blip")}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, templates, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	gotParams := params["vless-eu"].(map[string]any)
+	if got, want := gotParams["flow"], "inline-xtls"; got != want {
+		t.Errorf("params[flow] = %v, want %v (fail-soft > inline)", got, want)
+	}
+}
+
+// v0.8.13+ stale TemplateID: the inbound's
+// TemplateID doesn't resolve in the source's result
+// (template was deleted, or the inbound references a
+// template the source has no row for). The builder
+// falls back to the inbound's inline Params with a
+// warning � same per-inbound fail-soft as the
+// `hostSrc` and `usersSrc` fail-soft patterns.
+func TestBuildCoreConfigForNode_TemplateStale(t *testing.T) {
+	nodeID := uuid.New()
+	inbID := uuid.New()
+	tplID := uuid.New()
+	inbTemplateID := tplID
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbID, Name: "vless-eu", Protocol: "vless", Enabled: true,
+			TemplateID: &inbTemplateID,
+			Params:     map[string]any{"flow": "inline-xtls"}},
+	}}
+	// Source returns an empty map (no template for
+	// the inbound's stale TemplateID). The builder
+	// must fall back to the inbound's inline Params
+	// for this inbound.
+	templates := &fakeTemplatesSource{tpls: map[uuid.UUID]*inboundtemplates.InboundTemplate{}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, templates, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	gotParams := params["vless-eu"].(map[string]any)
+	if got, want := gotParams["flow"], "inline-xtls"; got != want {
+		t.Errorf("params[flow] = %v, want %v (stale TemplateID > inline)", got, want)
+	}
+}
+
+// v0.8.13+ mixed path: some inbounds reference
+// templates, some don't. The renderer's lookup
+// deduplicates the TemplateIDs (one round-trip per
+// flush) and the per-inbound loop consults the
+// per-inbound inline Params only when the
+// TemplateID is nil or the template is missing.
+func TestBuildCoreConfigForNode_TemplateMixed(t *testing.T) {
+	nodeID := uuid.New()
+	inbTplID := uuid.New()
+	inbInlineID := uuid.New()
+	tplID := uuid.New()
+	inbTplTemplateID := tplID
+
+	src := &fakeInboundsSource{inbounds: []*inbounds.Inbound{
+		{ID: inbTplID, Name: "vless-tpl", Protocol: "vless", Enabled: true,
+			TemplateID: &inbTplTemplateID,
+			Params:     map[string]any{"flow": "inline-ignored"}},
+		{ID: inbInlineID, Name: "vless-inline", Protocol: "vless", Enabled: true,
+			Params: map[string]any{"flow": "inline-active"}},
+	}}
+	tpl := &inboundtemplates.InboundTemplate{
+		ID:       tplID,
+		Name:     "vless-reality-eu",
+		Protocol: "vless",
+		Params:   map[string]any{"flow": "template-active"},
+	}
+	templates := &fakeTemplatesSource{tpls: map[uuid.UUID]*inboundtemplates.InboundTemplate{
+		tplID: tpl,
+	}}
+
+	got, err := BuildCoreConfigForNode(context.Background(), src, nil, nil, nil, templates, nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if templates.calls != 1 {
+		t.Errorf("template lookup calls = %d, want 1", templates.calls)
+	}
+	params := got.Experimental["inbound_params"].(map[string]any)
+	// The template-referencing inbound should use
+	// the template's params.
+	tplParams, ok := params["vless-tpl"].(map[string]any)
+	if !ok {
+		t.Fatalf("params[vless-tpl] missing")
+	}
+	if got, want := tplParams["flow"], "template-active"; got != want {
+		t.Errorf("vless-tpl params[flow] = %v, want %v (template)", got, want)
+	}
+	// The non-template-referencing inbound should use
+	// its inline params.
+	inlineParams, ok := params["vless-inline"].(map[string]any)
+	if !ok {
+		t.Fatalf("params[vless-inline] missing")
+	}
+	if got, want := inlineParams["flow"], "inline-active"; got != want {
+		t.Errorf("vless-inline params[flow] = %v, want %v (no template > inline)", got, want)
 	}
 }
