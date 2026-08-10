@@ -1,7 +1,7 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.12** (latest tagged release, 2026-08-10) ships the
+> services. **v0.8.14** (latest tagged release, 2026-08-10) ships the
 > full admin surface end-to-end: sing-box on every node, BYO Node
 > bootstrap with real `aegis-agent`, user / host / plan CRUD,
 > subscription render in sing-box / Clash / base64 / HTML formats,
@@ -16,12 +16,18 @@
 > `aegis admin node rotate-panel-key` CLI + HTTP mirror,
 > "Show stored key" debug surface, JSON-logs-in-production config
 > guard, `nodes.Service.RefreshAgentBearer` operator-recovery
-> path, BatchedApplier 401→auto-refresh integration,
-> shadcn-vue `RadioGroup` primitive in the auth-method picker,
-> merged "Add node + Provision" dialog, the
-> **inbound-templates foundation** (per-tenant `Params` defaults —
-> the data model + service + handler + 5 API paths; the renderer
-> integration + frontend UI are the next follow-up PRs), and
+> path, BatchedApplier 401→auto-refresh integration, the
+> **per-user credential filter in the Builder** (closes the
+> v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA
+> tag), **shadcn-vue `RadioGroup` primitive** in the auth-method
+> picker, the **merged "Add node + Provision" dialog**, the
+> **inbound-templates feature** (per-tenant `Params` defaults
+> end-to-end: data model + renderer + validation + frontend UI,
+> 5-PR planned sequence), the **audit-3.1 fix chain**
+> (HttpOnly refresh cookie + frontend `withCredentials` +
+> Caddy CSP for the admin path), and the **v0.8.13 body-field
+> shim closure** (the refresh token is now cookie-only, no
+> longer in the JSON body of `/auth/login` and `/auth/refresh`).
 > **cosign re-sign + verify on every release** (3 new
 > `release.yml` steps: 30s settle + re-sign panel + re-sign UI;
 > closes the v0.8.x `cosign re-signing on every release` row).
@@ -37,17 +43,42 @@
 
 ## Status
 
-**v0.8.9 — cosign re-sign + verify on every release — shipped.**
-The release pipeline now waits 30s after the first `cosign sign`
-(let GHCR OIDC settle), then re-signs each image and runs
-`cosign verify` with the same flags a consumer would use
-(`--certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*"`,
-`--certificate-oidc-issuer https://token.actions.githubusercontent.com`).
-Three failure modes closed: (1) tag-mutation drift on `latest`
-between sign and pull; (2) sign-step OIDC flake recovery without
-a full `workflow_dispatch` + rebuild; (3) explicit `cosign verify`
-audit trail in the workflow log. Pure workflow change, no code
-touched. Release workflow run #190 (commit `035c77e5`).
+**v0.8.14 — body-field shim closure (cookie-only auth) — shipped.**
+The v0.8.13 backwards-compat shim that kept the refresh token
+in the JSON body of `/auth/login` and `/auth/refresh` is closed.
+v0.8.14+ is cookie-only: drop the `RefreshToken` field from
+`loginResponse`; drop the `refreshRequest` struct + the
+body-fallback parse in `readRefreshToken`; document the
+previously-undocumented `POST /api/v1/auth/logout` endpoint;
+regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a
+**drop-in replacement for v0.8.13** on the server side; the
+rolling-upgrade pattern is the standard "server before
+client". This is the consolidation + security tightening
+release that closes the audit-3.1 fix chain end-to-end
+(HttpOnly refresh cookie + frontend in-memory only + Caddy
+CSP for the admin path). CHANGELOG-only release cut
+(PR #218, commit `9f8037a`).
+
+**v0.8.13 — inbound-templates + audit-3.1 fix chain — shipped.**
+Two big things in one release. (1) The inbound-templates
+feature (per-tenant `Params` defaults) lands end-to-end as
+a 5-PR planned sequence: foundation #205 (data model +
+service + handler), docs sync #209, renderer #210 (sing-box
+`BuildCoreConfigForNode` reads `template.params` when
+`inbound.template_id` is set), validation #211 (rejects
+mismatched protocols), frontend #212 (`InboundTemplatesView`
+plus Template dropdown in `InboundsView`). The first release
+where a single feature landed in 5 separate PRs in a planned
+sequence (foundation → docs sync → renderer → validation →
+frontend) — future complex features should follow the same
+pattern. (2) The audit-3.1 fix chain (PRs #214, #215, #216)
+ships: HttpOnly refresh cookie on the server side, frontend
+`withCredentials` + dropped localStorage + in-memory access
+token, strict CSP in the panel's Caddyfile. v0.8.13 is the
+first release where a single feature + a security fix chain
+both shipped together. Migration `0021_inbound_templates.sql`
+is the only schema change. CHANGELOG-only release cut
+(PR #213, commit `ed20d2a`).
 
 **v0.8.0–v0.8.8 — multi-user + operator-recovery batch — shipped.**
 The full v0.8.x line:
@@ -127,7 +158,12 @@ The release ladder:
 | `v0.8.7` | **shipped** | Refresh agent bearer: `nodes.Service.RefreshAgentBearer` (PR #188) |
 | `v0.8.8` | **shipped** | BatchedApplier 401→auto-refresh integration (PR #189) |
 | `v0.8.9` | **shipped** | Release workflow hardening: cosign re-sign + verify on every release (PR #190). Pure workflow change, no code touched. |
-| `v0.8.x` | in progress | Host → node mapping in Builder filter (PR #192 shipped); subscription URL display in UsersView (PR #193 shipped); per-user credential filter in Builder (shipped in v0.8.10+ — closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag); merged "Add node + Provision" dialog (shipped in v0.8.12+ — the two-step flow becomes a single form with a "Provision this node after registering" checkbox); operations polish (pre-existing eslint warnings cleanup as a `chore` PR — shipped in PR #200); shadcn-vue `RadioGroup` primitive (PR #202 — `components/ui/RadioGroup.vue` + `RadioGroupItem.vue`, `NodesView.vue` auth-method pickers migrated); inbound-templates work (per-tenant `Params` defaults, **PR #205 foundation shipped post-v0.8.12** — `inbound_templates` table + `inbounds.template_id` nullable FK + new `internal/inboundtemplates/` package with 5 API paths under `/api/v1/inbound-templates`; the sing-box renderer's `BuildCoreConfigForNode` reading `template.params` when `template_id` is set is the next follow-up PR — until that lands the new column is stored but the rendered config still uses the inline `inbound.params`) |
+| `v0.8.10` | **shipped** | Per-user credential filter in the Builder (PR #198) — `internal/users.Service.AllowedUsersForNode` + `internal/cores/builder.ListUsersAllowedForNode` interface + per-inbound filter inside `BuildCoreConfigForNode` (one DB round-trip per flush). Closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag. Pure backend change. |
+| `v0.8.11` | **shipped** | Consolidation release closing the 3-PR gap (frontend-deps #196: `@vueuse/core` 11→14, `vite` 7→8, `jsdom` 25→30; Tailwind v4 #197: CSS-first config via `@tailwindcss/vite` plugin; PR #198 per-user credential filter). 0 backend / 0 schema / 0 env changes. |
+| `v0.8.12` | **shipped** | Consolidation release closing the 3-PR gap (lint cleanup #200: `eslint --fix` on 5 target files; merged "Add node + Provision" dialog #201: `nodeAddSchema` extends `nodeCreateSchema` with `provisionNow` discriminator; shadcn-vue `RadioGroup` primitive #202: `components/ui/RadioGroup.vue` + `RadioGroupItem.vue` thin wrappers over `radix-vue`; docs closure #203). 0 backend / 0 OpenAPI / 0 env / 0 schema changes. |
+| `v0.8.13` | **shipped** | Feature release: inbound-templates end-to-end (per-tenant `Params` defaults, 5-PR planned sequence — foundation #205 + docs sync #209 + renderer #210 + validation #211 + frontend #212) plus the audit-3.1 fix chain (HttpOnly refresh cookie #214, frontend `withCredentials` #215, Caddy CSP #216). First release where a single feature + a security fix chain both shipped together. Migration `0021_inbound_templates.sql` is the only schema change. |
+| `v0.8.14` | **shipped** | Consolidation + security tightening release: closes the v0.8.13 backwards-compat shim that kept the refresh token in the JSON body of `/auth/login` and `/auth/refresh` (PR #217). v0.8.14+ is cookie-only — drop the `RefreshToken` field from `loginResponse`; drop the `refreshRequest` struct + the body-fallback parse in `readRefreshToken`; document the previously-undocumented `POST /api/v1/auth/logout` endpoint; regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a **drop-in replacement for v0.8.13** on the server side. |
+| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14). |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release (per-user credential filter no longer blocks — see [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) for the remaining items) |
 
