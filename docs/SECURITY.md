@@ -47,7 +47,7 @@ window. Credit in the CHANGELOG is the standard acknowledgement.
 Only the latest minor release receives security fixes. The
 project follows semver:
 
-- **v0.8.x** is the current GA target line (v0.8.12 is the
+- **v0.8.x** is the current GA target line (v0.8.14 is the
   latest tagged release, 2026-08-10). Security fixes land on
   `main` and ship in the next `v0.8.y` patch release.
 - **v0.7.x** and earlier are **not** supported. Operators on
@@ -77,6 +77,7 @@ Aegis is designed to defend against:
 | **A typo in the operator's secrets file** | The `configure_secrets` role runs a round-trip decrypt after writing the plaintext, catching corruption. The role fails loudly on a mismatch, not silently. |
 | **A leaked CI secret** | The CI does not decrypt. The CI does not have access to the operator's age private key. CI never holds plaintext secrets. |
 | **A tampered container image from GHCR** | Every release re-signs and re-verifies via cosign (v0.8.9, PR #190). The release workflow's `Settle GHCR after push` step (30s) handles `latest` tag-mutation drift; the re-sign step uses the build's recorded digest and emits a fresh transparency-log entry; the `cosign verify` step uses the same OIDC flags a consumer would. The trust anchor is `--certificate-oidc-issuer https://token.actions.githubusercontent.com` — verify with the same flag the release workflow uses. |
+| **An XSS payload in the admin UI** (the audit-3.1 fix chain, v0.8.13 + v0.8.14) | Three layers of defense-in-depth. (1) HttpOnly refresh cookie (PR #214, server-side): the refresh token is set as a `Set-Cookie: aegis_rt=...; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000; Secure` header on `/auth/login` and `/auth/refresh`; XSS cannot exfiltrate it (HttpOnly is unreachable from JS). The body field that v0.8.13 emitted for one release as a backwards-compat shim is closed in v0.8.14 (PR #217). (2) Frontend `withCredentials` (PR #215): the access token is in-memory only (Pinia `ref`); `withCredentials: true` on the axios instance attaches the cookie to every `/api/v1` request; the previous `localStorage` 'aegis.tokens' surface is deleted. (3) Strict CSP (PR #216): `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'unsafe-inline'` (Vue 3 runtime CSS-in-JS trade-off), `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`, `object-src 'none'` — applied to the `/s3cr3t-p4n3l-*/*` admin path in `deploy/caddy/Caddyfile.panel`. An injected `<script>` cannot phone home, exfiltrate data, or rewrite the DOM. The 15-min access token in memory remains the residual risk; rotation+chain-revocation from the v0.8.10+ per-user credential filter keeps the actual exposure window at one use. |
 
 Aegis is **not** designed to defend against:
 
@@ -99,10 +100,20 @@ Aegis is **not** designed to defend against:
   "trust the maintainer" gap: every consumer can `cosign
   verify --certificate-identity-regexp "https://github.com/QAdversif/AegisPanel/.*"
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-  ghcr.io/qadversif/aegispanel:0.8.9` and the signature is
+  ghcr.io/qadversif/aegispanel:0.8.14` and the signature is
   verifiable against the GitHub Actions OIDC issuer. The
   trust model is now: OIDC issuer + OPA signature, not
   "trust the maintainer".
+- **An XSS payload in the admin UI that exfiltrates
+  the refresh token** (the audit-3.1 finding, closed
+  in v0.8.13 + v0.8.14, PRs #214 / #215 / #216 /
+  #217). The defense-in-depth chain: HttpOnly cookie
+  plus frontend in-memory only and strict CSP. See the
+  audit-3.1 row above for the full description. The
+  body's `refresh_token` field is closed in v0.8.14
+  (was a v0.8.13 backwards-compat shim) so a
+  pre-v0.8.14 client cannot exfiltrate even if it
+  tries.
 
 ## Cryptography
 
