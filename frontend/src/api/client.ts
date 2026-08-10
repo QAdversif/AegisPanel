@@ -9,13 +9,34 @@
 //     are excluded from the 401-retry loop to avoid
 //     an infinite refresh cycle on a bad refresh
 //     token.
+//
+// v0.8.13+ auth-cookie storage:
+//   * The refresh token is NO LONGER read from JS —
+//     the server reads it from the HttpOnly cookie.
+//     The frontend never touches `refreshToken` at
+//     all (no localStorage, no Pinia ref, no
+//     request body).
+//   * `withCredentials: true` on the axios instance
+//     so the browser attaches the cookie to every
+//     `/api/v1` request. Same-origin requests
+//     already include credentials by default, but
+//     the explicit flag also covers any future
+//     cross-origin dev setup (e.g. Vite on a
+//     different port with a CORS proxy).
+//   * The access token is in-memory only (Pinia
+//     ref) — the audit's "in-memory only" call.
+//     Page refresh loses the access token; the
+//     next API call hits 401, the response
+//     interceptor fires the refresh path, and the
+//     new access token lands back in the Pinia
+//     store before the original request is retried.
+//     The user does not see a re-login unless the
+//     refresh cookie has also expired.
 
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
 
 import { useAuthStore } from '@/stores/auth'
 import type { ApiError } from '@/types'
-
-const STORAGE_KEY = 'aegis.tokens'
 
 // Recursively convert snake_case object keys to camelCase.
 // Used in the response interceptor to bridge the panel's
@@ -35,32 +56,6 @@ function camelizeKeys<T>(value: T): T {
   return value
 }
 
-interface TokenPair {
-  accessToken: string
-  refreshToken: string
-  expiresAt: string
-}
-
-function loadTokens(): TokenPair | null {
-  if (typeof localStorage === 'undefined') return null
-  const raw = localStorage.getItem(STORAGE_KEY)
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as TokenPair
-  } catch {
-    return null
-  }
-}
-
-function persistTokens(tokens: TokenPair | null): void {
-  if (typeof localStorage === 'undefined') return
-  if (tokens === null) {
-    localStorage.removeItem(STORAGE_KEY)
-  } else {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens))
-  }
-}
-
 export const api = axios.create({
   // Base URL is the directory part of the current URL.
   // In the Phase 1 sub-path deploy this resolves to
@@ -75,24 +70,37 @@ export const api = axios.create({
     return m ? m[1] : '/'
   })(),
   timeout: 15_000,
+  // v0.8.13+: withCredentials so the browser attaches
+  // the HttpOnly refresh cookie to every /api/v1
+  // request, and to log Set-Cookie from the
+  // /auth/login + /auth/refresh responses. Same-origin
+  // requests already include credentials by default;
+  // the flag is explicit for clarity and covers any
+  // future cross-origin dev setup.
+  withCredentials: true,
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
   },
 })
 
-// Attach bearer token on every request.
+// Attach bearer token on every request. v0.8.13+:
+// the access token is in-memory (Pinia ref) so the
+// page refresh + 401-refresh-retry dance is the
+// recovery path (the refresh path lands the new
+// access token in the store via the response
+// interceptor before the original request is retried).
 api.interceptors.request.use((config) => {
-  const tokens = loadTokens()
-  if (tokens?.accessToken) {
-    config.headers.set('Authorization', `Bearer ${tokens.accessToken}`)
+  const access = useAuthStore().accessToken
+  if (access) {
+    config.headers.set('Authorization', `Bearer ${access}`)
   }
   return config
 })
 
 // Endpoints that must NEVER be retried after 401
 // (would loop forever).
-const NON_RETRYABLE_PATHS = ['/api/v1/auth/login', '/api/v1/auth/refresh']
+const NON_RETRYABLE_PATHS = ['/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/auth/logout']
 
 // 401 -> refresh + retry once.
 let isRefreshing = false
@@ -109,33 +117,30 @@ async function refreshTokens(): Promise<string | null> {
   }
   isRefreshing = true
   try {
-    const current = loadTokens()
-    if (!current?.refreshToken) {
-      flushRefreshQueue(null)
-      return null
-    }
-    // Use the `api` instance, not the bare `axios` import —
-    // the bare `axios.post` doesn't honour the dynamic
-    // baseURL set in this file, so in the Phase 1 sub-path
-    // deploy it hit the apex (decoy HTML 200) instead of the
-    // panel's real /api/v1/auth/refresh endpoint, the JSON
-    // parse threw, the catch block wiped the tokens, and
-    // every subsequent /me call came back 401.
+    // v0.8.13+: the refresh token lives in the
+    // HttpOnly cookie. We send NO body — the server
+    // reads the cookie via http.Cookie. The body
+    // backwards-compat path is a v0.8.0-v0.8.12
+    // affordance, not the v0.8.13+ canonical path.
     const { data } = await api.post<{
       access_token: string
-      refresh_token: string
       expires_at: string
-    }>('/api/v1/auth/refresh', { refresh_token: current.refreshToken })
-    const next: TokenPair = {
+    }>('/api/v1/auth/refresh', null)
+    // Push the new access token into the in-memory
+    // store. The Pinia ref is the only authoritative
+    // source of the access token — the localStorage
+    // surface was deleted in v0.8.13+.
+    useAuthStore().setAccessToken({
       accessToken: data.access_token,
-      refreshToken: data.refresh_token,
       expiresAt: data.expires_at,
-    }
-    persistTokens(next)
-    flushRefreshQueue(next.accessToken)
-    return next.accessToken
+    })
+    flushRefreshQueue(data.access_token)
+    return data.access_token
   } catch {
-    persistTokens(null)
+    // Refresh failed: the cookie is gone or
+    // revoked. Clear the store so the UI re-routes
+    // to /login.
+    useAuthStore().clear()
     flushRefreshQueue(null)
     return null
   } finally {
