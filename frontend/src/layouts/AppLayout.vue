@@ -85,8 +85,12 @@ const statusVariant = computed(() => {
 
 const username = computed(() => auth.me?.username ?? t('topbar.unknownUser'))
 
-function handleLogout(): void {
-  auth.logout()
+async function handleLogout(): Promise<void> {
+  // v0.8.13+: auth.logout() fires POST /api/v1/auth/logout
+  // (which clears the HttpOnly cookie server-side) before
+  // dropping the in-memory access token. Await so the
+  // user lands on /login with a clean state.
+  await auth.logout()
   void router.replace({ name: 'login' })
 }
 
