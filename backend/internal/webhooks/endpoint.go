@@ -85,6 +85,11 @@ const (
 	EventInboundCreated EventType = "inbound.created"
 	EventInboundUpdated EventType = "inbound.updated"
 	EventInboundDeleted EventType = "inbound.deleted"
+
+	// v0.8.x: Inbound template lifecycle.
+	EventInboundTemplateCreated EventType = "inbound_template.created"
+	EventInboundTemplateUpdated EventType = "inbound_template.updated"
+	EventInboundTemplateDeleted EventType = "inbound_template.deleted"
 )
 
 // AllowedEventTypes is the closed set the Service
@@ -97,6 +102,7 @@ var AllowedEventTypes = []EventType{
 	EventHostCreated, EventHostUpdated, EventHostDeleted,
 	EventBackupCreated, EventBackupCompleted, EventBackupFailed,
 	EventInboundCreated, EventInboundUpdated, EventInboundDeleted,
+	EventInboundTemplateCreated, EventInboundTemplateUpdated, EventInboundTemplateDeleted,
 }
 
 // IsValid reports whether e is in the closed set.

@@ -169,7 +169,16 @@ type CreateInput struct {
 	ListenPorts []int
 	Enabled     *bool
 	Tags        []string
-	Params      map[string]any
+	// v0.8.x: optional FK to an inbound_templates
+	// row. Nil = use the inline Params (the
+	// v0.8.0-v0.8.12 default); non-nil = the
+	// renderer's follow-up PR will read the
+	// template's params instead. Validation
+	// (template must exist + protocols must match)
+	// is the v0.8.13 follow-up PR; this PR only
+	// stores the value.
+	TemplateID *uuid.UUID
+	Params     map[string]any
 }
 
 // Create validates the input, fills in defaults and
@@ -222,6 +231,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Inbound, error) 
 		ListenPorts: extraPorts,
 		Enabled:     enabled,
 		Tags:        normaliseTags(in.Tags),
+		TemplateID:  in.TemplateID,
 		Params:      cloneParams(in.Params),
 	}
 	if err := s.store.Create(ctx, i); err != nil {
@@ -269,7 +279,15 @@ type UpdateInput struct {
 	ListenPorts *[]int
 	Enabled     *bool
 	Tags        *[]string
-	Params      *map[string]any
+	// v0.8.x: optional FK to inbound_templates. nil
+	// = do not change; &uuid.Nil{} (JSON null) =
+	// clear the template reference; any other
+	// non-nil = set the FK to that value. The
+	// renderer's follow-up PR validates the
+	// template exists + protocols match; this PR
+	// only stores the value.
+	TemplateID *uuid.UUID
+	Params     *map[string]any
 }
 
 // Update applies the patch to the stored inbound. The
@@ -330,6 +348,19 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*In
 			return nil, err
 		}
 		existing.Tags = normaliseTags(*in.Tags)
+	}
+	if in.TemplateID != nil {
+		// v0.8.x: pointer semantics. nil = "do not
+		// touch"; &uuid.Nil{} (the JSON `null`
+		// round-trip) = "clear the template
+		// reference". Same pattern as the other
+		// *T fields on UpdateInput.
+		if *in.TemplateID == uuid.Nil {
+			existing.TemplateID = nil
+		} else {
+			id := *in.TemplateID
+			existing.TemplateID = &id
+		}
 	}
 	if in.Params != nil {
 		existing.Params = cloneParams(*in.Params)
