@@ -66,6 +66,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/db"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 	"github.com/QAdversif/AegisPanel/internal/migrations"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/obs"
@@ -93,18 +94,27 @@ type App struct {
 	Config *config.Config
 	Pool   *pgxpool.Pool
 
-	Auth      *auth.Service
-	Nodes     *nodes.Service
-	Hosts     *hosts.Service
-	Inbounds  *inbounds.Service
-	Users     *users.Service
-	Plans     *plans.Service
-	Subs      *subscription.Service
-	PanelCfg  *panelcfg.Service
-	Audits    *audits.Service
-	Backups   *backups.Service
-	Webhooks  *webhooks.Service
-	Bootstrap *bootstrap.Service
+	Auth     *auth.Service
+	Nodes    *nodes.Service
+	Hosts    *hosts.Service
+	Inbounds *inbounds.Service
+	// InboundTemplates is the v0.8.x per-tenant
+	// `Params` defaults layer — named, reusable
+	// protocol configurations that any number of
+	// `inbounds` rows can reference via the
+	// nullable `inbounds.template_id` FK. The
+	// storage backend is shared with Inbounds
+	// (no separate AEGIS_INBOUND_TEMPLATES_BACKEND
+	// env var); see the StoreBuilder call below.
+	InboundTemplates *inboundtemplates.Service
+	Users            *users.Service
+	Plans            *plans.Service
+	Subs             *subscription.Service
+	PanelCfg         *panelcfg.Service
+	Audits           *audits.Service
+	Backups          *backups.Service
+	Webhooks         *webhooks.Service
+	Bootstrap        *bootstrap.Service
 
 	// Credentials is the Phase 2 multi-user
 	// sing-box render data model: the
@@ -247,6 +257,20 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.Inbounds = inbounds.NewService(inboundsStore, a.Nodes)
 
+	// v0.8.x: inbound templates — the per-tenant
+	// `Params` defaults layer. Shares the inbounds
+	// storage backend (no separate env var) so the
+	// feature flips on/off with the same flag the
+	// operator already knows.
+	inboundTemplatesStore := MustBuild(pool, StoreBuilder[inboundtemplates.Store]{
+		Name:    "inbound_templates",
+		Backend: cfg.InboundsBackend,
+		PgCtor:  func(p *pgxpool.Pool) inboundtemplates.Store { return inboundtemplates.NewPgStore(p) },
+		MemCtor: func() inboundtemplates.Store { return inboundtemplates.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.InboundTemplates = inboundtemplates.NewService(inboundTemplatesStore)
+
 	// 6. Hosts references nodes + inbounds.
 	hostsStore := MustBuild(pool, StoreBuilder[hosts.Store]{
 		Name:    "hosts",
@@ -368,6 +392,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	//     the backups New().
 	a.Nodes.WithWebhooks(a.Webhooks)
 	a.Inbounds.WithWebhooks(a.Webhooks)
+	a.InboundTemplates.WithWebhooks(a.Webhooks)
 	a.Hosts.WithWebhooks(a.Webhooks)
 	a.Users.WithWebhooks(a.Webhooks)
 	a.Plans.WithWebhooks(a.Webhooks)
@@ -442,6 +467,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	//     when s.audits is nil).
 	a.Nodes.WithAudits(a.Audits)
 	a.Inbounds.WithAudits(a.Audits)
+	a.InboundTemplates.WithAudits(a.Audits)
 	a.Hosts.WithAudits(a.Audits)
 	a.Users.WithAudits(a.Audits)
 	a.Plans.WithAudits(a.Audits)
@@ -529,7 +555,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	a.Router = router.Build(
 		ctx,
 		cfg,
-		a.Auth, a.Nodes, a.Hosts, a.Inbounds,
+		a.Auth, a.Nodes, a.Hosts, a.Inbounds, a.InboundTemplates,
 		a.Subs, a.Users, a.PanelCfg, a.Audits,
 		a.Plans, a.Bootstrap, a.Backups, a.Webhooks,
 		a.Credentials,

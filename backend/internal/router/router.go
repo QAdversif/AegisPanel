@@ -23,6 +23,7 @@ import (
 	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
+	"github.com/QAdversif/AegisPanel/internal/inboundtemplates"
 	"github.com/QAdversif/AegisPanel/internal/nodes"
 	"github.com/QAdversif/AegisPanel/internal/panelcfg"
 	"github.com/QAdversif/AegisPanel/internal/plans"
@@ -50,6 +51,7 @@ func Build(
 	nodesSvc *nodes.Service,
 	hostsSvc *hosts.Service,
 	inboundsSvc *inbounds.Service,
+	inboundTemplatesSvc *inboundtemplates.Service,
 	subscriptionSvc *subscription.Service,
 	usersSvc *users.Service,
 	panelCfgSvc *panelcfg.Service,
@@ -118,6 +120,16 @@ func Build(
 		// route and read inside inbounds.Router via
 		// chi.URLParam.
 		r.Mount("/nodes/{nodeId}/inbounds", inbounds.Router(inboundsSvc, authSvc.Middleware()))
+
+		// v0.8.x: inbound templates — panel-wide
+		// named `Params` defaults. Same ScopeNodes
+		// guard as the inbounds router (the
+		// templates are a panel-level feature
+		// that affects per-node inbounds). The
+		// service is constructed in main.go and
+		// passed in; see internal/inboundtemplates
+		// for the model / store / service split.
+		r.Mount("/inbound-templates", inboundtemplates.Router(inboundTemplatesSvc, authSvc.Middleware()))
 
 		// Hosts CRUD — Phase 1. Hosts reference nodes by id,
 		// so the hosts service is constructed in main.go with

@@ -126,6 +126,23 @@ type Inbound struct {
 	// lists; the agent reads them during apply to
 	// decide which inbounds to render.
 	Tags []string `json:"tags,omitempty"`
+	// TemplateID is an optional reference to an
+	// `inbound_templates` row (v0.8.x). When
+	// non-nil, the sing-box renderer reads the
+	// template's `params` instead of the inbound's
+	// inline `Params`. When nil, the inline
+	// `Params` is used (the v0.8.0-v0.8.12 default
+	// and the documented fallback).
+	//
+	// The FK is nullable in the migration
+	// (0021_inbound_templates.sql) for backwards
+	// compatibility — every existing inbound has
+	// TemplateID = nil and continues to use its
+	// inline Params. The renderer integration that
+	// actually USES this field is the v0.8.13
+	// follow-up PR; this PR adds the field so the
+	// wire format is stable.
+	TemplateID *uuid.UUID `json:"templateId,omitempty"`
 	// Params is the protocol-specific configuration
 	// blob. The Go side stores it as map[string]any
 	// because the per-protocol schema is owned by
@@ -134,6 +151,13 @@ type Inbound struct {
 	// service validator does not enforce a shape
 	// here; the sing-box provider's RenderConfig is
 	// the authoritative schema check.
+	//
+	// Ignored by the renderer when TemplateID is
+	// non-nil (the template's Params wins). Kept on
+	// the model for backwards compat: the v0.8.0
+	// -v0.8.12 default path stores the operator's
+	// inline config here, and the renderer's
+	// fallback (TemplateID = nil) still reads it.
 	Params map[string]any `json:"params,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
