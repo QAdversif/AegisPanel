@@ -3,6 +3,7 @@
     "dashboard": "Dashboard",
     "nodes": "Nodes",
     "inbounds": "Inbounds",
+    "inboundTemplates": "Inbound templates",
     "hosts": "Hosts",
     "plans": "Plans",
     "users": "Users",
@@ -649,5 +650,34 @@
       "credentialValue": "Value",
       "credentialValueHelp": "1-512 chars. The sing-box renderer validates the per-protocol shape."
     }
+  },
+  "inboundTemplates": {
+    "subtitle": "Reusable named protocol configurations assigned to inbounds.",
+    "name": "Name",
+    "protocol": "Protocol",
+    "description": "Description",
+    "descriptionHint": "Optional note. 256 chars max.",
+    "params": "Params",
+    "paramsHint": "Free-form JSON. The sing-box provider validates the per-protocol shape.",
+    "updatedAt": "Updated",
+    "new": "New template",
+    "empty": "No inbound templates yet.",
+    "searchPlaceholder": "Search templates…",
+    "createTitle": "New inbound template",
+    "createDescription": "Create a named, reusable protocol configuration. The renderer reads `params` from this row for every inbound that points at it.",
+    "editTitle": "Edit inbound template",
+    "loadFailed": "Failed to load templates",
+    "createFailed": "Create failed",
+    "updateFailed": "Update failed",
+    "deleteFailed": "Delete failed",
+    "created": "Template created",
+    "updated": "Template updated",
+    "deleted": "Template deleted",
+    "noChanges": "No changes to save",
+    "deleteTitle": "Delete inbound template",
+    "deleteDescription": "Delete \"{name}\"? Any inbound that points at this template will fall back to its inline `params`. This cannot be undone.",
+    "assignToInbound": "Template",
+    "assignToInboundNone": "No template (use inline params)",
+    "assignToInboundHint": "When set, the sing-box renderer reads `params` from the template instead of this inbound's inline `params`. Protocol must match."
   }
 }

@@ -8,6 +8,7 @@
 export * from './primitives'
 export * from './node'
 export * from './inbound'
+export * from './inboundtemplate'
 export * from './host'
 export * from './user'
 export * from './panelcfg'

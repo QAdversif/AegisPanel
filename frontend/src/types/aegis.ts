@@ -243,6 +243,47 @@ export interface Inbound {
   enabled: boolean;
   tags?: string[];
   params?: Record<string, unknown>;
+  // v0.8.13+: optional FK to an
+  // `inbound_templates` row. When non-null,
+  // the sing-box renderer reads
+  // `template.params` instead of
+  // `inbound.params`. The CRUD layer (PR #211)
+  // enforces template existence and protocol
+  // match; a protocol mismatch returns 400
+  // with `field=templateId`. Pre-v0.8.13
+  // inbounds have `templateId = undefined`
+  // (the v0.8.0-v0.8.12 default; every
+  // inbound uses its inline `params`).
+  templateId?: UUID | null;
+  createdAt: ISODateTime;
+  updatedAt: ISODateTime;
+}
+
+// ---------------------------------------------------------------------------
+// Inbound templates (v0.8.13+)
+// ---------------------------------------------------------------------------
+//
+// A named, reusable protocol configuration that
+// any number of `inbounds` rows on any node can
+// reference via the `Inbound.templateId` FK
+// (migration 0021_inbound_templates.sql).
+// Templates are global (not per-node); the
+// same template can be assigned to inbounds
+// across multiple nodes.
+//
+// The wire shape mirrors the Go-side
+// `InboundTemplate` struct (PR #205) one-to-one
+// after the camelCase normalisation. The
+// zod schema in
+// `src/schemas/inboundtemplate.ts` is the
+// source of truth for the request validation;
+// this type is the read-side view.
+export interface InboundTemplate {
+  id: UUID;
+  name: string;
+  protocol: Protocol;
+  params: Record<string, unknown>;
+  description?: string | null;
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
 }
