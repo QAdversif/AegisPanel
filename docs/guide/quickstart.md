@@ -108,8 +108,8 @@ sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env \
 # or the operator's local .tmp-build-env-flags.py script.
 
 # Pull the images on the panel host
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.9'
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.12'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.12'
 
 # Run the panel (one shot, with all the -e flags from above)
 ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net \
@@ -144,7 +144,7 @@ xdg-open https://panel.example.com
 The default admin login is `admin` + the password you set in
 `AEGIS_JWT_SECRET`'s neighbouring admin password field (or
 the default `***REMOVED***` if you used the
-v0.8.9 first-run fixture — change it on first login). The
+v0.8.x first-run fixture — change it on first login). The
 admin is created via `aegis admin add admin --email <email>
 --role super-admin` on the panel host (the aegis binary
 on the server).

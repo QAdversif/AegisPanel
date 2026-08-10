@@ -199,19 +199,82 @@ re-populated with host IDs. The `expandHostsToNodes`
 helper's warning log (`user fan-out is empty
 (fail-closed)`) is the operational signal.
 
-#### Inbound-templates work — v0.8.x+
+#### Inbound-templates work — partially shipped in v0.8.13+ (PR #205 foundation)
 
-A future "inbound templates" feature is the natural
-home for the per-user render. Today, every
-`inbounds` row carries its own `Params` blob
-(operator's credential); the templates work is
-the per-tenant credentials layer that lets one
-inbound serve many users. Phase 2 multi-user
-(v0.8.0) covers the per-(user, inbound) credential
-join via `user_inbound_credentials`; the templates
-work is the next step (the `Params` blob becomes
-"shared defaults" and the per-user credential is
-the only thing that varies). v0.8.x or later.
+The v0.8.x-bucket "inbound templates" feature —
+named, reusable `Params` defaults that any number
+of `inbounds` rows can reference via the new
+nullable FK `inbounds.template_id` — is now
+partially shipped.
+
+**Foundation (PR #205, post-v0.8.12) shipped:**
+
+- Migration `0021_inbound_templates.sql` adds
+  the `inbound_templates` table +
+  `inbounds.template_id` nullable FK +
+  `inbound_templates_protocol_idx` +
+  `inbounds_template_id_idx`. Backwards
+  compatible (every existing inbound has
+  `template_id = NULL` and continues to use its
+  inline `params`).
+- New `internal/inboundtemplates/` package
+  (model + validate + store + pg_store and service
+  and handler, with 8 unit and 4 pg integration
+  tests). The handler is mounted at
+  `/api/v1/inbound-templates` with 5 paths.
+- 3 new webhook event types
+  (`inbound_template.{created, updated,
+  deleted}`) added to `AllowedEventTypes`.
+- Inbounds model + `CreateInput` + `UpdateInput`
+  and the JSON request shapes gain
+  `TemplateID *uuid.UUID` (stored verbatim, no
+  validation yet).
+- `app.go` + `router.go` wire the new service
+  into the App + the
+  `/api/v1/inbound-templates` mount + the
+  `ScopeNodes` guard. No new env vars.
+
+**Follow-up PRs pending:**
+
+- The sing-box renderer's
+  `BuildCoreConfigForNode` reading
+  `template.params` when `inbound.template_id`
+  is set — the actual feature. Until this lands,
+  the new `template_id` column is stored but
+  the rendered config still uses the inline
+  `inbound.params` (the v0.8.0-v0.8.12 path).
+  This is a `internal/cores/builder` change
+  that follows the v0.8.10 per-user credential
+  filter pattern (one DB round-trip per flush,
+  not per inbound).
+- The inbounds service validation that the
+  template's protocol must match the
+  inbound's. The FK is nullable + the DB CHECK
+  on `protocol` is per-row; the cross-table
+  invariant must be enforced at the
+  `inbounds.Service` boundary.
+- The frontend UI: a new `InboundTemplatesView`
+  page (list + create + edit + delete) + a
+  "Template" dropdown in `InboundsView`'s
+  create/edit form. The openapi.yaml + codegen
+  refresh lands in the same PR.
+
+**Design rationale (kept for the follow-up PRs):**
+
+The `Params` JSONB column on `inbounds` is the
+sing-box provider's per-listener configuration
+(Reality keys, UUIDs, passwords, …). The
+templates layer factors that out so the
+operator does not paste the same JSON into
+every inbound. The per-user credential from
+`user_inbound_credentials` is still layered on
+top in the multi-user render — the template
+is the "shared protocol config", the per-user
+row is the "per-user auth credential". The
+renderer's look-up replaces the template's
+`uuid` / `password` keys with the per-user
+value; the rest of the params flow through
+unchanged.
 
 #### "Show me the stored public key" debug surface — v0.8.x
 
