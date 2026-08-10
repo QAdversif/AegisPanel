@@ -151,19 +151,19 @@ async function refreshTokens(): Promise<string | null> {
 api.interceptors.response.use(
   (response) => {
     // The panel's OpenAPI spec uses snake_case (access_token,
-    // refresh_token, expires_at) but every TS interface in
+    // expires_at, scopes) but every TS interface in
     // `services/*` and `stores/*` was written in camelCase.
     // A plain `as` cast on `api.post<LoginResponse>` only
     // silences the type system; at runtime the response
     // really is snake_case, so `result.accessToken` is
-    // `undefined`, the token pair stored in localStorage is
-    // `{accessToken: undefined, refreshToken: undefined,
-    // expiresAt: undefined}`, JSON.stringify of which is the
-    // empty object `"{}"` — and the next request's
-    // interceptor finds no accessToken to attach, so the
-    // server answers 401 "missing bearer token". Convert
-    // once on the way in so every consumer can stay in
-    // camelCase.
+    // `undefined`, the Pinia ref is `null`, and the next
+    // request's interceptor finds no accessToken to attach,
+    // so the server answers 401 "missing bearer token".
+    // Convert once on the way in so every consumer can
+    // stay in camelCase. v0.8.14+: the `refresh_token`
+    // field is gone from the response body (it was the
+    // v0.8.13 backwards-compat shim), so the camelized
+    // LoginResponse no longer has a `refreshToken` key.
     if (response.data && typeof response.data === 'object') {
       response.data = camelizeKeys(response.data)
     }

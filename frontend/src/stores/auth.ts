@@ -76,12 +76,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string): Promise<void> {
     const result = await apiLogin({ username, password })
-    // v0.8.13+: the server returned `refresh_token`
-    // in the body for one release as a backwards-
-    // compat shim. The v0.8.13+ client does NOT
-    // use it — the cookie set by the same response
-    // is the authoritative channel. We just take
-    // the accessToken and forget the rest.
+    // v0.8.14+: the response body only carries the
+    // access token — the `refresh_token` field is gone
+    // (it was the v0.8.13 backwards-compat shim, closed
+    // in v0.8.14). The HttpOnly cookie set by the same
+    // response is the authoritative refresh channel; the
+    // frontend never sees it. We just take the
+    // accessToken + expiresAt and forget the rest.
     token.value = {
       accessToken: result.accessToken,
       expiresAt: result.expiresAt,
