@@ -430,12 +430,24 @@ func (s *PgStore) FindRefreshUser(ctx context.Context, tokenHash string) (string
 // operator's primary observability surface for the v0.2.0
 // `change password` flow — a viewer who cannot see who changed
 // their own password cannot verify it was their change.
+//
+// v0.8.x: `ScopeBackups` is granted to the `super-admin` +
+// `operator` roles (NOT to `viewer` — a viewer should not be
+// able to trigger a `pg_dump` that may write a multi-MiB
+// artefact to disk). The `scopes.go` comment for
+// `ScopeBackups` says "granted only to the `admin` role";
+// that statement is now slightly more precise (super-admin +
+// operator, not just admin). The v0.8.14 release shipped
+// WITHOUT this scope in the super-admin slice, so the admin
+// user got a 403 on POST /api/v1/backups/ (the
+// "missing scope: backups" error). This is the
+// v0.8.14-followup fix.
 func scopesForRole(role string) Scopes {
 	switch role {
 	case "super-admin":
-		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
+		return Scopes{ScopeAdmin, ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials, ScopeBackups}
 	case "operator":
-		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
+		return Scopes{ScopeRead, ScopeWrite, ScopeNodes, ScopeUsers, ScopeSubscriptions, ScopeHosts, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials, ScopeBackups}
 	case "viewer":
 		return Scopes{ScopeRead, ScopePlans, ScopeWebhooks, ScopeAudits, ScopeCredentials}
 	default:
