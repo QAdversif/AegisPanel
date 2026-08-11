@@ -54,6 +54,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -205,7 +206,23 @@ func NewClientFactory(in InstallInput) (Client, error) {
 // "host:22" if port is zero. The split is
 // defensive: a future SSH-over-QUIC transport
 // might not want the colon separator.
+//
+// v0.8.16 fix: if `host` already contains a port
+// (e.g. the operator saved "cdn2ne.aibeg.click:22"
+// in the node's `Address` field), the previous
+// implementation produced "cdn2ne.aibeg.click:22:22"
+// — two colons, dial fails with "no such host".
+// Now: if the input already has a port, use it
+// verbatim; otherwise append the requested port.
 func joinHostPort(host string, port int) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		// Host already has a port. Keep the
+		// operator-supplied port (it overrides
+		// any default) and discard the
+		// function-arg `port`.
+		_ = h
+		return host
+	}
 	if port == 0 {
 		port = 22
 	}
