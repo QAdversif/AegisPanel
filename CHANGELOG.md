@@ -26,7 +26,7 @@ Single PR (#226), one fix:
   from the tooling stage (a symlink to
   `pg_wrapper` shell script) into the runtime.
   The wrapper requires `/bin/sh` + `dpkg-divert`
-  + the postgresql-common runtime — none of
+  and the postgresql-common runtime — none of
   which are in the distroless `base` image.
   Result on prod: `exec /usr/bin/pg_dump`
   returned `ENOENT` even though the symlink
