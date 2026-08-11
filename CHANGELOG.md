@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.16] - 2026-08-11
+
+This is a **hotfix release** that closes two v0.8.15
+silent bugs that the v0.8.15 smoke test caught
+(but the release workflow itself did not, because
+the live smoke-test step that catches them was
+only added in the deploy follow-up — see
+"Lesson" below).
+
+Single PR (#224), two coordinated fixes:
+
+### Fixed
+- **Backups: copy the real `pg_dump` binary into
+  the panel image.** v0.8.15 PR #222 installed
+  the `postgresql-client` metapackage in the
+  tooling stage. That metapackage installs
+  `postgresql-common`, which symlinks
+  `/usr/bin/pg_dump` to
+  `/usr/share/postgresql-common/pg_wrapper` — a
+  shell script that requires `/bin/sh` +
+  `dpkg-divert` + the postgresql-common runtime.
+  The distroless `base` image has none of those,
+  so `exec /usr/bin/pg_dump` returned `ENOENT`
+  even though the symlink existed. v0.8.16
+  switches to the versioned
+  `postgresql-client-15` package (the one that
+  matches Debian 12 "bookworm" — the bare
+  `postgresql-client-16` metapackage does NOT
+  exist on bookworm; only the actual binary
+  under `/usr/lib/postgresql/15/bin/pg_dump`
+  is needed in the runtime). The Dockerfile
+  now `COPY --from=tooling
+  /usr/lib/postgresql/15/bin/pg_dump` directly,
+  plus the `/usr/lib/x86_64-linux-gnu` tree
+  for the dynamic deps.
+- **Provision: `joinHostPort` handles the case
+  where the operator-saved `Address` already
+  contains a port.** v0.8.15 PR #222's smoke
+  test ran with the Demo-нода whose DB row has
+  `Address = "cdn2ne.<prod-host>.click:22"`. The
+  installer also reads the per-call `ssh_port`
+  override (default 22). The old `joinHostPort`
+  function did `fmt.Sprintf("%s:%d", host, port)`
+  unconditionally, producing
+  `"cdn2ne.<prod-host>.click:22:22"` (two colons).
+  `dialer.DialContext("tcp", "cdn2ne.<prod-host>.click:22:22")`
+  then failed with `no such host` at the
+  `connect` stage of the install path. v0.8.16
+  detects the existing port via
+  `net.SplitHostPort`; if the operator saved a
+  port in the address, the function returns
+  the address verbatim. Conservative: the
+  operator-supplied port wins over the
+  function-arg port.
+
+### Lesson (v0.8.15 → v0.8.16)
+
+v0.8.15's `release.yml` ran cleanly and pushed
+the image, but did not actually run a live
+smoke test against the new image. The two
+silent bugs above (wrapper-script `pg_dump` and
+double-port `joinHostPort`) only surfaced during
+the v0.8.15 deploy follow-up, after the release
+was already published. Future hotfix releases
+should include a "smoke test against the new
+image" step in `release.yml` — either a
+`workflow_dispatch` action that pulls the
+image, runs a `docker exec` to confirm
+`/usr/bin/pg_dump --version` returns a real
+version (not `ENOENT`), and a curl smoke
+against a `docker run`-bound panel, OR a
+`release-on-merge` GitHub Actions step that
+runs the same checks. Track as a follow-up
+to `release.yml` — separate PR, post-v0.8.16.
+
+### Verification
+- `go build ./...` — clean
+- `go vet ./...` — clean
+- `go test -count=1 -tags=integration -run='^$' ./...` — clean
+- `go test -count=1 ./internal/bootstrap/...` — passes
+- All CI checks green on PR #224
+
+### Operational
+- **Smoke test on the live server.click after deploy:**
+  - `POST /api/v1/backups/` should return 200 with
+    `status="running"` then transition to `"ok"`.
+  - `POST /api/v1/nodes/{id}/provision` with
+    `ssh_user=root`, `ssh_password=<demo-pw>`,
+    `tofu_policy=accept-and-append`,
+    `expected_fingerprint=SHA256:<demo-fp>` should
+    return 200 with `state="online"`.
+
+### Not in this release
+- v0.8.15 audit-3.1 fix chain (HttpOnly cookie +
+  in-memory Pinia access token + Caddy CSP) —
+  unchanged, already on prod.
+- v0.8.15 dialog overflow + SelectItem empty
+  value (PR #220 + #221) — unchanged, already
+  on prod.
+- v0.8.15 multi-stage Dockerfile (PR #222) —
+  unchanged, already on prod. PR #224 is a
+  follow-up to it, not a replacement.
+- Backup scheduler cron + retention policy.
+- Restore-drill on fresh VM (the single missing
+  piece for the v1.0.0-mvp-soft-launch tag;
+  see `docs/gap-analysis-v0.8.15.md`).
+
+**Closed by:** PR #224
+**Tag:** `v0.8.16` (to be cut after this PR merges)
+
 ## [0.8.15] - 2026-08-11
 
 This release **closes two silent functional gaps** in the v0.8.14
