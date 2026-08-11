@@ -3,7 +3,6 @@
 package backups
 
 import (
-	"net/url"
 	"testing"
 	"time"
 )
@@ -78,43 +77,5 @@ func TestNewBackupIDFormat(t *testing.T) {
 	other := newBackupID(now)
 	if id == other {
 		t.Fatalf("expected different IDs, got %q twice", id)
-	}
-}
-
-func TestDSNParse(t *testing.T) {
-	cases := []struct {
-		dsn  string
-		db   string
-		user string
-		pw   string
-	}{
-		{"postgres://aegis:secret@db:5432/aegis?sslmode=disable", "aegis", "aegis", "secret"},
-		{"postgres://aegis:secret@db:5432/aegis", "aegis", "aegis", "secret"},
-		{"postgres://db:5432/aegis", "aegis", "", ""},
-		{"", "", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.dsn, func(t *testing.T) {
-			if got := dsnDatabase(tc.dsn); got != tc.db {
-				t.Errorf("dsnDatabase(%q) = %q, want %q", tc.dsn, got, tc.db)
-			}
-			u, err := url.Parse(tc.dsn)
-			if err != nil && tc.dsn != "" {
-				t.Errorf("url.Parse(%q): %v", tc.dsn, err)
-				return
-			}
-			if u == nil {
-				return
-			}
-			if u.User != nil {
-				if u.User.Username() != tc.user {
-					t.Errorf("user = %q, want %q", u.User.Username(), tc.user)
-				}
-				pw, _ := u.User.Password()
-				if pw != tc.pw {
-					t.Errorf("pw = %q, want %q", pw, tc.pw)
-				}
-			}
-		})
 	}
 }

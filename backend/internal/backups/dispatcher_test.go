@@ -5,7 +5,6 @@ package backups
 import (
 	"context"
 	"errors"
-	"io"
 	"testing"
 
 	"github.com/QAdversif/AegisPanel/internal/webhooks"
@@ -42,9 +41,12 @@ func TestService_Create_Failure_DispatchesBackupFailed(t *testing.T) {
 	epFailed := spy.Subscribe(t, webhooks.EventBackupFailed)
 
 	svc, _ := newTestService(t, []byte("data"))
-	svc.SetDumpFn(func(ctx context.Context) (io.ReadCloser, error) {
-		return nil, errors.New("simulated pg_dump failure")
-	})
+	// Pre-PR-#228: SetDumpFn returning (nil, err).
+	// Post-PR-#228: a Dumper whose Dump returns
+	// the same error. The Service.Create path is
+	// identical (runDumpToFile:675 short-circuits
+	// on the Dump error).
+	svc.SetDumper(errDumper{err: errors.New("simulated pg_dump failure")})
 	svc.WithWebhooks(spy.Svc())
 	ctx := context.Background()
 	row, err := svc.Create(ctx, TriggerManual)
