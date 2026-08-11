@@ -20,7 +20,7 @@
 // The Delete path fires `backup.delete` with
 // the pre-delete row as the Before.
 //
-// The test uses a fake dumpFn (a no-op ReadCloser)
+// The test uses a fake Dumper (a no-op ReadCloser)
 // so the pg_dump subprocess is never invoked;
 // the LocalStore handles the index / row
 // persistence.
@@ -52,6 +52,12 @@ func newAuditedSvc(t *testing.T) (*Service, *audits.MemoryStore) {
 	// tolerate the zero values).
 	svc := New(Config{BackupsDir: dir}, NewLocalStore(be), nil)
 	svc.WithAudits(auditsSvc)
+	// Default Dumper from New() points at a
+	// non-existent pg_dump binary, so replace
+	// with a no-op Dumper that returns an
+	// empty stream. Without this, the test
+	// would fail at the pg_dump stat check.
+	svc.SetDumper(&fakeDumper{stream: io.NopCloser(emptyStream{})})
 	return svc, auditsStore
 }
 
@@ -77,14 +83,11 @@ func findByAction(t *testing.T, s *audits.MemoryStore, action string) *audits.Au
 func TestService_Create_RecordsAuditCreateAndComplete(t *testing.T) {
 	t.Parallel()
 	svc, auditsStore := newAuditedSvc(t)
-	// Replace the real pg_dump subprocess with
-	// a no-op that returns an empty stream. The
-	// LocalStore's row insertion / Update paths
-	// run normally; the empty file yields a 0-byte
-	// dump (size 0, hash e3b0...).
-	svc.SetDumpFn(func(_ context.Context) (io.ReadCloser, error) {
-		return io.NopCloser(emptyStream{}), nil
-	})
+	// Pre-PR-#228: SetDumpFn returning an
+	// empty stream. Post-PR-#228: the default
+	// fakeDumper installed by newAuditedSvc
+	// already provides the empty stream; no
+	// extra SetDumper call needed.
 	row, err := svc.Create(context.Background(), TriggerManual)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -119,9 +122,6 @@ func TestService_Create_RecordsAuditCreateAndComplete(t *testing.T) {
 func TestService_Delete_RecordsAudit(t *testing.T) {
 	t.Parallel()
 	svc, auditsStore := newAuditedSvc(t)
-	svc.SetDumpFn(func(_ context.Context) (io.ReadCloser, error) {
-		return io.NopCloser(emptyStream{}), nil
-	})
 	row, err := svc.Create(context.Background(), TriggerManual)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -152,9 +152,7 @@ func TestService_WithoutAudits_NoRecord(t *testing.T) {
 		t.Fatalf("NewOSBackend: %v", err)
 	}
 	svc := New(Config{BackupsDir: dir}, NewLocalStore(be), nil)
-	svc.SetDumpFn(func(_ context.Context) (io.ReadCloser, error) {
-		return io.NopCloser(emptyStream{}), nil
-	})
+	svc.SetDumper(&fakeDumper{stream: io.NopCloser(emptyStream{})})
 	if _, err := svc.Create(context.Background(), TriggerManual); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
