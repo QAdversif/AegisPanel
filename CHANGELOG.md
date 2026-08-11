@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-08-11
+
+This is a **hotfix release** that closes the last
+v0.8.15-silent-bug — the `/usr/bin/pg_dump`
+symlink on `pg_wrapper` — that survived v0.8.16
+because PR #224's live smoke test didn't run
+`pg_dump --version` against the deployed image.
+v0.8.16 deployed, the live smoke test caught
+the bug, and PR #226 fixed it.
+
+Single PR (#226), one fix:
+
+### Fixed
+- **Backups: replace `/usr/bin/pg_dump` with the
+  real `pg_dump` ELF binary in the tooling
+  stage.** PR #224 copied `/usr/bin/pg_dump`
+  from the tooling stage (a symlink to
+  `pg_wrapper` shell script) into the runtime.
+  The wrapper requires `/bin/sh` + `dpkg-divert`
+  + the postgresql-common runtime — none of
+  which are in the distroless `base` image.
+  Result on prod: `exec /usr/bin/pg_dump`
+  returned `ENOENT` even though the symlink
+  existed, and `docker exec aegis-panel
+  /usr/bin/pg_dump --version` returned
+  `no such file or directory`. v0.8.17
+  removes the symlink in the tooling stage
+  (`rm /usr/bin/pg_dump`) and copies the real
+  binary from
+  `/usr/lib/postgresql/15/bin/pg_dump` over
+  it (`cp /usr/lib/postgresql/15/bin/pg_dump
+  /usr/bin/pg_dump`). The runtime image just
+  `COPY`s the file in — no shell or `ln`
+  needed in the distroless runtime.
+
+### Lesson (v0.8.15 → v0.8.16 → v0.8.17)
+
+`release.yml` still has no hard-gate smoke test
+that runs `pg_dump --version` against the new
+image before publishing. The CHANGELOG lessons
+in #225 + this PR are not enough. Track as a
+follow-up to `release.yml` — separate PR,
+post-v0.8.17.
+
+### Verification
+- All CI checks green on PR #226
+- `docker exec aegis-panel /usr/bin/pg_dump --version` → `pg_dump (PostgreSQL) 15.18 (Debian 15.18-0+deb12u1)` (live, post-deploy)
+
+### Operational
+- **Smoke test on aibeg.click after deploy:**
+  - `docker exec aegis-panel /usr/bin/pg_dump --version` → `pg_dump (PostgreSQL) 15.18 ...`
+  - `POST /api/v1/backups/` → 200 with `status="running"` then `"ok"`
+  - `POST /api/v1/nodes/{id}/provision` with the Demo-нода's credentials → 200 with `state="online"`
+
+**Closed by:** PR #226
+**Tag:** `v0.8.17` (to be cut after this PR merges)
+
 ## [0.8.16] - 2026-08-11
 
 This is a **hotfix release** that closes two v0.8.15
