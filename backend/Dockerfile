@@ -43,10 +43,17 @@
 # that path directly.
 FROM debian:12-slim AS tooling
 
+# v0.8.17: after install, replace the
+# `/usr/bin/pg_dump` symlink-to-pg_wrapper
+# with the actual `/usr/lib/postgresql/15/bin/pg_dump`
+# ELF binary. The runtime image just `COPY`s
+# both into place — no shell or `ln` needed.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         postgresql-client-15 \
         ca-certificates && \
+    rm /usr/bin/pg_dump && \
+    cp /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump && \
     rm -rf /var/lib/apt/lists/*
 
 # ---- Build stage --------------------------------------------------------
@@ -127,31 +134,31 @@ COPY --from=build /out/aegis-agent /app/bin/aegis-agent
 # upgrade that adds a new .so dependency Just
 # Works without touching this Dockerfile.
 #
-# v0.8.16 fix: copy the actual `pg_dump` binary
-# from `/usr/lib/postgresql/15/bin/pg_dump`
-# (the versioned path, installed by
-# `postgresql-client-15` on Debian 12 "bookworm").
-# The `/usr/bin/pg_dump` symlink to `pg_wrapper` is
-# not used because the wrapper requires a shell
-# + dpkg-divert that's not in the distroless
-# runtime. **Replace** `/usr/bin/pg_dump` with a
-# symlink to the real binary, so
-# `exec.CommandContext("pg_dump", ...)` from the
-# backup service (which uses the bare path
-# `/usr/bin/pg_dump`) still finds the expected
-# path. The symlink step is a separate `RUN` that
-# runs AFTER the `COPY` of the real binary, so
-# the symlink can point to a target inside the
-# image. Use the **exec form** (`RUN ["/busybox/ln", ...]`)
-# because distroless `base` does not ship
-# `/bin/sh` or `/bin/ln` as standalone binaries —
-# the default `RUN ln -sf ...` shell form fails
-# with `stat /bin/sh: no such file or directory`.
-# distroless `base` DOES ship a busybox at
-# `/busybox/busybox` with all the applets (ln,
-# sh, ls) available as `busybox <applet>`.
-RUN ["/busybox/busybox", "ln", "-sf", "/usr/lib/postgresql/15/bin/pg_dump", "/usr/bin/pg_dump"]
+# v0.8.17 fix: in the tooling stage, **replace**
+# `/usr/bin/pg_dump` (a symlink to
+# `pg_wrapper` shell script) with the actual
+# `pg_dump` ELF binary from
+# `/usr/lib/postgresql/15/bin/pg_dump`. Then
+# `COPY` it into the runtime image. The previous
+# approach (COPY the symlink + ln -sf in the
+# runtime stage) failed because:
+#   1. The symlink COPY preserved the
+#      `pg_wrapper` target, which requires
+#      `/bin/sh` + `dpkg-divert` + the
+#      postgresql-common runtime — none of which
+#      are in the distroless `base` image.
+#   2. The `RUN ln -sf` in the runtime stage
+#      failed because distroless `base` has no
+#      `/bin/sh` for the shell form, and no
+#      `/bin/ln` for the exec form (busybox
+#      applets are at `/busybox/<applet>`, not
+#      `/bin/<applet>`).
+# Doing the substitution in the tooling stage
+# avoids both problems: the runtime image just
+# gets a flat file at `/usr/bin/pg_dump` via
+# the `COPY` step.
 COPY --from=tooling /usr/lib/postgresql/15/bin/pg_dump /usr/lib/postgresql/15/bin/pg_dump
+COPY --from=tooling /usr/bin/pg_dump /usr/bin/pg_dump
 COPY --from=tooling /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 
 # CA bundle for the `ca-certificates` shipped
