@@ -134,12 +134,17 @@ COPY --from=build /out/aegis-agent /app/bin/aegis-agent
 # The `/usr/bin/pg_dump` symlink to `pg_wrapper` is
 # not used because the wrapper requires a shell
 # + dpkg-divert that's not in the distroless
-# runtime. Symlink it to the real binary so
-# `exec.CommandContext("pg_dump", ...)` from
-# the backup service still finds the expected
-# path.
+# runtime. **Replace** `/usr/bin/pg_dump` with a
+# symlink to the real binary, so
+# `exec.CommandContext("pg_dump", ...)` from the
+# backup service (which uses the bare path
+# `/usr/bin/pg_dump`) still finds the expected
+# path. The symlink step is a separate `RUN` that
+# runs AFTER the `COPY` of the real binary, so
+# the symlink can point to a target inside the
+# image.
+RUN ln -sf /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump
 COPY --from=tooling /usr/lib/postgresql/15/bin/pg_dump /usr/lib/postgresql/15/bin/pg_dump
-COPY --from=tooling /usr/bin/pg_dump /usr/bin/pg_dump
 COPY --from=tooling /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 
 # CA bundle for the `ca-certificates` shipped
