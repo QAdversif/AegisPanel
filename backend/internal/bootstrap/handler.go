@@ -474,7 +474,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError emits a JSON error body AND logs
+// the error to the panel logger. v0.8.15 added
+// the log line — the previous implementation
+// only wrote the body, so install failures
+// from POST /api/v1/nodes/{id}/provision were
+// invisible in `docker logs aegis-panel` and
+// the operator had to dig through response
+// bodies to find the cause. Now every 4xx/5xx
+// from this package lands in the structured log
+// stream with the (status, msg) pair.
 func writeError(w http.ResponseWriter, status int, msg string) {
+	log.Error().
+		Int("status", status).
+		Str("error", msg).
+		Msg("bootstrap: http error")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"error":"` + jsonEscape(msg) + `"}`))
