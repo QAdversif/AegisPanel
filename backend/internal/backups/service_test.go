@@ -17,10 +17,20 @@ import (
 // yields the given bytes. Used in service tests to
 // drive Create() without invoking the real pg_dump
 // binary.
+//
+// closeErr, when non-nil, is returned by Close().
+// Pre-PR-#228 this field did not exist; the
+// regression test TestServiceCreateFailureOnCloseError
+// was added in PR #228 to lock in the fix for the
+// "status=ok with empty dump" bug where a
+// subprocess that exited non-zero was reported as
+// success because its Close error was discarded
+// by `defer closeQuiet(src)`.
 type fakeDump struct {
-	data    []byte
-	closed  atomic.Bool
-	readErr error
+	data     []byte
+	closed   atomic.Bool
+	readErr  error
+	closeErr error
 }
 
 func (f *fakeDump) Read(p []byte) (int, error) {
@@ -40,7 +50,19 @@ func (f *fakeDump) Read(p []byte) (int, error) {
 
 func (f *fakeDump) Close() error {
 	f.closed.Store(true)
-	return nil
+	return f.closeErr
+}
+
+// fakeDumper is a test Dumper that returns a fixed
+// ReadCloser. The returned stream can be configured
+// to surface a Close error (PR #228 regression
+// coverage) or a Read error.
+type fakeDumper struct {
+	stream io.ReadCloser
+}
+
+func (f *fakeDumper) Dump(_ context.Context, _ string) (io.ReadCloser, error) {
+	return f.stream, nil
 }
 
 func newTestService(t *testing.T, dumpBytes []byte) (*Service, string) {
@@ -68,9 +90,7 @@ func newTestService(t *testing.T, dumpBytes []byte) (*Service, string) {
 		MaxCount:      10,
 	}, store, nil)
 	svc.SetClock(func() time.Time { return time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC) })
-	svc.SetDumpFn(func(ctx context.Context) (io.ReadCloser, error) {
-		return &fakeDump{data: dumpBytes}, nil
-	})
+	svc.SetDumper(&fakeDumper{stream: &fakeDump{data: dumpBytes}})
 	return svc, dir
 }
 
@@ -111,16 +131,13 @@ func TestServiceCreateSingleFlight(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestService(t, []byte("data"))
 
-	// Inject a dumpFn that blocks until `released`.
-	// The first Create to acquire the inflight lock
-	// will block here; the second Create arriving
-	// before release hits TryLock and returns
-	// ErrBackupInProgress.
+	// Inject a Dumper whose stream blocks until
+	// `released`. The first Create to acquire the
+	// inflight lock will block inside Dump; the
+	// second Create arriving before release hits
+	// TryLock and returns ErrBackupInProgress.
 	released := make(chan struct{})
-	svc.SetDumpFn(func(ctx context.Context) (io.ReadCloser, error) {
-		<-released
-		return &fakeDump{data: []byte("x")}, nil
-	})
+	svc.SetDumper(&fakeDumper{stream: &blockingDump{release: released}})
 
 	firstResult := make(chan error, 1)
 	go func() {
@@ -156,9 +173,17 @@ func TestServiceCreateSingleFlight(t *testing.T) {
 func TestServiceCreateFailure(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestService(t, []byte("data"))
-	svc.SetDumpFn(func(ctx context.Context) (io.ReadCloser, error) {
-		return nil, errors.New("simulated pg_dump failure")
-	})
+	// Pre-PR-##228 this injected a function that
+	// returned (nil, err). With the Dumper
+	// interface the same effect is "Dumper returns
+	// an error" — Service.Create sees it at
+	// runDumpToFile:675 and marks the row failed.
+	svc.SetDumper(&fakeDumper{stream: nil})
+	// We need the fakeDumper to actually return an
+	// error from Dump, not just a nil stream.
+	// Replace with an explicit error-returning
+	// Dumper.
+	svc.SetDumper(errDumper{err: errors.New("simulated pg_dump failure")})
 	row, err := svc.Create(ctx, TriggerManual)
 	if err == nil {
 		t.Fatal("Create: expected error, got nil")
@@ -179,6 +204,86 @@ func TestServiceCreateFailure(t *testing.T) {
 		t.Fatalf("List: %d rows, want 1", len(rows))
 	}
 }
+
+// errDumper returns a fixed error from Dump. Used
+// to simulate the "pg_dump subprocess failed to
+// even start" path.
+type errDumper struct{ err error }
+
+func (e errDumper) Dump(_ context.Context, _ string) (io.ReadCloser, error) {
+	return nil, e.err
+}
+
+// TestServiceCreateFailureOnCloseError is the
+// regression test for the v0.8.15/0.8.16/0.8.17
+// silent-failure bug:
+//
+//   - The dump subprocess (real pg_dump) exits
+//     non-zero — e.g. because the DSN was stripped
+//     to a bare db name and pg_dump could not
+//     find a postgres server on the local socket.
+//   - The subprocess's stdout pipe is closed (the
+//     kernel signals EOF to readers) and the
+//     stderr text is captured.
+//   - io.Copy on the pipe returns nil (EOF is
+//     not an error).
+//   - The Service's runDumpToFile MUST then
+//     check src.Close() — which waits for the
+//     subprocess and surfaces the exit-code
+//     error — and propagate it as a hard failure.
+//
+// Pre-PR-#228 the Service used `defer closeQuiet(src)`
+// which discarded the Close error, so the file
+// on disk was a 23-byte empty gzip and the row
+// was marked status=ok. The CI smoke test caught
+// this in production for v0.8.17; this test
+// locks in the fix.
+func TestServiceCreateFailureOnCloseError(t *testing.T) {
+	ctx := context.Background()
+	svc, dir := newTestService(t, []byte("data"))
+
+	closeErr := errors.New("pg_dump: exit status 1 (stderr: connection to server failed)")
+	svc.SetDumper(&fakeDumper{stream: &fakeDump{
+		data:     []byte("data"),
+		closeErr: closeErr,
+	}})
+
+	row, err := svc.Create(ctx, TriggerManual)
+	if err == nil {
+		t.Fatal("Create: expected error from Close failure, got nil")
+	}
+	if row == nil {
+		t.Fatal("Create: expected partial row, got nil")
+	}
+	if row.Status != StatusFailed {
+		t.Fatalf("status = %q, want failed (regression: empty dump must not be status=ok)", row.Status)
+	}
+	// Partial file must be removed — the operator
+	// should never see a 23-byte "successful"
+	// backup on disk.
+	rows, _ := svc.List(ctx)
+	if len(rows) != 1 {
+		t.Fatalf("List: %d rows, want 1", len(rows))
+	}
+	dumpPath := filepath.Join(dir, rows[0].Path)
+	if _, statErr := os.Stat(dumpPath); !os.IsNotExist(statErr) {
+		t.Fatalf("dump file should be removed on Close error, but stat returned %v", statErr)
+	}
+}
+
+// blockingDump is a ReadCloser that blocks every
+// Read until `release` is closed. Used by
+// TestServiceCreateSingleFlight to hold the
+// in-flight lock so a concurrent Create can prove
+// the ErrBackupInProgress path. Close is a no-op
+// (the test doesn't check the result).
+type blockingDump struct{ release <-chan struct{} }
+
+func (b *blockingDump) Read(_ []byte) (int, error) {
+	<-b.release
+	return 0, io.EOF
+}
+func (b *blockingDump) Close() error { return nil }
 
 func TestServiceDeleteRemovesFile(t *testing.T) {
 	ctx := context.Background()
