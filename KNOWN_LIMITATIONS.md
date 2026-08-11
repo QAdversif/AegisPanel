@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.14
+# Known Limitations — AegisPanel v0.8.15
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,26 +6,28 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.14** (the
-audit-3.1 fix chain + body-field shim closure). v0.8.14
-is a **consolidation + security tightening release** that
-closes the v0.8.13 backwards-compat shim: the refresh
-token is **only** in the `Set-Cookie: aegis_rt=...`
-header. The audit-3.1 fix chain (HttpOnly refresh cookie
-plus frontend in-memory only and Caddy CSP) is end-to-end
-active. Migration `0021_inbound_templates.sql` is part of
-v0.8.13+ — it auto-applies on the next panel image bounce
-because the migrations dir is host-mounted and
-`app.Build` runs the migrations as a side effect at
-WORKDIR=`/app`. The v0.8.x bucket is fully shipped
-(host→node mapping #192, subscription URL #193,
-per-user credential filter #198, merged Add+Provision
-dialog #201, eslint cleanup #200, shadcn-vue RadioGroup
-PR #202, inbound-templates PRs #205/#209/#210/#211/#212,
-audit-3.1 #214/#215/#216, body-field drop #217). The
-next candidate is v0.9.0 (smoke test on fresh VM in CI)
-followed by v1.0.0 GA (admin password rotation is the
-remaining GA-blocker).
+The current state of the project is **v0.8.15** (the
+multi-stage Dockerfile chain for `pg_dump` + `aegis-agent`).
+v0.8.15 closes the two silent functional gaps in v0.8.14:
+backups that returned `status="failed"` (because
+`distroless/static` had no dynamic linker for `pg_dump`)
+and provision that returned 502 (because `aegis-agent`
+was not bundled in the panel image). The bootstrap
+handler's `writeError` now logs every 4xx/5xx to the
+structured log stream. PR #222 (squash merge
+`6a46881`). CHANGELOG surgery in PR #223. The full
+gap-vs-roadmap analysis is in
+[`docs/gap-analysis-v0.8.15.md`](./docs/gap-analysis-v0.8.15.md);
+the TL;DR is: the v0.8.x code is **richer** than the
+v9.2 roadmap expected at this point (per-user credentials,
+inbound templates, cookie-only auth, Caddy CSP, webhooks
+with HMAC + DLQ all shipped ahead of the Phase 1 plan),
+but the **operational confidence** (restore-drill on a
+fresh VM, backup cron + retention, 24h soak) is still
+on the MVP-1.0 checklist, not Phase 2. The single
+missing piece for the v1.0.0-mvp-soft-launch tag is
+**v0.9.0 — restore-drill on a fresh VM** (download
+backup → restore → first-boot → panel reachable).
 
 ## v0.8.1 — closed (historical: the v0.8.1 + earlier open items)
 
@@ -704,7 +706,7 @@ additive on the same Tailwind class — last-wins
 semantics for the width, additive for the new
 max-h / overflow).
 
-## v0.8.14 — currently open
+## v0.8.15 — currently open
 
 ### 401 on `POST /api/v1/nodes/{id}/provision` from stale in-memory session (under investigation)
 
@@ -752,6 +754,82 @@ will add a v0.8.x integration test that
 reproduces the stale-session 401 + auto-recovers
 via a single re-login. No backend change is
 required (the auth chain is correct).
+
+### `pg_dump` missing in the panel container — fixed in PR #222 (v0.8.15)
+
+Fixed in v0.8.15 (PR #222). The v0.8.14 panel
+image was built on `gcr.io/distroless/static-debian12:nonroot`
+which has no dynamic linker; `pg_dump` exec
+failed with `ENOENT` on the loader
+(`/lib64/ld-linux-x86-64.so.2`). v0.8.15 adds
+a `debian:12-slim` tooling stage that runs
+`apt-get install postgresql-client`, switches
+the runtime base to `distroless/base` (which
+ships glibc + the linker + busybox), and copies
+`pg_dump` + the whole `/usr/lib/x86_64-linux-gnu`
+tree into the runtime stage. Image size grows
+by ~50 MB. `POST /api/v1/backups/` now returns
+a row with `status="running"` (transitions to
+`"ok"` once the dump completes). Tracked here
+for the historical record; the bug is closed.
+
+### `aegis-agent` missing in the panel container — fixed in PR #222 (v0.8.15)
+
+Fixed in v0.8.15 (PR #222). The v0.8.14 panel
+image had no `aegis-agent` binary. The
+bootstrap installer reads
+`${AEGIS_AGENT_BINARY}` (default `./bin/aegis-agent`)
+and the installer's `os.Stat(in.AgentSource)`
+failed on the first install step
+(`upload-agent`), so `POST /api/v1/nodes/{id}/provision`
+returned 502 with no detail in `docker logs`.
+v0.8.15 adds a second `go build` for
+`./cmd/aegis-agent` in the same build stage,
+copies the resulting binary to
+`/app/bin/aegis-agent`, and sets
+`AEGIS_AGENT_BINARY=/app/bin/aegis-agent` as
+the runtime default. Tracked here for the
+historical record; the bug is closed.
+
+### Bootstrap `writeError` doesn't log (silent 502s) — fixed in PR #222 (v0.8.15)
+
+Fixed in v0.8.15 (PR #222). The HTTP error
+path in `internal/bootstrap/handler.go` only
+wrote the response body — install failures
+from `POST /api/v1/nodes/{id}/provision` were
+invisible in `docker logs aegis-panel`. Added
+a `log.Error().Int("status",...).Str("error",...).Msg(...)`
+line so every 4xx/5xx from this package lands
+in the structured log stream with the
+`(status, msg)` pair. Tracked here for the
+historical record; the bug is closed.
+
+### `scopesForRole("super-admin")` was missing `ScopeBackups` (fixed in PR #221)
+
+Fixed in PR #221. The admin user now has the
+`backups` scope (12 scopes total: admin, read,
+write, nodes, users, subscriptions, hosts, plans,
+webhooks, audits, credentials, **backups**). The
+operator must re-login once to get a new access
+token with the `backups` scope. Tracked here
+for the historical record; the bug is closed.
+
+### `SelectItem value=""` in InboundsView (fixed in PR #221)
+
+Fixed in PR #221. radix-vue's `SelectItem` does
+not allow an empty-string `value` prop (the
+runtime throws `A <SelectItem /> must have a value
+prop that is not an empty string` at setup). The
+"no template" option in the inbound Create + Edit
+dialogs now uses the form-level sentinel `"none"`
+end-to-end (zod default + createForm initialValues
++ editForm blankEditValues + inboundToRow
+prefill). The submit guards
+(`if (values.templateId !== 'none')`) keep the
+wire format clean — the `templateId` field is
+still omitted from the payload when "no template"
+is selected. Tracked here for the historical
+record; the bug is closed.
 
 ## What's NOT a limitation
 
