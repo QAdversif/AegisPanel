@@ -1,38 +1,28 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.14** (latest tagged release, 2026-08-10) ships the
-> full admin surface end-to-end: sing-box on every node, BYO Node
-> bootstrap with real `aegis-agent`, user / host / plan CRUD,
-> subscription render in sing-box / Clash / base64 / HTML formats,
-> audit log, **backups** (with operator CLI), **outgoing webhooks**
-> (HMAC-signed + DLQ), the **Phase 2 multi-user sing-box render**
-> (per-(user, inbound) credentials, multi-user `users: [...]` arrays,
-> narrowed BatchedApplier fan-out, per-user sub URL), and the
-> **v0.8.x operations batch**: persistent panel SSH key
-> (ed25519 + sops+age envelope), three-way auth radio (key / password
-> / stored) on the provision form, HTTP `auth/me` pg-backend fix,
-> full HTTP admin surface for `user_inbound_credentials`,
-> `aegis admin node rotate-panel-key` CLI + HTTP mirror,
-> "Show stored key" debug surface, JSON-logs-in-production config
-> guard, `nodes.Service.RefreshAgentBearer` operator-recovery
-> path, BatchedApplier 401→auto-refresh integration, the
-> **per-user credential filter in the Builder** (closes the
-> v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA
-> tag), **shadcn-vue `RadioGroup` primitive** in the auth-method
-> picker, the **merged "Add node + Provision" dialog**, the
-> **inbound-templates feature** (per-tenant `Params` defaults
-> end-to-end: data model + renderer + validation + frontend UI,
-> 5-PR planned sequence), the **audit-3.1 fix chain**
-> (HttpOnly refresh cookie + frontend `withCredentials` +
-> Caddy CSP for the admin path), and the **v0.8.13 body-field
-> shim closure** (the refresh token is now cookie-only, no
-> longer in the JSON body of `/auth/login` and `/auth/refresh`).
-> **cosign re-sign + verify on every release** (3 new
-> `release.yml` steps: 30s settle + re-sign panel + re-sign UI;
-> closes the v0.8.x `cosign re-signing on every release` row).
-> The CoreProvider abstraction lets a second provider (Xray) ship
-> in v2.0+ without UI surgery. AGPL-3.0. Single-tenant.
+> services. **v0.8.15** (latest tagged release, 2026-08-11) closes
+> two silent functional gaps in the v0.8.14 panel image: backups
+> that 100% failed with `pg_dump not found` (because the
+> distroless/static runtime had no dynamic linker), and provision
+> requests that 100% returned 502 with no detail in `docker logs`
+> (because the bootstrap handler's `writeError` only wrote the
+> response body, no log line). Both fixed in a single multi-stage
+> Dockerfile change (PR #222): adds a `debian:12-slim` tooling
+> stage that runs `apt-get install postgresql-client`, switches
+> the runtime base from `distroless/static` to `distroless/base`,
+> copies `pg_dump` + the whole `/usr/lib/x86_64-linux-gnu` tree
+> into the runtime, adds a second `go build` for `./cmd/aegis-agent`
+> in the same build stage, copies the resulting binary to
+> `/app/bin/aegis-agent`, and sets `AEGIS_AGENT_BINARY=/app/bin/aegis-agent`
+> as the runtime default. Also adds a `log.Error().Int("status",...).Str("error",...).Msg(...)`
+> to `writeError` so every 4xx/5xx from `internal/bootstrap/handler.go`
+> lands in the structured log stream. v0.8.15 is a **drop-in
+> replacement for v0.8.14** on the server side; the rolling-upgrade
+> pattern is the standard "server before client". Image size
+> grows by ~50 MB (mostly the .so tree). Still 2x smaller than
+> a `debian:12-slim` runtime. No OpenAPI / env / migration changes;
+> no breaking changes for the UI.
 >
 > **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend
 > (Vite + shadcn-vue), PostgreSQL, Caddy, fail2ban, sops+age
@@ -40,24 +30,25 @@
 > [`ARCHITECTURE.md`](./ARCHITECTURE.md) (v9.5) for the full design
 > and [`docs/adr/0003-mvp-singbox-vertical-slice.md`](./docs/adr/0003-mvp-singbox-vertical-slice.md)
 > for the MVP strategy.
+>
+> **Gap analysis vs. roadmap:** see
+> [`docs/gap-analysis-v0.8.15.md`](./docs/gap-analysis-v0.8.15.md)
+> for the full Phase 0 / 0.1 / 0.2 / 0.3 / 0.4 / 1.0 status, what's
+> blocking the v1.0.0-mvp-soft-launch tag, and the recommended
+> Tier 1 / 2 / 3 / 4 plan to get there.
 
 ## Status
 
-**v0.8.14 — body-field shim closure (cookie-only auth) — shipped.**
-The v0.8.13 backwards-compat shim that kept the refresh token
-in the JSON body of `/auth/login` and `/auth/refresh` is closed.
-v0.8.14+ is cookie-only: drop the `RefreshToken` field from
-`loginResponse`; drop the `refreshRequest` struct + the
-body-fallback parse in `readRefreshToken`; document the
-previously-undocumented `POST /api/v1/auth/logout` endpoint;
-regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a
-**drop-in replacement for v0.8.13** on the server side; the
-rolling-upgrade pattern is the standard "server before
-client". This is the consolidation + security tightening
-release that closes the audit-3.1 fix chain end-to-end
-(HttpOnly refresh cookie + frontend in-memory only + Caddy
-CSP for the admin path). CHANGELOG-only release cut
-(PR #218, commit `9f8037a`).
+**v0.8.15 — multi-stage Dockerfile for pg_dump + aegis-agent — shipped.**
+Closes the two silent functional gaps in v0.8.14: backups now
+have `pg_dump` available (so `POST /api/v1/backups/` returns a
+row with `status="running"` instead of `status="failed"`), and
+provision requests now have `aegis-agent` available locally (so
+`POST /api/v1/nodes/{id}/provision` can run the install path
+instead of failing on the first `os.Stat` step). The bootstrap
+handler's `writeError` now logs every 4xx/5xx to the structured
+log stream. PR #222 (squash merge `6a46881`). CHANGELOG surgery
+in PR #223.
 
 **v0.8.13 — inbound-templates + audit-3.1 fix chain — shipped.**
 Two big things in one release. (1) The inbound-templates
@@ -163,9 +154,10 @@ The release ladder:
 | `v0.8.12` | **shipped** | Consolidation release closing the 3-PR gap (lint cleanup #200: `eslint --fix` on 5 target files; merged "Add node + Provision" dialog #201: `nodeAddSchema` extends `nodeCreateSchema` with `provisionNow` discriminator; shadcn-vue `RadioGroup` primitive #202: `components/ui/RadioGroup.vue` + `RadioGroupItem.vue` thin wrappers over `radix-vue`; docs closure #203). 0 backend / 0 OpenAPI / 0 env / 0 schema changes. |
 | `v0.8.13` | **shipped** | Feature release: inbound-templates end-to-end (per-tenant `Params` defaults, 5-PR planned sequence — foundation #205 + docs sync #209 + renderer #210 + validation #211 + frontend #212) plus the audit-3.1 fix chain (HttpOnly refresh cookie #214, frontend `withCredentials` #215, Caddy CSP #216). First release where a single feature + a security fix chain both shipped together. Migration `0021_inbound_templates.sql` is the only schema change. |
 | `v0.8.14` | **shipped** | Consolidation + security tightening release: closes the v0.8.13 backwards-compat shim that kept the refresh token in the JSON body of `/auth/login` and `/auth/refresh` (PR #217). v0.8.14+ is cookie-only — drop the `RefreshToken` field from `loginResponse`; drop the `refreshRequest` struct + the body-fallback parse in `readRefreshToken`; document the previously-undocumented `POST /api/v1/auth/logout` endpoint; regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a **drop-in replacement for v0.8.13** on the server side. |
-| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14). |
-| `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) |
-| `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release (per-user credential filter no longer blocks — see [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) for the remaining items) |
+| `v0.8.15` | **shipped** | Multi-stage Dockerfile for `pg_dump` + `aegis-agent` + bootstrap `writeError` logging (PR #222, squash merge `6a46881`). Closes two silent functional gaps from v0.8.14: backups (no `pg_dump` in image → 100% failed rows) and provision (no `aegis-agent` in image → 502 on first `os.Stat` step). Runtime base switched from `distroless/static` to `distroless/base`; `+~50 MB` image size (mostly the .so tree). No OpenAPI / env / migration / UI breaking changes. |
+| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222). |
+| `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) + restore-drill on a clean VM (download backup → restore → first-boot → panel reachable). The single missing piece for the v1.0.0-mvp-soft-launch tag. |
+| `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release. v0.8.15 unblocks the code path; v0.9.0 unblocks the operational confidence. |
 
 See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the milestone ladder,
 [`CHANGELOG.md`](./CHANGELOG.md) for the per-PR release notes, and
