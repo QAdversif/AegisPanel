@@ -22,9 +22,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,13 +109,26 @@ type Service struct {
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 	audits   *audits.Service   // v0.7.x deferred call-site.
 
-	// dumpFn is the function Create calls to obtain
-	// a ReadCloser over the pg_dump output stream.
-	// The default is a real pg_dump subprocess (see
-	// New); tests inject a fake. The function MUST
-	// return a non-nil ReadCloser on success and
-	// close cleanly on context cancellation.
-	dumpFn func(ctx context.Context) (io.ReadCloser, error)
+	// dumper and restorer are the producer-side
+	// interfaces the Service delegates to. The
+	// production wiring (New) installs a
+	// pgBinaries instance configured with the
+	// panel's pg_dump / pg_restore paths; tests
+	// inject fakes via SetDumper / SetRestorer.
+	//
+	// Pre-PR-#228 this was a `dumpFn func(ctx)
+	// (io.ReadCloser, error)` field with the
+	// production impl hardcoded in `realDump`.
+	// Splitting the responsibility into
+	// Dumper / Restorer interfaces lets the
+	// Service treat the dump subprocess as a
+	// black box (it does, e.g. no longer
+	// construct pg_dump argv itself — that lives
+	// in pgBinaries / pgDumpArgs) and lets
+	// future remote-dump providers slot in
+	// without a Service change.
+	dumper   Dumper
+	restorer Restorer
 
 	// inflight is held by Create for the duration of
 	// the pg_dump subprocess. A second Create
@@ -131,16 +142,27 @@ type Service struct {
 // Service skips the per-backup metadata counts and
 // reports zero for `node_count` / `user_count` /
 // `host_count` in the resulting Backup row.
+//
+// New installs a production pgBinaries Dumper /
+// Restorer configured with cfg.PgDumpBin /
+// cfg.PgRestoreBin (defaulting to /usr/bin/pg_dump
+// and /usr/bin/pg_restore). Tests override via
+// SetDumper / SetRestorer.
 func New(cfg Config, store Store, pool *pgxpool.Pool) *Service {
-	if cfg.PgDumpBin == "" {
-		cfg.PgDumpBin = "/usr/bin/pg_dump"
+	pb := newPgBinaries(cfg.PgDumpBin, cfg.PgRestoreBin)
+	// Mirror the resolved paths back into cfg so
+	// the Service's own field reflects the
+	// production defaults.
+	cfg.PgDumpBin = pb.dumpPath
+	cfg.PgRestoreBin = pb.restorePath
+	return &Service{
+		cfg:      cfg,
+		store:    store,
+		pgPool:   pool,
+		clock:    time.Now,
+		dumper:   pb,
+		restorer: pb,
 	}
-	if cfg.PgRestoreBin == "" {
-		cfg.PgRestoreBin = "/usr/bin/pg_restore"
-	}
-	s := &Service{cfg: cfg, store: store, pgPool: pool, clock: time.Now}
-	s.dumpFn = s.realDump
-	return s
 }
 
 // WithWebhooks installs the outbound event service.
@@ -176,13 +198,17 @@ func (s *Service) WithAudits(svc *audits.Service) *Service {
 	return s
 }
 
-// SetDumpFn injects a custom dump function. The
-// default is a real pg_dump subprocess; tests
+// SetDumper injects a custom Dumper. The default
+// is a real pgBinaries wrapping pg_dump; tests
 // override this to produce a deterministic
 // ReadCloser without invoking the system binary.
-func (s *Service) SetDumpFn(fn func(ctx context.Context) (io.ReadCloser, error)) {
-	s.dumpFn = fn
-}
+func (s *Service) SetDumper(d Dumper) { s.dumper = d }
+
+// SetRestorer injects a custom Restorer. The
+// default is a real pgBinaries wrapping
+// pg_restore; tests override this to skip the
+// subprocess entirely.
+func (s *Service) SetRestorer(r Restorer) { s.restorer = r }
 
 // SetClock injects a deterministic clock for tests.
 // The default is time.Now.
@@ -442,17 +468,27 @@ func (s *Service) Open(ctx context.Context, id string) (io.ReadCloser, error) {
 	return f, nil
 }
 
-// Restore runs `pg_restore --clean --if-exists`
-// against the configured DSN from the dump file at
-// id. Returns ErrBackupDisabled if AllowUIRestore
-// is false (the HTTP handler uses this to gate the
-// UI button; the CLI binary bypasses it via a
-// direct method call without the flag, but in v0.5.0
-// the CLI binary is not in scope yet).
+// Restore runs the configured Restorer against the
+// dump file at id. Returns ErrBackupDisabled if
+// AllowUIRestore is false (the HTTP handler uses
+// this to gate the UI button; the CLI binary
+// bypasses it via a direct method call without the
+// flag, but in v0.5.0 the CLI binary is not in
+// scope yet).
 //
-// Restore is dangerous: it drops and recreates every
-// object in the dump. The caller is responsible for
-// having stopped the panel before invoking this.
+// Restore is dangerous: it drops and recreates
+// every object in the dump. The caller is
+// responsible for having stopped the panel before
+// invoking this.
+//
+// Pre-PR-#228 this method called `pg_restore`
+// inline with the same broken `--dbname=`
+// DSN-stripping bug as Create. The fix is to
+// delegate to the injected Restorer, which the
+// production wiring (New) installs as
+// pgBinaries. AllowUIRestore stays a Service-level
+// gate; the Restorer interface has no knowledge
+// of UI / CLI policy.
 func (s *Service) Restore(ctx context.Context, id string) error {
 	if !s.cfg.AllowUIRestore {
 		return ErrBackupDisabled
@@ -466,26 +502,7 @@ func (s *Service) Restore(ctx context.Context, id string) error {
 	// tail in newBackupID) so the path-traversal
 	// taint does not apply here.
 	dumpPath := filepath.Join(s.cfg.BackupsDir, row.Path)
-	// pg_restore is the local apt-installed
-	// client (`/usr/bin/pg_restore` by default,
-	// configurable via AEGIS_BACKUPS_PG_RESTORE
-	// or the future install_panel role). The
-	// dumpPath is server-generated; the DSN is
-	// from the panel's own config. G204 fires on
-	// the joined command line; the actual
-	// injection surface is empty in v0.5.0.
-	cmd := exec.CommandContext(ctx, s.cfg.PgRestoreBin, // #nosec G204,G702 -- pg_restore binary is config-controlled
-		"--clean", "--if-exists",
-		"--dbname="+dsnDatabase(s.cfg.PostgresDSN),
-		"--no-password",
-		dumpPath,
-	)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+dsnPassword(s.cfg.PostgresDSN))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("backups: pg_restore: %w: %s", err, string(out))
-	}
-	return nil
+	return s.restorer.Restore(ctx, s.cfg.PostgresDSN, dumpPath)
 }
 
 // Cleanup applies RetentionDays and MaxCount.
@@ -544,81 +561,31 @@ func (s *Service) populateCounts(ctx context.Context) (schema, nodes, users, hos
 	return
 }
 
-// realDump is the default dumpFn: spawns `pg_dump`
-// and returns a ReadCloser over its stdout.
-func (s *Service) realDump(ctx context.Context) (io.ReadCloser, error) {
-	if _, err := os.Stat(s.cfg.PgDumpBin); err != nil {
-		return nil, fmt.Errorf("backups: pg_dump not found at %s: %w", s.cfg.PgDumpBin, err)
-	}
-	// pg_dump is the local apt-installed
-	// client (`/usr/bin/pg_dump` by default,
-	// configurable via AEGIS_BACKUPS_PG_DUMP or
-	// the future install_panel role). The DSN
-	// is the panel's own. G204 fires on the
-	// joined command line; the actual injection
-	// surface is empty in v0.5.0.
-	cmd := exec.CommandContext(ctx, s.cfg.PgDumpBin, // #nosec G204,G702 -- pg_dump binary is config-controlled
-		"-Fc",
-		"--dbname="+dsnDatabase(s.cfg.PostgresDSN),
-		"--no-password",
-	)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+dsnPassword(s.cfg.PostgresDSN))
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	// stderr is captured for error reporting; the
-	// pipe is closed when the cmd exits, so we
-	// stash it in a strings.Builder and surface it
-	// on failure.
-	stderr := &stderrBuf{buf: &strings.Builder{}}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return &pgDumpReader{cmd: cmd, stdout: stdout, stderr: stderr}, nil
-}
-
-// pgDumpReader wraps the pg_dump subprocess's stdout
-// pipe. The Close method waits for the subprocess to
-// exit (so a context-cancel reader gets the stderr
-// output as part of the error path).
-type pgDumpReader struct {
-	cmd    *exec.Cmd
-	stdout io.ReadCloser
-	stderr *stderrBuf
-}
-
-func (r *pgDumpReader) Read(p []byte) (int, error) { return r.stdout.Read(p) }
-func (r *pgDumpReader) Close() error {
-	_ = r.stdout.Close()
-	err := r.cmd.Wait()
-	if err != nil {
-		return fmt.Errorf("pg_dump: %w (stderr: %s)", err, r.stderr.buf.String())
-	}
-	return nil
-}
-
-// stderrBuf is a thread-safe wrapper around
-// strings.Builder for use as an io.Writer from
-// concurrent goroutines. The pg_dump subprocess
-// writes to stderr from one goroutine; the cmd.Wait
-// caller may read the buffer from another.
-type stderrBuf struct {
-	mu  sync.Mutex
-	buf *strings.Builder
-}
-
-func (s *stderrBuf) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.Write(p)
-}
-
-// runDumpToFile streams the dump function's output
-// into <backupsDir>/<id>.dump.gz. The dump function
-// is `s.dumpFn`; the test injection point.
-func (s *Service) runDumpToFile(ctx context.Context, id string) (string, error) {
+// runDumpToFile streams the Dumper's output into
+// <backupsDir>/<id>.dump.gz. The Dumper is
+// `s.dumper`; the test injection point is
+// SetDumper.
+//
+// Pre-PR-#228 this used `defer closeQuiet(src)` to
+// drop the pg_dump subprocess's Close error, which
+// meant a failed pg_dump run was reported as
+// status=ok with a 0-byte (or near-zero) dump file.
+// The fix: src.Close() is the operation's terminal
+// result and is checked explicitly. closeQuiet is
+// reserved for best-effort handle cleanup (the
+// output file, the gzip writer) where a close
+// error after a successful write is never
+// actionable.
+//
+// The named return + central cleanup defer is
+// load-bearing: the file handle `out` must be
+// closed BEFORE the function tries to remove the
+// file on error, otherwise the remove races with
+// the still-open handle (Windows: "process cannot
+// access the file because it is being used by
+// another process"). The defer block closes `out`
+// first, then conditionally removes the file.
+func (s *Service) runDumpToFile(ctx context.Context, id string) (dumpPathOut string, errOut error) {
 	if s.cfg.BackupsDir == "" {
 		return "", errors.New("backups: empty BackupsDir")
 	}
@@ -627,11 +594,22 @@ func (s *Service) runDumpToFile(ctx context.Context, id string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	defer closeQuiet(out)
+	// Single deferred cleanup: always close the
+	// file handle, and on a failed run remove the
+	// file from disk. The ordering is critical —
+	// closeQuiet runs first, then the conditional
+	// remove, because Windows / macOS refuse to
+	// delete a file with an open write handle.
+	defer func() {
+		closeQuiet(out)
+		if errOut != nil {
+			_ = os.Remove(dumpPath)
+		}
+	}()
 
 	// The dump goes through a gzip layer so the
 	// .dump.gz convention holds even when the
-	// underlying dumpFn returns a raw stream. The
+	// underlying Dumper returns a raw stream. The
 	// custom-format pg_dump output is already
 	// compressed; the gzip here is metadata-cheap
 	// and makes the .dump.gz filename honest.
@@ -641,13 +619,27 @@ func (s *Service) runDumpToFile(ctx context.Context, id string) (string, error) 
 	}
 	defer closeQuiet(gz)
 
-	src, err := s.dumpFn(ctx)
+	src, err := s.dumper.Dump(ctx, s.cfg.PostgresDSN)
 	if err != nil {
 		return "", err
 	}
-	defer closeQuiet(src)
 	if _, err := io.Copy(gz, src); err != nil {
-		_ = os.Remove(dumpPath)
+		// Drain the dump reader so the
+		// subprocess is reaped and its
+		// stderr is captured, but ignore
+		// the result — the io.Copy error is
+		// the primary signal.
+		_ = src.Close()
+		return "", err
+	}
+	// src.Close() is the pg_dump subprocess's
+	// exit code; a non-nil error here means the
+	// dump did NOT succeed and the file on disk
+	// is not a valid backup. The Service.Create
+	// caller (Create) treats this as a hard
+	// failure, marks the row status=failed,
+	// and fires the backup.failed event.
+	if err := src.Close(); err != nil {
 		return "", err
 	}
 	if err := gz.Close(); err != nil {
@@ -716,33 +708,6 @@ func newBackupID(now time.Time) string {
 	_, _ = rand.Read(randTail)
 	tail := hex.EncodeToString(randTail)
 	return "bck_" + encoded + "_" + tail
-}
-
-// dsnDatabase and dsnPassword parse the Postgres
-// DSN. We don't use url.ParseQuery because pgx's DSN
-// format is "key=value key=value" (no &), not a
-// query string. A real pgx DSN parser is a future
-// improvement; for v0.5.0 the operator supplies a
-// DSN in the form
-//
-//	postgres://user:pass@host:port/dbname?sslmode=disable
-//
-// which url.Parse handles correctly.
-func dsnDatabase(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimPrefix(u.Path, "/")
-}
-
-func dsnPassword(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return ""
-	}
-	pw, _ := u.User.Password()
-	return pw
 }
 
 // _ keeps the uuid import live for the day the
