@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.18] - 2026-08-12
+
+This is a **quality release** that closes the
+silent backup-failure bug discovered by the
+v0.8.17 live smoke test. v0.8.17 made
+`/usr/bin/pg_dump` a real binary; the smoke
+test then showed `POST /api/v1/backups/`
+returning `status=ok` with a 23-byte empty
+dump file. The DSN handling and the
+subprocess-error propagation both needed
+fixing — neither was a quick patch.
+
+Single PR (#228), architectural refactor:
+
+### Fixed
+- **Backups: full DSN passed to `pg_dump`,
+  not a stripped-to-db-name form.** Pre-PR,
+  `service.go:560-562` called
+  `pg_dump -Fc --dbname=aegis --no-password`
+  via `dsnDatabase()` reducing the panel's
+  full DSN to a bare db name. Without
+  host / user / port pg_dump tried a local
+  Unix socket that does not exist in the
+  panel container, exited 1, and the
+  Service silently marked the row `status=ok`
+  with the empty 23-byte dump. `Restore` had
+  the same shape (line 479). v0.8.18 lifts
+  the pg_dump / pg_restore knowledge into
+  `pgBinaries` and passes the full DSN.
+- **Backups: `pg_dump` exit code is now the
+  operation result, not best-effort close.**
+  Pre-PR, `runDumpToFile` used
+  `defer closeQuiet(src)` to satisfy
+  errcheck. The `src` was the `pgDumpReader`
+  whose `Close()` returns the subprocess
+  exit code; `closeQuiet` is intentionally
+  best-effort and discarded the error.
+  The result: a non-zero pg_dump exit was
+  reported as `status=ok`. v0.8.18 calls
+  `src.Close()` explicitly and propagates
+  any error. The partial file is removed
+  via a single named-return deferred
+  cleanup (Windows-safe: the file handle
+  is closed before the unlink attempt).
+  Regression test:
+  `TestServiceCreateFailureOnCloseError`.
+
+### Security
+- **Backups: password never in argv.**
+  The new `pgDumpArgs` / `pgRestoreArgs`
+  pure functions extract the password from
+  a URL-form DSN into the `PGPASSWORD`
+  env var, and pass `--dbname=postgres://user@host:port/db?…`
+  with no password in the URL. Pre-PR,
+  the full URL (with password) was passed
+  via `--dbname=`, leaking the password
+  to any local user reading
+  `/proc/<pid>/cmdline` or `ps`. The
+  key=value DSN form is also supported
+  and passes through unchanged. The
+  existing `redactDSN()` in
+  `cmd/aegis-pg-restore/main.go` is the
+  evidence the codebase already takes
+  password hygiene seriously.
+
+### Refactor
+- **Backups: Dumper / Restorer interfaces
+  split out of Service.** The Service
+  used to know pg_dump's argv shape
+  directly (`realDump` method, the
+  `dumpFn func(ctx) (io.ReadCloser, error)`
+  field). v0.8.18 introduces two
+  consumer-side interfaces — `Dumper` and
+  `Restorer` — and a concrete `pgBinaries`
+  implementation. The Service now holds
+  the DSN in its `Config` and delegates
+  the dump / restore to the injected
+  Dumper / Restorer. Test injection
+  changed from `SetDumpFn` to
+  `SetDumper` (and new `SetRestorer`).
+  The pre-PR `dsnDatabase` /
+  `dsnPassword` helpers and the
+  in-Service `realDump` method are
+  gone; their coverage moved to
+  `pg_binaries_test.go` table-driven
+  tests of the new `pgDumpArgs` /
+  `pgRestoreArgs` pure functions (8
+  cases each, including a password-leak
+  invariant check).
+
+### Files
+- `backend/internal/backups/dumper.go` (new)
+- `backend/internal/backups/pg_binaries.go` (new)
+- `backend/internal/backups/pg_binaries_test.go` (new)
+- `backend/internal/backups/service.go` (-128 / +107)
+- `backend/internal/backups/service_test.go` (+104 / -39)
+- `backend/internal/backups/dispatcher_test.go` (+6 / -4)
+- `backend/internal/backups/audit_dispatcher_test.go` (+8 / -20)
+- `backend/internal/backups/schedule_test.go` (removed obsolete `TestDSNParse`)
+
+### Lesson
+The three silent v0.8.15 / v0.8.16 / v0.8.17
+backup bugs were all caught by post-deploy
+smoke tests on the prod server, never by
+the `release.yml` workflow. The follow-up to
+add a hard-gate `pg_dump --version` check
+to `release.yml` is tracked separately
+(post-v0.8.18).
+
 ## [0.8.17] - 2026-08-11
 
 This is a **hotfix release** that closes the last
