@@ -21,11 +21,31 @@
 # We copy the artifacts into the runtime image
 # so the panel can exec `pg_dump` from inside
 # the distroless container.
+#
+# v0.8.16 fix: install `postgresql-client-15`
+# (the versioned metapackage that matches
+# Debian 12 "bookworm" — `postgresql-client-16`
+# does NOT exist on bookworm; that package name
+# only exists on Debian 13 "trixie" or on the
+# PGDG apt repo). The bare `postgresql-client`
+# metapackage installs `postgresql-common`
+# which symlinks `/usr/bin/pg_dump` to the
+# `pg_wrapper` shell script — and `pg_wrapper`
+# requires a shell. The distroless `base` image
+# ships `busybox` (so shell scripts run in
+# principle), but in practice the path through
+# `postgresql-common`'s wrapper resolves to
+# `dpkg-divert`-protected symlinks that the
+# distroless image does not have. The versioned
+# `postgresql-client-15` ships the actual
+# `pg_dump` ELF binary at
+# `/usr/lib/postgresql/15/bin/pg_dump` — copy
+# that path directly.
 FROM debian:12-slim AS tooling
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        postgresql-client \
+        postgresql-client-15 \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -106,6 +126,19 @@ COPY --from=build /out/aegis-agent /app/bin/aegis-agent
 # benefit is that any future postgresql-client
 # upgrade that adds a new .so dependency Just
 # Works without touching this Dockerfile.
+#
+# v0.8.16 fix: copy the actual `pg_dump` binary
+# from `/usr/lib/postgresql/15/bin/pg_dump`
+# (the versioned path, installed by
+# `postgresql-client-15` on Debian 12 "bookworm").
+# The `/usr/bin/pg_dump` symlink to `pg_wrapper` is
+# not used because the wrapper requires a shell
+# + dpkg-divert that's not in the distroless
+# runtime. Symlink it to the real binary so
+# `exec.CommandContext("pg_dump", ...)` from
+# the backup service still finds the expected
+# path.
+COPY --from=tooling /usr/lib/postgresql/15/bin/pg_dump /usr/lib/postgresql/15/bin/pg_dump
 COPY --from=tooling /usr/bin/pg_dump /usr/bin/pg_dump
 COPY --from=tooling /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 

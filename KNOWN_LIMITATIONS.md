@@ -822,9 +822,9 @@ runtime throws `A <SelectItem /> must have a value
 prop that is not an empty string` at setup). The
 "no template" option in the inbound Create + Edit
 dialogs now uses the form-level sentinel `"none"`
-end-to-end (zod default + createForm initialValues
-+ editForm blankEditValues + inboundToRow
-prefill). The submit guards
+end-to-end (zod default, createForm initialValues,
+editForm blankEditValues, inboundToRow prefill).
+The submit guards
 (`if (values.templateId !== 'none')`) keep the
 wire format clean — the `templateId` field is
 still omitted from the payload when "no template"
