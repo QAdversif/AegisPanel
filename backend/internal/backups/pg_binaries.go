@@ -58,8 +58,8 @@ func newPgBinaries(dumpPath, restorePath string) *pgBinaries {
 
 // Compile-time interface checks.
 var (
-	_ Dumper    = (*pgBinaries)(nil)
-	_ Restorer  = (*pgBinaries)(nil)
+	_ Dumper   = (*pgBinaries)(nil)
+	_ Restorer = (*pgBinaries)(nil)
 )
 
 // Dump spawns `pg_dump -Fc` against the given DSN
@@ -68,6 +68,11 @@ var (
 // Close error is the operation result (it captures
 // the subprocess exit code and stderr).
 func (b *pgBinaries) Dump(ctx context.Context, dsn string) (io.ReadCloser, error) {
+	// #nosec G703 -- b.dumpPath comes from the panel's
+	// boot-time Config (env: AEGIS_BACKUPS_PG_DUMP,
+	// default /usr/bin/pg_dump), not from request
+	// input. The same Config field feeds every
+	// backup run, so per-run validation is a no-op.
 	if _, err := os.Stat(b.dumpPath); err != nil {
 		return nil, fmt.Errorf("backups: pg_dump not found at %s: %w", b.dumpPath, err)
 	}
@@ -89,6 +94,10 @@ func (b *pgBinaries) Dump(ctx context.Context, dsn string) (io.ReadCloser, error
 // dumpPath. Returns an error wrapping the
 // subprocess's combined output on failure.
 func (b *pgBinaries) Restore(ctx context.Context, dsn, dumpPath string) error {
+	// #nosec G703 -- b.restorePath comes from the panel's
+	// boot-time Config (env: AEGIS_BACKUPS_PG_RESTORE,
+	// default /usr/bin/pg_restore), not from request
+	// input.
 	if _, err := os.Stat(b.restorePath); err != nil {
 		return fmt.Errorf("backups: pg_restore not found at %s: %w", b.restorePath, err)
 	}
@@ -145,9 +154,23 @@ func (b *pgBinaries) Restore(ctx context.Context, dsn, dumpPath string) error {
 // passing it to pg_dump would be a silent misconfig.
 func pgDumpArgs(dsn string) (args []string, pgpw string, err error) {
 	u, perr := url.Parse(dsn)
-	if perr != nil || u.Scheme == "" {
-		// key=value form, or any DSN that lacks
-		// a URL scheme — pass through.
+	if perr != nil {
+		// Truly unparseable URL — treat as opaque
+		// key=value form and pass through. pg_dump
+		// will either accept it (if it's a
+		// key=value DSN) or fail with its own
+		// error. We deliberately do not surface
+		// perr here because the caller is the
+		// panel's own config (AEGIS_POSTGRES_DSN),
+		// not user input, and a key=value-style
+		// DSN that url.Parse can't handle is still
+		// a valid input to libpq.
+		//nolint:nilerr // url.Parse error is non-actionable for the key=value fallback path
+		return []string{"-Fc", "--dbname=" + dsn, "--no-password"}, "", nil
+	}
+	if u.Scheme == "" {
+		// key=value form (or any other scheme-less
+		// DSN libpq understands). Pass through.
 		return []string{"-Fc", "--dbname=" + dsn, "--no-password"}, "", nil
 	}
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
@@ -174,7 +197,14 @@ func pgDumpArgs(dsn string) (args []string, pgpw string, err error) {
 // hygiene (PGPASSWORD env, never argv).
 func pgRestoreArgs(dsn string) (args []string, pgpw string, err error) {
 	u, perr := url.Parse(dsn)
-	if perr != nil || u.Scheme == "" {
+	if perr != nil {
+		// See pgDumpArgs for the rationale — a
+		// key=value DSN that url.Parse rejects is
+		// still a valid libpq input.
+		//nolint:nilerr // url.Parse error is non-actionable for the key=value fallback path
+		return []string{"--clean", "--if-exists", "--dbname=" + dsn, "--no-password"}, "", nil
+	}
+	if u.Scheme == "" {
 		return []string{"--clean", "--if-exists", "--dbname=" + dsn, "--no-password"}, "", nil
 	}
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
