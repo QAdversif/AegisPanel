@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.15] - 2026-08-11
+
+This release **closes two silent functional gaps** in the v0.8.14
+panel image: backups that failed with `pg_dump not found` (because
+the distroless/static runtime had no dynamic linker), and provision
+requests that returned 502 with no detail in `docker logs` (because
+the bootstrap handler's `writeError` only wrote the response body).
+
+Single PR (#222), three coordinated changes:
+
+### Fixed
+- **Backups: bundle `pg_dump` in panel image.** v0.8.14 was built
+  on `distroless/static-debian12:nonroot`, which has no dynamic
+  linker. The backup service exec'd `/usr/bin/pg_dump` and the
+  loader lookup failed with ENOENT — every row got `status=failed`,
+  error `pg_dump not found at /usr/bin/pg_dump`. The new Dockerfile
+  adds a `tooling` stage built on `debian:12-slim` that runs
+  `apt-get install postgresql-client`, then copies `pg_dump` + the
+  whole `/usr/lib/x86_64-linux-gnu` tree into a `distroless/base`
+  runtime (the base variant ships glibc + the linker + busybox).
+  Image size grows by ~50 MB (mostly the .so tree). Still 2x
+  smaller than a `debian:12-slim` runtime.
+- **Provision: bundle `aegis-agent` in panel image.** v0.8.14 was
+  built with only the panel binary; the bootstrap installer reads
+  `${AEGIS_AGENT_BINARY}` (default `./bin/aegis-agent`) and the
+  installer's `os.Stat(in.AgentSource)` failed on the first install
+  step (`upload-agent`). The new Dockerfile adds a second
+  `go build` for `./cmd/aegis-agent` in the same build stage, copies
+  the binary to `/app/bin/aegis-agent`, and sets
+  `AEGIS_AGENT_BINARY=/app/bin/aegis-agent` as the runtime default.
+- **Bootstrap `writeError` now logs.** `internal/bootstrap/handler.go`'s
+  HTTP error path used to only write the JSON body, so install
+  failures from `POST /api/v1/nodes/{id}/provision` were invisible
+  in `docker logs aegis-panel`. Added a `log.Error().Int("status",...).Str("error",...).Msg(...)`
+  line so every 4xx/5xx from this package lands in the structured
+  log stream with the (status, msg) pair.
+
+### Verification
+- `go build ./...` — clean
+- `go vet ./...` — clean
+- `go test -count=1 -tags=integration -run='^$' ./...` — clean
+  (compile-tagged stubs)
+- `go test -count=1 ./internal/bootstrap/` — passes
+- All 24/24 CI checks green on PR #222
+
+### Operational
+- **Smoke test on the live server.click after deploy:** `POST /api/v1/backups/`
+  should return 200 with `status="running"` (then transition to
+  `"ok"` once the dump completes). `POST /api/v1/nodes/{id}/provision`
+  with a real Demo-нода should now log the per-stage install
+  progress to `docker logs aegis-panel` (the `connect`, `upload-agent`,
+  `write-env`, `install-unit`, `verify` stages).
+
+### Not in this release
+- v0.8.14 audit-3.1 fix chain (HttpOnly cookie + in-memory Pinia
+  access token + Caddy CSP) — unchanged, already on prod.
+- v0.8.14 dialog overflow + SelectItem empty value (PR #220 + #221)
+  — unchanged, already on prod.
+- Backup scheduler cron + retention policy (not yet
+  implemented; backup is still manual via the UI or
+  `POST /api/v1/backups/`).
+- Restore-drill on fresh VM (this is the single missing
+  piece for the MVP-1.0 soft-launch gate; see
+  `docs/gap-analysis-v0.8.15.md`).
+
+**Closed by:** PR #222
+**Tag:** `v0.8.15` (to be cut after this PR merges)
+
 ## [0.8.14] - 2026-08-10
 
 This is a **consolidation + security tightening release**
