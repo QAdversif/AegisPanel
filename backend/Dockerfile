@@ -142,8 +142,15 @@ COPY --from=build /out/aegis-agent /app/bin/aegis-agent
 # path. The symlink step is a separate `RUN` that
 # runs AFTER the `COPY` of the real binary, so
 # the symlink can point to a target inside the
-# image.
-RUN ln -sf /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump
+# image. Use the **exec form** (`RUN ["/busybox/ln", ...]`)
+# because distroless `base` does not ship
+# `/bin/sh` or `/bin/ln` as standalone binaries —
+# the default `RUN ln -sf ...` shell form fails
+# with `stat /bin/sh: no such file or directory`.
+# distroless `base` DOES ship a busybox at
+# `/busybox/busybox` with all the applets (ln,
+# sh, ls) available as `busybox <applet>`.
+RUN ["/busybox/busybox", "ln", "-sf", "/usr/lib/postgresql/15/bin/pg_dump", "/usr/bin/pg_dump"]
 COPY --from=tooling /usr/lib/postgresql/15/bin/pg_dump /usr/lib/postgresql/15/bin/pg_dump
 COPY --from=tooling /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 
