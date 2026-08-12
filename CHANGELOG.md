@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.19] - 2026-08-12
+
+This is a **compatibility hotfix** that ships
+a pg_dump whose major version matches the
+production `postgres:16-alpine` server.
+The v0.8.18 live smoke test caught the
+mismatch — pg_dump 15.18 (from stock Debian
+12's `postgresql-client-15`) refuses to
+dump a PostgreSQL 16 server with
+"server version mismatch". The v0.8.18
+PR #228 fix made this bug visible as
+`status=failed` in the API response; v0.8.19
+resolves the root cause.
+
+Single PR (#229), Dockerfile-only:
+
+### Fixed
+- **Backups: panel image now ships
+  `postgresql-client-16` from the PGDG
+  apt repo.** The `tooling` stage in
+  `backend/Dockerfile` adds the PGDG repo
+  (`https://apt.postgresql.org/pub/repos/apt`),
+  installs the GPG key from the PGDG
+  canonical URL, and runs
+  `apt-get install postgresql-client-16`.
+  The v0.8.17 pattern of
+  `rm /usr/bin/pg_dump && cp /usr/lib/postgresql/16/bin/pg_dump /usr/bin/pg_dump`
+  in the tooling stage is preserved so the
+  distroless runtime image gets a flat
+  pg_dump ELF (not the `pg_wrapper`
+  shell-script symlink). The PGDG list and
+  the GPG key are removed at the end of
+  the `RUN` so the image does not contain
+  arbitrary third-party trust anchors
+  long-term.
+
+### Files
+- `backend/Dockerfile` (tooling stage + the
+  matching runtime `COPY` lines)
+
+### Verification
+v0.8.19's live smoke test on the live server.click:
+`docker exec aegis-panel /usr/bin/pg_dump --version`
+should report `pg_dump (PostgreSQL) 16.x` and
+`POST /api/v1/backups/` should return a
+`status=ok` row with `size_bytes` matching
+the on-disk `.dump.gz` size — not the
+23-byte empty-dump signature of v0.8.15
+through v0.8.18.
+
 ## [0.8.18] - 2026-08-12
 
 This is a **quality release** that closes the
