@@ -20,14 +20,16 @@ import (
 type mockClient struct {
 	mu sync.Mutex
 
-	connectErr error
-	runOut     string
-	runErr     error
-	uploadErr  error
+	connectErr    error
+	runOut        string
+	runErr        error
+	uploadErr     error
+	uploadSwapErr error
 
-	connectCalled bool
-	runCmds       []string
-	uploadPaths   []string
+	connectCalled   bool
+	runCmds         []string
+	uploadPaths     []string
+	uploadSwapPaths []string
 }
 
 func (m *mockClient) Connect(_ context.Context) error {
@@ -49,6 +51,13 @@ func (m *mockClient) Upload(_ context.Context, src, dst string, _ os.FileMode) e
 	defer m.mu.Unlock()
 	m.uploadPaths = append(m.uploadPaths, dst)
 	return m.uploadErr
+}
+
+func (m *mockClient) UploadAndSwap(_ context.Context, src, dst string, _ os.FileMode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.uploadSwapPaths = append(m.uploadSwapPaths, dst)
+	return m.uploadSwapErr
 }
 
 func (m *mockClient) Close() error { return nil }
@@ -84,8 +93,11 @@ func TestInstaller_SuccessPath(t *testing.T) {
 	if !mock.connectCalled {
 		t.Error("Connect not called")
 	}
-	if len(mock.uploadPaths) == 0 {
-		t.Error("Upload not called")
+	if len(mock.uploadSwapPaths) == 0 {
+		t.Error("UploadAndSwap not called (the agent binary path)")
+	}
+	if len(mock.uploadPaths) != 0 {
+		t.Errorf("Upload called (should be UploadAndSwap for binaries): %v", mock.uploadPaths)
 	}
 	if len(mock.runCmds) == 0 {
 		t.Error("Run not called (env / unit / verify)")
@@ -123,9 +135,16 @@ func TestInstaller_ConnectFailureShortCircuits(t *testing.T) {
 // TestInstaller_UploadFailure verifies the
 // upload step is reported with the correct
 // stage. The verify step is not run.
+//
+// The upload error is on uploadSwapErr (not
+// uploadErr) because the agent binary goes
+// through UploadAndSwap. A naive `Upload` only
+// failure would be on a different code path
+// (public-key upload in rotate-panel-key) and
+// is not exercised here.
 func TestInstaller_UploadFailure(t *testing.T) {
 	mock := &mockClient{
-		uploadErr: errors.New("sftp: permission denied"),
+		uploadSwapErr: errors.New("sftp: permission denied"),
 	}
 	src := writeTempScript(t, "#!/bin/sh\nexit 0\n")
 
