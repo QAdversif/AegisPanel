@@ -70,6 +70,16 @@ func (f *fakeSSHClient) Upload(_ context.Context, _, _ string, _ os.FileMode) er
 	return errors.New("not implemented in fakeSSHClient")
 }
 
+// UploadAndSwap is the v0.8.25+ method for
+// replacing a binary that may be currently
+// executing on the remote. The fake
+// implementation mirrors Upload (not used by
+// the refresh-bearer path; it exists only to
+// satisfy the `bootstrap.Client` interface).
+func (f *fakeSSHClient) UploadAndSwap(_ context.Context, _, _ string, _ os.FileMode) error {
+	return errors.New("not implemented in fakeSSHClient")
+}
+
 // Close satisfies the `bootstrap.Client`
 // interface. The signature is the real
 // one; the v0.8.7 caller wraps the

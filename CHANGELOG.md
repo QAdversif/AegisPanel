@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Bootstrap: `Installer.uploadAgent` uses
+  `Client.UploadAndSwap` (new SFTP temp+rename
+  primitive) instead of `Client.Upload`.** Direct
+  SFTP overwrite of `/usr/local/bin/aegis-agent`
+  on a re-provision fails with `SSH_FX_FAILURE`
+  on Linux — the kernel returns `ETXTBSY` (text
+  file busy) for a write that would unlink a
+  binary currently mmap'd for execution by
+  another process. v0.8.25 splits the upload
+  into two steps: SFTP-write the new binary to
+  a temp file (`.aegis-agent.swap.<rand>`) in
+  the same directory, then `mv -f` the temp
+  over the target via SSH. The rename(2) call
+  succeeds even when the target is executing;
+  the running process keeps the unlinked inode
+  until it exits, and a new process (or the
+  systemd `Restart=always` loop) picks up the
+  new binary at the same path. The temp file
+  is cleaned up on every exit path
+  (best-effort, swallowed `Remove` error on
+  the happy path because rename already
+  unlinked it). v0.8.x releases worked on a
+  fresh install (the file did not exist yet)
+  but failed on a re-provision — caught during
+  the v0.8.24 live smoke (`L4 → 502`, `state:
+  "offline"`), root-caused to ETXTBSY via
+  `lsof /usr/local/bin/aegis-agent` showing
+  the running PID holds the file open for
+  execution. v0.9.0 candidate: surface the
+  `Restart=always` semantic by running
+  `systemctl kill --signal=SIGTERM
+  aegis-agent.service` before the SFTP upload
+  (the `Restart=always` unit restarts
+  immediately, the new binary is in place by
+  the time the new process is up). Tracked
+  under "ETXTBSY + service-restart race" in
+  KNOWN_LIMITATIONS.
+
+### Added
+- **`bootstrap.Client.UploadAndSwap(ctx, src, dst,
+  mode)` interface method** — the temp+rename
+  primitive. The existing `Upload` is unchanged
+  and remains the right call for non-binary
+  uploads (public-key push, agent.env, systemd
+  unit) where the destination does not exist
+  yet and ETXTBSY is impossible. The
+  `sshClient` impl uses `crypto/rand` for the
+  8-hex-char temp suffix (4 bytes = 32 bits of
+  entropy, no PID collisions across panel
+  restarts). `sshFingerprintWire` and the
+  `Installer.uploadAgent` flow are unchanged
+  except for the new call. Mock seam in
+  `installer_test.go` records
+  `uploadSwapPaths` separately from
+  `uploadPaths` so a regression that calls
+  `Upload` instead of `UploadAndSwap` for the
+  agent binary fails the
+  `TestInstaller_SuccessPath` assertion.
+
 ## [0.8.24] - 2026-08-12
 
 This is a **state-propagation fix** that closes

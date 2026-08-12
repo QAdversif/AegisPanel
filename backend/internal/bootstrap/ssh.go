@@ -45,8 +45,10 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -103,6 +105,26 @@ type Client interface {
 	// with mode 0644 (the install workflow
 	// `chmod`s the binary to 0755 separately).
 	Upload(ctx context.Context, src, dst string, mode os.FileMode) error
+
+	// UploadAndSwap copies src to a temp file
+	// in the same directory as dst, chmods the
+	// temp file to mode, then atomically
+	// renames the temp file over dst via
+	// `mv -f`. The temp+rename pattern is the
+	// only way to replace a binary that is
+	// currently executing on the remote: the
+	// Linux kernel returns ETXTBSY for a
+	// direct SFTP overwrite (the binary's
+	// mmap'd text region is busy), but
+	// rename(2) is always allowed — the
+	// existing process keeps the unlinked
+	// inode until it exits, and a new process
+	// (or a service restart) sees the new
+	// binary. The temp file MUST be in the
+	// same directory so the rename is atomic
+	// (same filesystem); the helper
+	// swapTempPath enforces this.
+	UploadAndSwap(ctx context.Context, src, dst string, mode os.FileMode) error
 
 	// Close shuts down the SSH connection. Safe
 	// to call on a never-Connected client (no
@@ -619,6 +641,139 @@ func (c *sshClient) uploadStream(ctx context.Context, src io.Reader, dst string,
 		return fmt.Errorf("bootstrap: sftp chmod %s: %w", dst, err)
 	}
 	return nil
+}
+
+// UploadAndSwap copies the local file at src to
+// a temp file in the same directory as dst,
+// chmods the temp file to mode, then runs
+// `mv -f <tmp> <dst>` over SSH. The temp+rename
+// pattern is the only way to replace a binary
+// that is currently executing on the remote.
+//
+// # Why this exists (v0.8.25 live-smoke bug)
+//
+// PR #228 (Dumper/Restorer refactor) and the
+// v0.8.23 release workflow rebuilt the panel
+// image without a Go change. A re-provision of an
+// already-running node tried to SFTP-overwrite
+// /usr/local/bin/aegis-agent and failed with
+// "Failure" (SSH_FX_FAILURE). The root cause is
+// Linux's ETXTBSY: the kernel refuses to let one
+// process unlink / truncate a binary that is
+// currently mmap'd for execution by another
+// process. The sftp-server (which is itself
+// running as the SSH user) gets the error and
+// surfaces it as SSH_FX_FAILURE.
+//
+// The fix is the canonical Unix one: write a
+// fresh file, then rename(2) it over the target.
+// rename(2) is permitted even when the target is
+// being executed — the running process keeps the
+// unlinked inode alive until it exits, and a new
+// process (or the systemd `Restart=always` loop)
+// sees the new binary at the same path.
+//
+// The temp file MUST be in the same directory as
+// dst so the rename is atomic (same filesystem).
+// The helper swapTempPath constructs the path.
+func (c *sshClient) UploadAndSwap(ctx context.Context, src, dst string, mode os.FileMode) error {
+	if c.sftp == nil {
+		return errors.New("bootstrap: not connected")
+	}
+	type result struct {
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		resCh <- result{c.uploadAndSwapStream(ctx, src, dst, mode)}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case r := <-resCh:
+		return r.err
+	}
+}
+
+// uploadAndSwapStream is the worker half of
+// UploadAndSwap. Split out so the goroutine can
+// be cancelled via ctx without leaking open file
+// handles.
+//
+// On any error path after the SFTP create
+// succeeds, the function best-effort cleans up
+// the temp file so a failed install does not leave
+// a stale ".aegis-agent.swap.<rand>" file on the
+// remote. The happy path (mv succeeds) leaves the
+// temp unlinked because rename(2) moves the
+// directory entry; the cleanup Remove then
+// returns "no such file" which is silently
+// ignored.
+func (c *sshClient) uploadAndSwapStream(ctx context.Context, src, dst string, mode os.FileMode) error {
+	local, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("bootstrap: open local %s: %w", src, err)
+	}
+	defer func() { _ = local.Close() }()
+	if err := c.ensureRemoteDir(ctx, filepath.Dir(dst)); err != nil {
+		return err
+	}
+	tmpPath, err := swapTempPath(dst)
+	if err != nil {
+		return err
+	}
+	// SFTP create on a fresh path: the kernel
+	// only blocks overwrite of an EXECUTING
+	// binary; creating a new file in the same
+	// directory is always permitted (we own
+	// the parent as root).
+	remote, err := c.sftp.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("bootstrap: sftp create temp %s: %w", tmpPath, err)
+	}
+	// Best-effort cleanup of the temp file on
+	// every exit path. See the function comment
+	// for the rationale.
+	defer func() { _ = c.sftp.Remove(tmpPath) }()
+	if err := copyContext(ctx, remote, local); err != nil {
+		return fmt.Errorf("bootstrap: sftp write temp %s: %w", tmpPath, err)
+	}
+	if err := remote.Close(); err != nil {
+		return fmt.Errorf("bootstrap: sftp close temp %s: %w", tmpPath, err)
+	}
+	if err := c.sftp.Chmod(tmpPath, mode); err != nil {
+		return fmt.Errorf("bootstrap: sftp chmod temp %s: %w", tmpPath, err)
+	}
+	// Atomic rename via shell. %q shell-quotes
+	// both paths so a path with spaces or quotes
+	// is safe. `mv -f` is the POSIX-portable way
+	// to replace one file with another on the
+	// same filesystem; it calls rename(2)
+	// under the hood, which is allowed even
+	// when the destination is being executed.
+	mvCmd := fmt.Sprintf("mv -f %q %q", tmpPath, dst)
+	if _, err := c.Run(ctx, mvCmd); err != nil {
+		return fmt.Errorf("bootstrap: sftp swap (mv %s %s): %w", tmpPath, dst, err)
+	}
+	return nil
+}
+
+// swapTempPath returns a unique temp path in the
+// same directory as dst. The ".swap.<rand>" suffix
+// is hidden-ish (operator won't see it in a normal
+// `ls`) and unique within + across processes (the
+// 8-hex-char suffix is from crypto/rand, 32 bits
+// of entropy is more than enough to avoid
+// collisions for the install workflow). The temp
+// file MUST be in the same directory as dst so the
+// subsequent rename(2) is atomic (same filesystem).
+func swapTempPath(dst string) (string, error) {
+	var rnd [4]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return "", fmt.Errorf("bootstrap: random: %w", err)
+	}
+	name := fmt.Sprintf(".%s.swap.%s", filepath.Base(dst), hex.EncodeToString(rnd[:]))
+	return filepath.Join(filepath.Dir(dst), name), nil
 }
 
 // ensureRemoteDir creates the remote directory
