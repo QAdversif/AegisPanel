@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.25] - 2026-08-12
+
+This is a **re-provision fix** that closes the
+last silent production bug from the v0.8.17 →
+v0.8.24 live smoke series. v0.8.24 made the
+state-propagation work end-to-end (DB state
+flips to `online` after a successful L4), but
+a subsequent **re-provision** of an already-
+running node failed at the `upload-agent`
+stage with `sftp: "Failure" (SSH_FX_FAILURE)`.
+The root cause is Linux's `ETXTBSY`: the
+kernel refuses to let one process unlink or
+truncate a binary that's currently mmap'd for
+execution by another process. v0.8.25 splits
+the upload into two steps (SFTP to a temp file,
+then `mv -f` over the target) — the only
+race-free way to replace a running executable.
+A running process keeps the unlinked inode
+until it exits, and a new process (or the
+systemd `Restart=always` loop) picks up the
+new binary at the same path.
+
+Single PR (#235), bootstrap-only:
+
 ### Fixed
 - **Bootstrap: `Installer.uploadAgent` uses
   `Client.UploadAndSwap` (new SFTP temp+rename
