@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.22] - 2026-08-12
+
+This is a **host-key-algorithm fix** that closes
+the last silent production bug from the
+v0.8.17 → v0.8.22 live smoke series. PR #231
+(`v0.8.21`) made the fingerprint compare run
+on the binary wire format, but the compare
+still rejected the operator's pin because
+the SSH server negotiated an ECDSA host key
+while the operator had pinned the ed25519
+fingerprint. The Go client's `HostKeyAlgorithms`
+list accepted any of `{rsa, ecdsa, ed25519}`
+and let the server pick.
+
+Single PR (#232), bootstrap-only:
+
+### Fixed
+- **Bootstrap: pin `HostKeyAlgorithms` to
+  `["ssh-ed25519"]` in the SSH client config.**
+  The operator's `expected_fingerprint` is for
+  ONE specific key. With the previous "accept
+  any algorithm" default the server could
+  negotiate a different key (e.g. ECDSA when
+  the operator pinned ed25519), the
+  fingerprint compare would always fail, and
+  the provision would return
+  `ErrHostKeyMismatch` even with a correct
+  pin. v0.8.22 forces the client to only
+  accept ed25519, so the fingerprint compare
+  always runs on the SAME key the operator
+  pinned. The Demo-нода (`cdn2ne.<prod-host>.click`)
+  exposes three host keys (rsa, ecdsa-sha2-
+  nistp256, ed25519); with v0.8.21 the client
+  was picking ECDSA per the server's kexinit
+  and the operator's ed25519 pin was rejected.
+  v0.9.0 candidate: parse the algorithm from
+  the expected fingerprint and pin
+  accordingly so an operator can pin ed25519
+  OR ecdsa OR rsa. Until then the operator is
+  expected to pin an ed25519 fingerprint.
+
+### Files
+- `backend/internal/bootstrap/ssh.go` —
+  `ssh.ClientConfig` gains
+  `HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}`.
+  ~25 lines of comment explaining the
+  rationale and the v0.9.0 follow-up.
+
+### Verification
+v0.8.22's live smoke test on the live server.click:
+`POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
+with `tofu_policy: accept-and-append` and
+the Demo-нода's `expected_fingerprint:
+SHA256:***REMOVED***`
+should return 200 with `state: "online"`.
+
 ## [0.8.21] - 2026-08-12
 
 This is a **fingerprint-compare fix** that closes
