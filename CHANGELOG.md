@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `docs/README.md` + `docs/ROADMAP.md` + `docs/operator-guide.md`
-  + `docs/guide/quickstart.md` + `KNOWN_LIMITATIONS.md` +
+  - `docs/guide/quickstart.md` + `KNOWN_LIMITATIONS.md` +
   `ARCHITECTURE.md` + `README.md` — v0.8.25 sync (the
   v0.8.16..v0.8.25 silent-bug chain is closed; the docs
   reflect that). New `### v0.8.16..v0.8.25 — the silent-bug
@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - `deploy/docker/.env.example` — full v0.8.25 production
   reference. The dev-mode minimal example is preserved
-  + a production section with all 11 `AEGIS_*_BACKEND=pg`
+  - a production section with all 11 `AEGIS_*_BACKEND=pg`
   vars, `AEGIS_WEBHOOKS_SECRET_AGE_*` envelope vars, the
   `AEGIS_AGENT_BINARY` / `AEGIS_AGENT_KNOWN_HOSTS`
   bootstrap vars, the `AEGIS_BACKUPS_*` retention vars, the

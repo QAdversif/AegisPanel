@@ -484,7 +484,7 @@ bug for context:
    `pg_dump` in image)" + "provision returns
    502 (no `aegis-agent` in image)".
 2. **v0.8.16** (PR #224) — `postgresql-client-15`
-   + `joinHostPort` host:port parse. Closes
+   - `joinHostPort` host:port parse. Closes
    "pg_dump symlink to `pg_wrapper` shell
    script in distroless/runtime".
 3. **v0.8.17** (PR #226) — replace symlink
@@ -538,7 +538,7 @@ priorities" sections.
 
 **A v0.9.0 follow-up** is a `release.yml`
 hard-gate smoke test that runs `pg_dump --version`
-+ a tiny backup against the freshly-built image
+- a tiny backup against the freshly-built image
 BEFORE publishing. This would have caught every
 one of bugs #1-#5 in CI. Tracked in
 [`docs/gap-analysis-v0.8.24.md`](./gap-analysis-v0.8.24.md)
