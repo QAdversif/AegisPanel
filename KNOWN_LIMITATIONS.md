@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.15
+# Known Limitations — AegisPanel v0.8.25
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,28 +6,33 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.15** (the
-multi-stage Dockerfile chain for `pg_dump` + `aegis-agent`).
-v0.8.15 closes the two silent functional gaps in v0.8.14:
-backups that returned `status="failed"` (because
-`distroless/static` had no dynamic linker for `pg_dump`)
-and provision that returned 502 (because `aegis-agent`
-was not bundled in the panel image). The bootstrap
-handler's `writeError` now logs every 4xx/5xx to the
-structured log stream. PR #222 (squash merge
-`6a46881`). CHANGELOG surgery in PR #223. The full
-gap-vs-roadmap analysis is in
-[`docs/gap-analysis-v0.8.15.md`](./docs/gap-analysis-v0.8.15.md);
+The current state of the project is **v0.8.25** (the
+`UploadAndSwap` fix for ETXTBSY-safe re-provision of a
+running agent). v0.8.25 closes the **9-bug silent-production
+chain** that started in v0.8.15 (pg_dump missing in image)
+and ran through v0.8.16..v0.8.24 (symlink wrapper,
+DSN-stripped dump call, postgres 15 vs 16 mismatch,
+known_hosts TOFU unreachable, wire-vs-line fingerprint,
+ed25519 HostKeyAlgorithms pin, `SHA256:` prefix-strip,
+state-write `UpdateInput{}` empty struct, ETXTBSY on
+direct binary overwrite). All nine bugs were caught by
+post-deploy live smoke tests, never by the
+`release.yml` workflow — a v0.9.0 candidate is the
+`release.yml` hard-gate smoke test. PR #235 (squash merge
+`0ce05992`). The full gap-vs-roadmap analysis is in
+[`docs/gap-analysis-v0.8.24.md`](./docs/gap-analysis-v0.8.24.md);
 the TL;DR is: the v0.8.x code is **richer** than the
-v9.2 roadmap expected at this point (per-user credentials,
+v9.5 roadmap expected at this point (per-user credentials,
 inbound templates, cookie-only auth, Caddy CSP, webhooks
 with HMAC + DLQ all shipped ahead of the Phase 1 plan),
 but the **operational confidence** (restore-drill on a
 fresh VM, backup cron + retention, 24h soak) is still
 on the MVP-1.0 checklist, not Phase 2. The single
 missing piece for the v1.0.0-mvp-soft-launch tag is
-**v0.9.0 — restore-drill on a fresh VM** (download
-backup → restore → first-boot → panel reachable).
+**v0.9.0 — restore-drill on a fresh VM + `release.yml`
+hard-gate smoke** (download backup → restore → first-boot
+→ panel reachable; new release fails the gate if `pg_dump
+--version` doesn't return a real binary).
 
 ## v0.8.1 — closed (historical: the v0.8.1 + earlier open items)
 
@@ -706,7 +711,274 @@ additive on the same Tailwind class — last-wins
 semantics for the width, additive for the new
 max-h / overflow).
 
-## v0.8.15 — currently open
+## v0.8.16..v0.8.25 — the silent-bug chain (closed)
+
+The v0.8.16..v0.8.25 release cycle was dominated by a
+chain of **9 silent production bugs** in the panel's
+backup + provision code path. Every one was caught by
+a post-deploy live-smoke test on the live server,
+**never by the `release.yml` workflow**. The single
+most-important v0.9.0 follow-up is a `release.yml`
+hard-gate smoke test (a `pg_dump --version` + a
+tiny backup against the freshly-built image) that
+would have caught every one of them before publish.
+
+### v0.8.15 — multi-stage Dockerfile for `pg_dump` + `aegis-agent` (PR #222)
+
+Fixed in v0.8.15 (PR #222). The v0.8.14 panel
+image was built on
+`gcr.io/distroless/static-debian12:nonroot`
+which has no dynamic linker; `pg_dump` exec
+failed with `ENOENT` on the loader
+(`/lib64/ld-linux-x86-64.so.2`). v0.8.15 adds
+a `debian:12-slim` tooling stage that runs
+`apt-get install postgresql-client`, switches
+the runtime base to `distroless/base` (which
+ships glibc + the linker + busybox), and copies
+`pg_dump` + the whole `/usr/lib/x86_64-linux-gnu`
+tree into the runtime stage. Image size grows
+by ~50 MB. `POST /api/v1/backups/` now returns
+a row with `status="running"` (transitions to
+`"ok"` once the dump completes). The same PR
+adds a second `go build` for `./cmd/aegis-agent`
+in the same build stage, copies the resulting
+binary to `/app/bin/aegis-agent`, and sets
+`AEGIS_AGENT_BINARY=/app/bin/aegis-agent` as
+the runtime default (the v0.8.14 default
+`./bin/aegis-agent` 502'd the first install step).
+The same PR adds a `log.Error().Int("status",...).Str("error",...).Msg(...)`
+line to `internal/bootstrap/handler.go` so every
+4xx/5xx from this package lands in the structured
+log stream with the `(status, msg)` pair.
+
+### v0.8.16 — `postgresql-client-15` + `joinHostPort` (PR #224)
+
+Fixed in v0.8.16 (PR #224). v0.8.15's
+`apt-get install postgresql-client` in the
+tooling stage still produced a `/usr/bin/pg_dump`
+that was a **symlink to `pg_wrapper`**, a
+shell script. The runtime base
+`distroless/base-debian12:nonroot` has **no
+shell** (`/bin/sh` is not in the image), so
+`pg_dump` exited 1 silently on every call.
+v0.8.16 installs the real `postgresql-client-15`
+package in the runtime stage (not just the
+tooling stage) and fixes `joinHostPort` to
+handle the `host:22:22` (double-colon) parse
+path that bit the early Live demo debug.
+
+### v0.8.17 — replace symlink with real binary (PR #226)
+
+Fixed in v0.8.17 (PR #226). v0.8.16 still
+left a symlink at `/usr/bin/pg_dump → pg_wrapper`
+in the runtime image; v0.8.17 explicitly
+removes the symlink and copies the real
+`/usr/lib/postgresql/15/bin/pg_dump` to
+`/usr/bin/pg_dump` in the tooling stage. The
+resulting image has a working `pg_dump` that
+exits 0 on `--version` and produces a real SQL
+dump on a server connection. Combined with
+v0.8.18 (the next fix) this is when
+`POST /api/v1/backups/` first returned a row
+with `status="ok"` and a non-empty `size_bytes`.
+
+### v0.8.18 — `Dumper` / `Restorer` interfaces (PR #228)
+
+Fixed in v0.8.18 (PR #228). Architectural
+refactor: the single `dumpFn func(ctx) (io.ReadCloser, error)`
+callback is split into consumer-side `Dumper`
+and `Restorer` interfaces; the service holds
+the full DSN in `Config` and delegates extract
+to injected `Dumper` / `Restorer`. Production
+wiring installs `pgBinaries`. The PR also fixes
+3 silent bugs:
+
+- **Full DSN was stripped to bare db name** by
+  the v0.8.17 DSN helper (`dsnDatabase(dbName string)
+  string`). The panel was connecting to
+  `postgres://localhost:5432/<dbname>` (no
+  user, no password) which the postgres server
+  rejected with `FATAL: no PostgreSQL user name
+  specified in startup packet`. The user-facing
+  symptom was 23-byte empty-dump files
+  masquerading as "successful" backups.
+- **pg_dump subprocess exit code was discarded**
+  by `closeQuiet(src io.ReadCloser) error` — a
+  best-effort `Close()` whose return value was
+  always ignored. A failed pg_dump (any non-zero
+  exit) was indistinguishable from a successful
+  one at the row-write level.
+- **`pgDumpReader.Close()` now returns the
+  subprocess exit code** (not best-effort close).
+  A failed pg_dump now surfaces as `status="failed"`
+  in the API and the partial file is removed by
+  named-return deferred cleanup.
+
+`pgDumpArgs(dsn string) (args []string, pgpw string, err error)`
+is a pure function (table-tested) that builds
+the argv + extracts the password to a `PGPASSWORD`
+env var. **PGPASSWORD env, NEVER argv** (defends
+against `/proc/<pid>/cmdline` leak).
+
+### v0.8.19 — pg_dump 15 → 16 via PGDG (PR #229)
+
+Fixed in v0.8.19 (PR #229). v0.8.18 fixed the
+silent-fail mode but the binary was still pg_dump
+15 against a postgres-16 server, which fails
+with `pg_dump: error: server version: 16.x;
+pg_dump version: 15.x` (server-major-version
+mismatch). v0.8.19 adds the PGDG GPG key +
+`apt.postgresql.org` repo in the tooling stage +
+`apt-get install postgresql-client-16` + copies
+the real `/usr/lib/postgresql/16/bin/pg_dump`
+into the runtime image. The PGDG trust anchor
+(apt list + GPG key) is removed at the end of
+the `RUN` (no third-party repos in the runtime
+image long-term). Live smoke on the first v0.8.19
+deploy: backup row `status="ok"`, `size_bytes=21982`
+(real 21KB dump, not 23 bytes).
+
+### v0.8.20 — TOFU policy reachable (PR #230)
+
+Fixed in v0.8.20 (PR #230). Pre-PR the
+`bootstrap.hostKeyCallback` early-returned the
+strict `knownhosts.New` whenever the
+`known_hosts` file existed (even an empty one),
+which short-circuited the TOFU policy entirely.
+The result was that on a fresh install — where
+`/var/lib/aegis/known_hosts` is created as a 0-byte
+file by the volume mount — the very first
+provision call hit `knownhosts: key is unknown`
+with no fallback. PR #230 lifts the TOFU logic
+to be the single source of truth: the
+`known_hosts` file is consulted **INSIDE** the
+`TofuAcceptAndAppend` callback (and inside
+`TofuReject`), never as an early exit. 3
+regression tests: empty-file TOFU accepts,
+known-key accepts silently, mismatch rejects
+with `ErrHostKeyMismatch`.
+
+### v0.8.21 — fingerprint from binary wire format (PR #231)
+
+Fixed in v0.8.21 (PR #231). Pre-PR the panel
+used Go's `ssh.FingerprintSHA256` which (in
+modern Go) actually hashes the **authorized_keys
+line format** (`"ssh-ed25519 AAAA…\n"`), not
+the binary wire format. The operator's
+OpenSSH-generated fingerprint pin (computed
+by `ssh-keygen -lf` on the wire format) therefore
+mismatched the actual key. v0.8.21 adds a new
+`sshFingerprintWire(key) string` helper that
+SHA-256s `key.Marshal()` + strips trailing `=`
+from the base64, matching `ssh-keygen -lf`
+byte-for-byte. The test fixture uses a real
+Demo-нода public-key blob.
+
+### v0.8.22 — pin `HostKeyAlgorithms` to ed25519 (PR #232)
+
+Fixed in v0.8.22 (PR #232). Pre-PR the panel
+accepted any of `{rsa, ecdsa, ed25519}` during
+SSH kex; the server's `kexinit` preferred
+ECDSA, the operator's ed25519 pin was rejected
+as "mismatch". v0.8.22 pins the algorithm to
+`[]string{ssh.KeyAlgoED25519}` in
+`ssh.ClientConfig.HostKeyAlgorithms`. v0.9.0
+candidate: parse the algorithm from the expected
+fingerprint (32-byte ed25519 vs 64-byte P-256
+vs 256-byte RSA-2048) and pin the algorithm list
+accordingly. Until then the operator is expected
+to pin an ed25519 fingerprint.
+
+### v0.8.23 — `stripFingerprintPrefix` (PR #233)
+
+Fixed in v0.8.23 (PR #233). Pre-PR the compare
+was literal: `pCnGi…` ≠ `SHA256:pCnGi…` (the
+actual key matched the un-prefixed side, the
+operator's pin had the `SHA256:` prefix).
+v0.8.23 adds a `stripFingerprintPrefix(fp string) string`
+helper (case-insensitive via `strings.ToUpper` +
+`HasPrefix`) and routes `fingerprintEqual(a, b)`
+through it. 5 table-driven test cases:
+case-insensitive, different base64, mixed
+prefix, MD5 prefix, unknown prefix (passes
+through → surfaces as real mismatch).
+
+### v0.8.24 — `BootstrapNodeProvider.Update` propagates State (PR #234)
+
+Fixed in v0.8.24 (PR #234). Pre-PR the method
+mutated `current.State` locally then called
+`a.Svc.Update(ctx, current.ID, UpdateInput{})`
+with an empty struct. `UpdateInput` is a
+pointer-field struct where nil pointers mean
+"leave alone", so the underlying service
+update wrote nothing — and the operator's UI /
+state machine silently disagreed with the
+provision response. v0.8.24 passes the new
+state via `UpdateInput{State: &newState}`.
+One real-line code change + a comment block
+documenting the pre-PR-#234 bug.
+
+### v0.8.25 — `Client.UploadAndSwap` for ETXTBSY-safe binary replacement (PR #235)
+
+Fixed in v0.8.25 (PR #235). Pre-PR the SFTP
+step did a direct overwrite of
+`/usr/local/bin/aegis-agent`. On a **re-provision
+of an already-running node**, Linux returned
+`ETXTBSY` (text-file-busy) — the kernel refuses
+to let one process unlink or truncate a binary
+currently mmap'd for execution by another
+process. The sftp-server (running as the SSH
+user) gets the error and surfaces it as
+`SSH_FX_FAILURE`, which the panel mapped to
+HTTP 502 with the error `sftp: "Failure"
+(SH5_FX_FAILURE)`. v0.8.25 splits the upload
+into SFTP-to-temp (`.aegis-agent.swap.<8-hex>`
+in the same directory, 4 random bytes from
+`crypto/rand` for the suffix, 32 bits of
+entropy) + `mv -f` over the target via SSH.
+`rename(2)` is always permitted even when the
+target is being executed — the running process
+keeps the unlinked inode alive until it exits,
+and a new process (or the systemd
+`Restart=always` loop) picks up the new binary
+at the same path. Mock seam in
+`installer_test.go` records `uploadSwapPaths`
+separately from `uploadPaths`; the
+`TestInstaller_SuccessPath` assertion
+specifically checks that the agent-binary
+path uses `UploadAndSwap` (regression guard
+against a future patch that swaps back to
+`Upload`). End-to-end verified on the live
+server: v0.8.25 deployed, Demo-нода
+re-provisioned without the `systemctl stop`
+workaround that v0.8.24 needed.
+
+### `scopesForRole("super-admin")` was missing `ScopeBackups` — closed in PR #221
+
+Fixed in PR #221. The admin user now has the
+`backups` scope (12 scopes total: admin, read,
+write, nodes, users, subscriptions, hosts, plans,
+webhooks, audits, credentials, **backups**). The
+operator must re-login once to get a new access
+token with the `backups` scope.
+
+### `SelectItem value=""` in InboundsView — closed in PR #221
+
+Fixed in PR #221. radix-vue's `SelectItem` does
+not allow an empty-string `value` prop (the
+runtime throws `A <SelectItem /> must have a value
+prop that is not an empty string` at setup). The
+"no template" option in the inbound Create + Edit
+dialogs now uses the form-level sentinel `"none"`
+end-to-end (zod default, createForm initialValues,
+editForm blankEditValues, inboundToRow prefill).
+The submit guards
+(`if (values.templateId !== 'none')`) keep the
+wire format clean — the `templateId` field is
+still omitted from the payload when "no template"
+is selected.
+
+## v0.8.25 — currently open
 
 ### 401 on `POST /api/v1/nodes/{id}/provision` from stale in-memory session (under investigation)
 
@@ -755,81 +1027,75 @@ reproduces the stale-session 401 + auto-recovers
 via a single re-login. No backend change is
 required (the auth chain is correct).
 
-### `pg_dump` missing in the panel container — fixed in PR #222 (v0.8.15)
+### `known_hosts` temp-file creation in the nonroot container — workaround, v0.9.0 candidate
 
-Fixed in v0.8.15 (PR #222). The v0.8.14 panel
-image was built on `gcr.io/distroless/static-debian12:nonroot`
-which has no dynamic linker; `pg_dump` exec
-failed with `ENOENT` on the loader
-(`/lib64/ld-linux-x86-64.so.2`). v0.8.15 adds
-a `debian:12-slim` tooling stage that runs
-`apt-get install postgresql-client`, switches
-the runtime base to `distroless/base` (which
-ships glibc + the linker + busybox), and copies
-`pg_dump` + the whole `/usr/lib/x86_64-linux-gnu`
-tree into the runtime stage. Image size grows
-by ~50 MB. `POST /api/v1/backups/` now returns
-a row with `status="running"` (transitions to
-`"ok"` once the dump completes). Tracked here
-for the historical record; the bug is closed.
+The `bootstrap.hostKeyCallback` (post-handshake
+TOFU-append path) tries to write a temp file
+in `/var/lib/aegis/known_hosts.<pid>` to
+atomically rename it onto the final
+`known_hosts` path. The panel container runs as
+the distroless `nonroot` user (UID 65532), and
+`/var/lib/aegis/` on the host is owned by the
+`aegis-deploy:1000` user with mode 0755. UID
+65532 cannot create new files in the directory
+even when the existing `known_hosts` file is
+mode 0666 (the chmod-666 workaround we use for
+the `known_hosts` file itself doesn't extend to
+new files in the parent dir). The current
+runtime workaround is `chmod 0666
+/var/lib/aegis/known_hosts` (and accept that
+the temp-file append fails — the warning
+`bootstrap: temp known_hosts: open
+/var/lib/aegis/.known_hosts.<pid>: permission denied`
+in the panel logs is the signal). The first
+TOFU connection on a fresh install still
+succeeds because the panel tries the file
+append best-effort (the operator-pinned
+fingerprint is the primary safety net). The
+proper fix is a v0.9.0 mount ownership change:
+either `chown 65532:65532 /var/lib/aegis/`
+in the deploy script, or have the deploy
+script `chmod 1777 /var/lib/aegis/` (sticky +
+world-writable so the nonroot container can
+create temp files in the same dir). Tracked
+under "ETXTBSY + service-restart race + temp-file
+ownership" in `KNOWN_LIMITATIONS.md`.
 
-### `aegis-agent` missing in the panel container — fixed in PR #222 (v0.8.15)
+### State-machine "invalid state transition" warning — cosmetic, v0.9.0 candidate
 
-Fixed in v0.8.15 (PR #222). The v0.8.14 panel
-image had no `aegis-agent` binary. The
-bootstrap installer reads
-`${AEGIS_AGENT_BINARY}` (default `./bin/aegis-agent`)
-and the installer's `os.Stat(in.AgentSource)`
-failed on the first install step
-(`upload-agent`), so `POST /api/v1/nodes/{id}/provision`
-returned 502 with no detail in `docker logs`.
-v0.8.15 adds a second `go build` for
-`./cmd/aegis-agent` in the same build stage,
-copies the resulting binary to
-`/app/bin/aegis-agent`, and sets
-`AEGIS_AGENT_BINARY=/app/bin/aegis-agent` as
-the runtime default. Tracked here for the
-historical record; the bug is closed.
+The provisioner logs a `bootstrap: invalid state
+transition: offline -> online (should not
+happen)` warning when a node transitions from
+`offline` to `online` via re-provision. The
+underlying state machine considers the
+`offline → online` transition a "no change"
+(idempotent install) and flags it as invalid,
+but the SQL UPDATE still goes through. The
+warning is purely cosmetic — operators see a
+spurious "should not happen" log line on every
+successful re-provision. v0.9.0 candidate: pin
+`offline → online` as a valid transition in the
+state machine's "provisionable" set (the
+existing code in `internal/bootstrap/provisioner.go`
+already special-cases this with a comment but
+the log is still emitted). Tracked under
+"state-machine validation gap" in
+`KNOWN_LIMITATIONS.md`.
 
-### Bootstrap `writeError` doesn't log (silent 502s) — fixed in PR #222 (v0.8.15)
+### v0.9.0 — Restore-drill on fresh VM (the GA blocker)
 
-Fixed in v0.8.15 (PR #222). The HTTP error
-path in `internal/bootstrap/handler.go` only
-wrote the response body — install failures
-from `POST /api/v1/nodes/{id}/provision` were
-invisible in `docker logs aegis-panel`. Added
-a `log.Error().Int("status",...).Str("error",...).Msg(...)`
-line so every 4xx/5xx from this package lands
-in the structured log stream with the
-`(status, msg)` pair. Tracked here for the
-historical record; the bug is closed.
-
-### `scopesForRole("super-admin")` was missing `ScopeBackups` (fixed in PR #221)
-
-Fixed in PR #221. The admin user now has the
-`backups` scope (12 scopes total: admin, read,
-write, nodes, users, subscriptions, hosts, plans,
-webhooks, audits, credentials, **backups**). The
-operator must re-login once to get a new access
-token with the `backups` scope. Tracked here
-for the historical record; the bug is closed.
-
-### `SelectItem value=""` in InboundsView (fixed in PR #221)
-
-Fixed in PR #221. radix-vue's `SelectItem` does
-not allow an empty-string `value` prop (the
-runtime throws `A <SelectItem /> must have a value
-prop that is not an empty string` at setup). The
-"no template" option in the inbound Create + Edit
-dialogs now uses the form-level sentinel `"none"`
-end-to-end (zod default, createForm initialValues,
-editForm blankEditValues, inboundToRow prefill).
-The submit guards
-(`if (values.templateId !== 'none')`) keep the
-wire format clean — the `templateId` field is
-still omitted from the payload when "no template"
-is selected. Tracked here for the historical
-record; the bug is closed.
+The `release.yml` hard-gate smoke test
+(terraform + ansible + boot-log artifact in
+CI) + a clean-VM restore-drill (download
+backup → restore → first-boot → panel reachable)
+is the single missing piece for the
+`v1.0.0-mvp-soft-launch` tag. The Tier 1 plan
+in `docs/gap-analysis-v0.8.24.md` §6 sequences
+this as the dominant work unit (~3 days of
+focused effort). The pre-existing
+`tools/scripts/restore.sh` covers the operator
+side; a CI job that runs it against a
+fresh-provisioned VM is the missing piece.
 
 ## What's NOT a limitation
 

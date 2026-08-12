@@ -108,8 +108,8 @@ sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env \
 # or the operator's local .tmp-build-env-flags.py script.
 
 # Pull the images on the panel host
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.14'
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.14'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.25'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.25'
 
 # Run the panel (one shot, with all the -e flags from above)
 ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net \
