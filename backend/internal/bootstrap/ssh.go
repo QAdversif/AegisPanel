@@ -45,6 +45,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -403,7 +405,7 @@ func (c *sshClient) hostKeyCallback() (ssh.HostKeyCallback, error) {
 			if c.cfg.ExpectedFingerprint == "" {
 				return errors.New("bootstrap: TOFU requires ExpectedFingerprint")
 			}
-			actual := ssh.FingerprintSHA256(key)
+			actual := sshFingerprintWire(key)
 			if !fingerprintEqual(actual, c.cfg.ExpectedFingerprint) {
 				return fmt.Errorf("%w: actual %s, expected %s",
 					ErrHostKeyMismatch, actual, c.cfg.ExpectedFingerprint)
@@ -657,6 +659,47 @@ func copyContext(ctx context.Context, dst io.Writer, src io.Reader) error {
 // either case).
 func fingerprintEqual(a, b string) bool {
 	return strings.EqualFold(a, b)
+}
+
+// sshFingerprintWire computes the SHA-256
+// fingerprint of the BINARY WIRE format of the
+// public key. The result is the base64 of the
+// raw hash with no `SHA256:` prefix; the panel
+// adds that prefix at the API boundary.
+//
+// This matches the format that `ssh-keygen -lf`
+// emits and the format every operator pastes
+// into the Add Node dialog.
+//
+// Pre-PR-#231 bug: the code called
+// `ssh.FingerprintSHA256(key)`, which is a
+// misnomer in the Go x/crypto/ssh library —
+// it hashes the AUTHORIZED_KEYS LINE format
+// (`"ssh-ed25519 AAAA...\n"`), not the binary
+// wire format. The two hashes are different.
+// The result: every first-time provision on a
+// fresh install compared the operator's
+// OpenSSH-standard fingerprint to the wrong
+// hash and reported a spurious
+// `ErrHostKeyMismatch`.
+//
+// We do not use the `FingerprintLegacySHA256`
+// helper either; that one is identical to
+// `FingerprintSHA256` and has the same bug.
+func sshFingerprintWire(key ssh.PublicKey) string {
+	h := sha256.New()
+	h.Write(key.Marshal())
+	// Strip the trailing `=` padding to match
+	// the form `ssh-keygen -lf` emits (and the
+	// form every operator pastes). The base64
+	// payload of a 32-byte SHA-256 hash has 43
+	// significant chars + one padding char; the
+	// padding is redundant for fingerprint
+	// comparison and the panel's
+	// `fingerprintEqual` helper is case-insensitive
+	// — this lets us be byte-for-byte identical
+	// to what an operator pastes from `ssh-keygen`.
+	return strings.TrimRight(base64.StdEncoding.EncodeToString(h.Sum(nil)), "=")
 }
 
 // ExecError is returned by Run when the remote
