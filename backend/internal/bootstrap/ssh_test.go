@@ -5,9 +5,11 @@ package bootstrap
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,7 +96,7 @@ func TestNewClient_AuthMethodXOR(t *testing.T) {
 // "SHA256:base64"; the operator's paste may
 // have any case, so the comparison is case-
 // insensitive. The compare also accepts mixed
-// forms — the panel's internal fingerprint
+// forms вЂ” the panel's internal fingerprint
 // (from sshFingerprintWire) has no `SHA256:`
 // prefix, while the operator's paste from
 // `ssh-keygen -lf` always has it. Both forms
@@ -144,7 +146,7 @@ func TestExecError_MessageIsBounded(t *testing.T) {
 // writes a second, and asserts the file has
 // both lines. The `knownhosts.Line` helper
 // strips the port and renders `host1` (not
-// `host1:22`) — the round-trip through the
+// `host1:22`) вЂ” the round-trip through the
 // OpenSSH `knownhosts.New` parser accepts
 // either, so this is purely cosmetic.
 func TestAppendKnownHosts_CreatesAndAppends(t *testing.T) {
@@ -233,7 +235,7 @@ func newTestSigner(t *testing.T) ssh.Signer {
 // inside the TofuAcceptAndAppend branch.
 func TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts(t *testing.T) {
 	path := t.TempDir() + "/known_hosts"
-	// Empty file (0 bytes) — the bug condition.
+	// Empty file (0 bytes) вЂ” the bug condition.
 	if err := os.WriteFile(path, nil, 0600); err != nil {
 		t.Fatalf("seed empty known_hosts: %v", err)
 	}
@@ -257,14 +259,14 @@ func TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts(t *testing.T) {
 	}
 	// And the key must be stashed for the post-handshake append.
 	if c.tofuKey == nil {
-		t.Fatal("tofuKey not stashed — Connect will not append on success")
+		t.Fatal("tofuKey not stashed вЂ” Connect will not append on success")
 	}
 }
 
 // TestHostKeyCallback_KnownKey_Accepted is the
 // happy-path: an existing known_hosts entry must
 // be accepted silently (no fingerprint compare, no
-// append). PR #230 preserves this behavior — the
+// append). PR #230 preserves this behavior вЂ” the
 // known_hosts lookup runs inside the TOFU
 // callback and short-circuits on match.
 func TestHostKeyCallback_KnownKey_Accepted(t *testing.T) {
@@ -291,10 +293,10 @@ func TestHostKeyCallback_KnownKey_Accepted(t *testing.T) {
 	if err := cb("h:22", testAddr, signer.PublicKey()); err != nil {
 		t.Fatalf("callback with known key: %v", err)
 	}
-	// The tofuKey must NOT be stashed — the key is
+	// The tofuKey must NOT be stashed вЂ” the key is
 	// already in known_hosts; no append needed.
 	if c.tofuKey != nil {
-		t.Error("tofuKey stashed for an already-known host — would re-append on Connect")
+		t.Error("tofuKey stashed for an already-known host вЂ” would re-append on Connect")
 	}
 }
 
@@ -341,14 +343,14 @@ func TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch(t *testing.T) {
 // matched what an operator pastes from
 // `ssh-keyscan` / `ssh-keygen -lf`.
 //
-// The fixture is the production Demo-нода's host
+// The fixture is the production Demo-РЅРѕРґР°'s host
 // key. The expected fingerprint is the one the
 // operator confirmed at deploy time; the raw key
 // material is captured here as a constant so a
 // future regression is reproducible without
 // hitting the network.
 func TestSshFingerprintWire_MatchesOpenSSH(t *testing.T) {
-	// Demo-нода (cdn2ne.<prod-host>.click) host key,
+	// Demo-РЅРѕРґР° (cdn2ne.<prod-host>.click) host key,
 	// captured via `ssh-keyscan -t ed25519`:
 	//   cdn2ne.<prod-host>.click ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEQ8y2RfN1kT5Kn0GWtQMRyEncX5o/uhVUWRU4wUY0ib
 	// The base64 form is the wire-encoded key
@@ -382,6 +384,79 @@ func TestSshFingerprintWire_MatchesOpenSSH(t *testing.T) {
 	// different hash (proof that we're not just
 	// accidentally matching).
 	if legacy := ssh.FingerprintSHA256(pubKey); legacy == expectedFingerprint {
-		t.Fatalf("ssh.FingerprintSHA256 unexpectedly matches OpenSSH — pre-PR-#231 fix may be obsolete; legacy=%s", legacy)
+		t.Fatalf("ssh.FingerprintSHA256 unexpectedly matches OpenSSH вЂ” pre-PR-#231 fix may be obsolete; legacy=%s", legacy)
+	}
+}
+
+// TestSwapTempPath covers the pure helper that
+// builds the temp path for UploadAndSwap. The
+// temp file MUST be in the same directory as dst
+// so the subsequent `mv -f` is atomic (same
+// filesystem). The hidden-style prefix + random
+// suffix keep operators from noticing stale
+// swap files in a normal `ls`.
+func TestSwapTempPath(t *testing.T) {
+	cases := []struct {
+		name        string
+		dst         string
+		wantSameDir bool
+		wantBasePre string // expected basename prefix
+	}{
+		{"absolute path", "/usr/local/bin/aegis-agent", true, ".aegis-agent.swap."},
+		{"relative path", "bin/aegis-agent", true, ".aegis-agent.swap."},
+		{"root path", "/aegis-agent", true, ".aegis-agent.swap."},
+		{"nested", "/var/lib/aegis/bin/foo", true, ".foo.swap."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := swapTempPath(c.dst)
+			if err != nil {
+				t.Fatalf("swapTempPath(%q): %v", c.dst, err)
+			}
+			if c.wantSameDir {
+				wantDir := filepath.Dir(c.dst)
+				if filepath.Dir(got) != wantDir {
+					t.Errorf("swapTempPath(%q) = %q, want dir %q", c.dst, got, wantDir)
+				}
+			}
+			base := filepath.Base(got)
+			if !strings.HasPrefix(base, c.wantBasePre) {
+				t.Errorf("swapTempPath(%q) base = %q, want prefix %q", c.dst, base, c.wantBasePre)
+			}
+			// Hidden-ish: must start with a dot.
+			if !strings.HasPrefix(base, ".") {
+				t.Errorf("swapTempPath(%q) base = %q, want hidden-style (dot prefix)", c.dst, base)
+			}
+			// Random suffix: 8 hex chars (4 random bytes encoded).
+			suffix := strings.TrimPrefix(base, c.wantBasePre)
+			if len(suffix) != 8 {
+				t.Errorf("swapTempPath(%q) suffix len = %d, want 8 (hex of 4 random bytes); suffix=%q",
+					c.dst, len(suffix), suffix)
+			}
+			if _, err := hex.DecodeString(suffix); err != nil {
+				t.Errorf("swapTempPath(%q) suffix %q is not hex: %v", c.dst, suffix, err)
+			}
+		})
+	}
+}
+
+// TestSwapTempPath_UniqueAcrossCalls checks the
+// helper is collision-free across rapid-fire
+// calls. 32 bits of entropy in the suffix is
+// overkill for the install workflow, but the
+// test pins the property so a future "let me
+// reuse the same path for the second call"
+// optimization doesn't slip in.
+func TestSwapTempPath_UniqueAcrossCalls(t *testing.T) {
+	seen := make(map[string]bool, 100)
+	for i := 0; i < 100; i++ {
+		got, err := swapTempPath("/usr/local/bin/aegis-agent")
+		if err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		if seen[got] {
+			t.Fatalf("swapTempPath collision on call %d: %s", i, got)
+		}
+		seen[got] = true
 	}
 }

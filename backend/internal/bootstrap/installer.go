@@ -310,8 +310,24 @@ func (i *Installer) Install(ctx context.Context, in InstallInput) InstallResult 
 // uploadAgent copies the local agent binary to
 // the node's /usr/local/bin path. The file mode
 // is 0755 (root-only write, world-readable + exec).
+//
+// The method uses UploadAndSwap (not Upload)
+// because the target — /usr/local/bin/aegis-agent
+// — may be the running aegis-agent process on a
+// re-provision. Direct SFTP overwrite of a
+// running binary fails with ETXTBSY on Linux
+// (the kernel protects the executable's mmap'd
+// text region). UploadAndSwap writes the new
+// binary to a temp file in the same directory
+// and atomically renames it over the target,
+// which is the only race-free way to replace a
+// running executable. The running process keeps
+// the unlinked inode alive until it exits; a
+// new process (or the systemd `Restart=always`
+// loop) picks up the new binary at the same
+// path.
 func (i *Installer) uploadAgent(ctx context.Context, c Client, src string) error {
-	return c.Upload(ctx, src, RemoteAgentPath, 0o755)
+	return c.UploadAndSwap(ctx, src, RemoteAgentPath, 0o755)
 }
 
 // writeAgentEnv writes /etc/aegis/agent.env with
