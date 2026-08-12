@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.24] - 2026-08-12
+
+This is a **state-propagation fix** that closes
+the last silent production bug from the
+v0.8.17 → v0.8.24 live smoke series. v0.8.23
+made the SSH fingerprint compare work, and the
+L4 provision returned 200 with
+`{"new_state":"online"}` — but the node row
+in the DB still showed `state: "new"`.
+
+Single PR (#234), nodes-only:
+
+### Fixed
+- **Nodes: `BootstrapNodeProvider.Update`
+  propagates the State field to the SQL
+  UPDATE.** Pre-PR the method mutated
+  `current.State` locally then called
+  `a.Svc.Update(ctx, current.ID, UpdateInput{})`
+  with an EMPTY `UpdateInput`. `UpdateInput` is
+  a pointer-field struct where nil pointers
+  mean "leave alone". With no non-nil fields,
+  the underlying service update wrote nothing
+  — and the operator's UI / state machine
+  silently disagreed with the provision
+  response. v0.8.24 passes the new state via
+  `UpdateInput{State: &newState}`. One line of
+  real change, plus a comment documenting the
+  pre-PR-#234 bug.
+
+### Files
+- `backend/internal/nodes/handler.go` —
+  `BootstrapNodeProvider.Update` now passes
+  `State: &newState` to `a.Svc.Update`.
+
+### Verification
+v0.8.24's live smoke test on aibeg.click:
+after `POST /api/v1/nodes/9ded165d.../provision`
+returns 200, `GET /api/v1/nodes/9ded165d...`
+should return `state: "online"`. The DB row
+should also show `state='online'` in `psql`.
+
 ## [0.8.23] - 2026-08-12
 
 This is a **fingerprint-prefix-compare fix**
