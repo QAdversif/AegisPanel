@@ -231,7 +231,7 @@ func TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts(t *testing.T) {
 			Password:            "secret",
 			KnownHosts:          path,
 			Tofu:                TofuAcceptAndAppend,
-			ExpectedFingerprint: ssh.FingerprintSHA256(signer.PublicKey()),
+			ExpectedFingerprint: sshFingerprintWire(signer.PublicKey()),
 		},
 	}
 	cb, err := c.hostKeyCallback()
@@ -314,5 +314,60 @@ func TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch(t *testing.T) {
 	}
 	if !errors.Is(err, ErrHostKeyMismatch) {
 		t.Errorf("want ErrHostKeyMismatch, got %v", err)
+	}
+}
+
+// TestSshFingerprintWire_MatchesOpenSSH locks in
+// the v0.8.21 fix. The function must return the
+// same SHA-256 hash that `ssh-keygen -lf` outputs
+// (the on-the-wire `SHA256:base64` form). Pre-PR
+// the code called `ssh.FingerprintSHA256`, which
+// hashes a different buffer (the authorized_keys
+// LINE format) and produces a hash that never
+// matched what an operator pastes from
+// `ssh-keyscan` / `ssh-keygen -lf`.
+//
+// The fixture is the production Demo-нода's host
+// key. The expected fingerprint is the one the
+// operator confirmed at deploy time; the raw key
+// material is captured here as a constant so a
+// future regression is reproducible without
+// hitting the network.
+func TestSshFingerprintWire_MatchesOpenSSH(t *testing.T) {
+	// Demo-нода (cdn2ne.<prod-host>.click) host key,
+	// captured via `ssh-keyscan -t ed25519`:
+	//   cdn2ne.<prod-host>.click ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEQ8y2RfN1kT5Kn0GWtQMRyEncX5o/uhVUWRU4wUY0ib
+	// The base64 form is the wire-encoded key
+	// (the part after the algorithm). We pass it
+	// through the Go ssh parser to get a real
+	// ssh.PublicKey, then assert sshFingerprintWire
+	// matches what `ssh-keygen -lf` would print.
+	const wireKeyB64 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEQ8y2RfN1kT5Kn0GWtQMRyEncX5o/uhVUWRU4wUY0ib"
+	// Operator-pinned fingerprint, identical to
+	// `ssh-keygen -lf` output and to what the
+	// v0.8.20 live-smoke `provision` call
+	// supplied. Pre-PR-#231 this never matched
+	// because the panel hashed the wrong buffer.
+	const expectedFingerprint = "pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM"
+
+	// Parse the wire-format key into a
+	// ssh.PublicKey the way the SSH library does
+	// at handshake time.
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(wireKeyB64))
+	if err != nil {
+		t.Fatalf("ParseAuthorizedKey: %v", err)
+	}
+
+	got := sshFingerprintWire(pubKey)
+	if got != expectedFingerprint {
+		t.Fatalf("sshFingerprintWire:\n  got  = %s\n  want = %s\n  (pre-PR-#231: would have been %s)",
+			got, expectedFingerprint, ssh.FingerprintSHA256(pubKey))
+	}
+
+	// And the legacy Go function MUST produce a
+	// different hash (proof that we're not just
+	// accidentally matching).
+	if legacy := ssh.FingerprintSHA256(pubKey); legacy == expectedFingerprint {
+		t.Fatalf("ssh.FingerprintSHA256 unexpectedly matches OpenSSH — pre-PR-#231 fix may be obsolete; legacy=%s", legacy)
 	}
 }
