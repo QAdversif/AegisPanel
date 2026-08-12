@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.21] - 2026-08-12
+
+This is a **fingerprint-compare fix** that closes
+the last silent production bug from the
+v0.8.17 → v0.8.21 live smoke series. PR #230
+(`v0.8.20`) made the TOFU path reachable for
+the first time; the very next call surfaced
+this latent bug: the operator's
+`expected_fingerprint` (identical to
+`ssh-keygen -lf` output) never matched the
+panel's computed hash, so the very first
+provision on a fresh install returned
+`ErrHostKeyMismatch` even with a correct pin.
+
+Single PR (#231), bootstrap-only:
+
+### Fixed
+- **Bootstrap: SSH fingerprint is now computed
+  from the binary wire format, matching
+  OpenSSH.** Pre-PR the panel called
+  `ssh.FingerprintSHA256(key)`, a long-standing
+  misnomer in `golang.org/x/crypto/ssh`: that
+  function hashes the **authorized_keys LINE**
+  format (`"ssh-ed25519 AAAA...\n"`), not the
+  **binary wire format** (`base64-decode("AAAA...")`).
+  The two hashes are different, and the
+  OpenSSH-standard fingerprint is the wire one
+  (what every operator pastes from
+  `ssh-keygen -lf` / `ssh-keyscan`). The result
+  on a fresh install: the operator's correct
+  pin was compared to the wrong hash and the
+  fingerprint compare reported a spurious
+  `ErrHostKeyMismatch`. v0.8.21 replaces the
+  call with a custom `sshFingerprintWire(key)`
+  that SHA-256s `key.Marshal()` and returns the
+  base64 with trailing `=` stripped (to match
+  `ssh-keygen -lf` byte-for-byte). A regression
+  test `TestSshFingerprintWire_MatchesOpenSSH`
+  pins the production Demo-нода's host key
+  and the expected fingerprint as fixtures,
+  and also asserts that the legacy Go
+  `FingerprintSHA256` still produces a
+  DIFFERENT hash (proving the fix is not just
+  accidentally matching the wrong library
+  function).
+
+### Files
+- `backend/internal/bootstrap/ssh.go` —
+  new `sshFingerprintWire` helper, one call
+  site changed; `crypto/sha256` +
+  `encoding/base64` imports added.
+- `backend/internal/bootstrap/ssh_test.go` —
+  new `TestSshFingerprintWire_MatchesOpenSSH`;
+  the three pre-existing TOFU tests updated
+  to use the new helper for their
+  `ExpectedFingerprint` setup.
+
+### Verification
+v0.8.21's live smoke test on the live server.click:
+`POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
+with `tofu_policy: accept-and-append` and the
+Demo-нода's `expected_fingerprint:
+SHA256:***REMOVED***`
+should return 200 with `state: "online"`
+(transition from `new` → `provisioning` → `online`).
+
 ## [0.8.20] - 2026-08-12
 
 This is a **TOFU fix** that closes the last
