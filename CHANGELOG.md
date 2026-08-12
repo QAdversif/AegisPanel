@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `docs/README.md` + `docs/ROADMAP.md` + `docs/operator-guide.md`
+  + `docs/guide/quickstart.md` + `KNOWN_LIMITATIONS.md` +
+  `ARCHITECTURE.md` + `README.md` — v0.8.25 sync (the
+  v0.8.16..v0.8.25 silent-bug chain is closed; the docs
+  reflect that). New `### v0.8.16..v0.8.25 — the silent-bug
+  chain (closed)` section in `KNOWN_LIMITATIONS.md`
+  walks every PR that closed a silent bug, with the
+  root cause + the fix. New "## 21.1. Фактическое состояние
+  v0.5.0 — v0.8.25" in `ARCHITECTURE.md` covers the
+  post-§21 release ladder + the Tier 1-4 plan. New "### v0.8.14
+  → v0.8.25 upgrade (the silent-bug chain)" in
+  `docs/operator-guide.md` is the operator upgrade walkthrough
+  (11 releases, no wire-format / OpenAPI / env / schema
+  changes — the canonical "bounce through the chain" pattern).
+
+### Changed
+- `deploy/docker/.env.example` — full v0.8.25 production
+  reference. The dev-mode minimal example is preserved
+  + a production section with all 11 `AEGIS_*_BACKEND=pg`
+  vars, `AEGIS_WEBHOOKS_SECRET_AGE_*` envelope vars, the
+  `AEGIS_AGENT_BINARY` / `AEGIS_AGENT_KNOWN_HOSTS`
+  bootstrap vars, the `AEGIS_BACKUPS_*` retention vars, the
+  subscription rate-limit vars, the `AEGIS_BATCHED_APPLIER_ENABLED`
+  flag, the `AEGIS_LOG_LEVEL` flag, and inline notes for
+  every var (operator-only / required / default). Source of
+  truth is `backend/internal/config/config.go`.
+
+### Not changed
+- Wire format, OpenAPI spec, env-var contract, schema:
+  no changes since v0.8.24. v0.8.25 is a code-only release
+  (bootstrap + installer + new `Client.UploadAndSwap`
+  method) and this PR is a docs-only follow-up.
+
 ## [0.8.25] - 2026-08-12
 
 This is a **re-provision fix** that closes the
