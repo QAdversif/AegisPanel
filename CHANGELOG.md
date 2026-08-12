@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.20] - 2026-08-12
+
+This is a **TOFU fix** that closes the last
+silent production bug from the v0.8.17 →
+v0.8.20 live smoke series. PR #228
+(`v0.8.18`) and PR #229 (`v0.8.19`) made
+the backups + pg_dump / pg_dump-16 flow
+visible, but `POST /api/v1/nodes/{id}/provision`
+on a fresh install still returned 502 with
+"knownhosts: key is unknown" because the
+TOFU policy branch was unreachable when
+`/var/lib/aegis/known_hosts` existed (even
+as a 0-byte file).
+
+Single PR (#230), bootstrap-only:
+
+### Fixed
+- **Bootstrap: TOFU policy is now reachable
+  on a fresh install.** Pre-PR
+  `hostKeyCallback()` early-returned the
+  strict `knownhosts.New` callback whenever
+  the file existed (even empty), which
+  short-circuited the TOFU switch. The result:
+  the operator-supplied `expected_fingerprint`
+  was never compared, the `tofu_policy:
+  accept-and-append` was never honored, and
+  the very first provision on a fresh install
+  failed with `knownhosts: key is unknown`.
+  PR #230 lifts the TOFU policy to be the
+  single source of truth: the known_hosts
+  lookup is invoked *inside* the
+  `TofuAcceptAndAppend` branch (and inside
+  `TofuReject`), never as an early exit.
+  On a known-key match the callback returns
+  nil silently. On a miss, the TOFU fingerprint
+  compare runs and (on match) stashes the
+  key for the post-handshake append. On
+  fingerprint mismatch, `ErrHostKeyMismatch`
+  is returned. The existing test
+  `TestHostKeyCallback_KnownKey_Accepted`
+  locks in the silent-accept behavior;
+  `TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts`
+  is the regression test for the v0.8.19
+  bug; `TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch`
+  is the safety net.
+
+### Files
+- `backend/internal/bootstrap/ssh.go` —
+  `hostKeyCallback()` rewritten. The
+  `knownhosts.New` inner callback is now
+  invoked from inside the TOFU policy
+  callback. No signature change.
+- `backend/internal/bootstrap/ssh_test.go` —
+  three new regression tests.
+
+### Verification
+v0.8.20's live smoke test on the live server.click:
+`POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
+with `tofu_policy: accept-and-append` and
+the Demo-нода's `expected_fingerprint`
+should return 200 with `state: "online"`
+(transition from `new` → `provisioning` → `online`).
+
 ## [0.8.19] - 2026-08-12
 
 This is a **compatibility hotfix** that ships
