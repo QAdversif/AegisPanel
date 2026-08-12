@@ -171,7 +171,20 @@ func (a *BootstrapNodeProvider) Update(ctx context.Context, row bootstrap.NodeRo
 	if err != nil {
 		return err
 	}
-	current.State = State(row.State)
+	// Pre-PR-#234 bug: this method mutated
+	// `current.State` locally then called
+	// `a.Svc.Update` with an EMPTY UpdateInput.
+	// UpdateInput is a pointer-field struct;
+	// nil pointers are "leave alone". With no
+	// non-nil fields, the update wrote nothing
+	// — the row's state column stayed at its
+	// pre-update value. Symptom: the provision
+	// API returned `{"new_state":"online"}` but
+	// GET /api/v1/nodes/{id} still showed
+	// `state: "new"`. Discovered in v0.8.23 live
+	// smoke immediately after the L4 provision
+	// finally succeeded.
+	newState := State(row.State)
 	_, err = a.Svc.Update(ctx, current.ID, UpdateInput{
 		// The provisioner only ever writes the
 		// State field. Every other field is
@@ -179,6 +192,7 @@ func (a *BootstrapNodeProvider) Update(ctx context.Context, row bootstrap.NodeRo
 		// nodes.Service.Update helper copies
 		// the row before applying, so a nil
 		// pointer here is "leave alone").
+		State: &newState,
 	})
 	return err
 }
