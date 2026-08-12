@@ -93,16 +93,30 @@ func TestNewClient_AuthMethodXOR(t *testing.T) {
 // the TOFU code. The on-the-wire form is
 // "SHA256:base64"; the operator's paste may
 // have any case, so the comparison is case-
-// insensitive.
+// insensitive. The compare also accepts mixed
+// forms — the panel's internal fingerprint
+// (from sshFingerprintWire) has no `SHA256:`
+// prefix, while the operator's paste from
+// `ssh-keygen -lf` always has it. Both forms
+// must compare equal.
 func TestFingerprintEqual(t *testing.T) {
-	a := "SHA256:abc123"
-	b := "sha256:abc123"
-	c := "SHA256:def456"
-	if !fingerprintEqual(a, b) {
-		t.Error("fingerprintEqual should be case-insensitive")
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"case-insensitive", "SHA256:abc123", "sha256:abc123", true},
+		{"different base64", "SHA256:abc123", "SHA256:def456", false},
+		{"mixed: with and without prefix", "pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM", "SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM", true},
+		{"MD5 prefix", "MD5:abc123", "abc123", true},
+		{"unknown prefix passed through", "CUSTOM:abc123", "abc123", false},
 	}
-	if fingerprintEqual(a, c) {
-		t.Error("fingerprintEqual should reject different fingerprints")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fingerprintEqual(tc.a, tc.b); got != tc.want {
+				t.Errorf("fingerprintEqual(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
 	}
 }
 
