@@ -1,1 +1,1 @@
-﻿fix(bootstrap): UploadAndSwap (SFTP temp+rename) for ETXTBSY-safe binary replacement (v0.8.25)
+﻿chore(release): cut v0.8.25 - CHANGELOG surgery
