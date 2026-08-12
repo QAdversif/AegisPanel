@@ -690,12 +690,35 @@ func copyContext(ctx context.Context, dst io.Writer, src io.Reader) error {
 }
 
 // fingerprintEqual compares two SSH
-// fingerprints case-insensitively (the on-the-
-// wire form is `SHA256:base64`; the on-disk
-// form is the same; the operator may paste
-// either case).
+// fingerprints case-insensitively, ignoring any
+// `SHA256:` or `MD5:` algorithm prefix on either
+// side. The on-the-wire form is `SHA256:base64`;
+// `sshFingerprintWire` returns just the base64
+// payload (no prefix). The operator pastes the
+// form with the prefix; the function from the
+// panel returns the form without. The compare
+// must accept both.
 func fingerprintEqual(a, b string) bool {
-	return strings.EqualFold(a, b)
+	return strings.EqualFold(stripFingerprintPrefix(a), stripFingerprintPrefix(b))
+}
+
+// stripFingerprintPrefix returns the base64
+// payload of a fingerprint, dropping any
+// leading `SHA256:` or `MD5:` marker (case-
+// insensitive). Unknown prefixes are passed
+// through unchanged so the compare still
+// surfaces a real difference if the operator
+// (or the panel library) ever switches to a
+// new algorithm.
+func stripFingerprintPrefix(fp string) string {
+	upper := strings.ToUpper(fp)
+	if strings.HasPrefix(upper, "SHA256:") {
+		return fp[len("SHA256:"):]
+	}
+	if strings.HasPrefix(upper, "MD5:") {
+		return fp[len("MD5:"):]
+	}
+	return fp
 }
 
 // sshFingerprintWire computes the SHA-256
