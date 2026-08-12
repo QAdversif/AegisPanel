@@ -2297,6 +2297,103 @@ ignoreip = 1.2.3.4 5.6.7.8
 
 ---
 
+## 21.1. Фактическое состояние v0.5.0 — v0.8.25 (дополнение к roadmap)
+
+Вышеописанный §21 (Phase 0 / MVP-0.x / Phase 1-3) — **план**. Этот
+раздел — **факт**: что реально было отрелижено в серии v0.5.0 — v0.8.25
+после cut `v0.4.0` (v0.4.0 — последний план-тег из §21). Текущее
+состояние на 2026-08-12 — **v0.8.25** (тег `974536d`).
+
+### Фактические релизы v0.5.0 — v0.8.25
+
+| Tag | SHA (pre-BFG) | Главное | PRs |
+| --- | --- | --- | --- |
+| `v0.5.0` | `54e298a` | sops+age secrets, `internal/backups` package, pre-PR gate, GitHub-API sing-box SHA-256, container wiring for secrets, operator guide + SECURITY + quickstart | #119–#126 |
+| `v0.6.0` | `bd76f49` | `internal/plans` — plan catalog promoted from the v0.3.0 table stub to a full CRUD surface | #131–#134 |
+| `v0.7.0` | `e68af28` | `internal/webhooks` — outgoing-webhook surface with HMAC signing, retry with exponential backoff, DLQ | #136–#139 + #129, #130 |
+| `v0.7.1` | `11ccdd5` | Webhook call-site wiring, sops+age envelope on `webhook_endpoints.secret`, background retry worker, events multi-select, shared zod schema, plus the post-v0.7.0 Go+frontend dependency batch (#141–#144) and the docs sync (#145) | #146–#155 |
+| `v0.7.2` | `e462780` | Audit batch closeout: God-object `main.go` extracted into `internal/app.Build` (#156); real BatchedApplier FlushFn + Enqueue from user/inbound services (#157); end-to-end integration test against a real Postgres (#158) | #156–#158 |
+| `v0.8.0` | `8eede5c` | Phase 2 multi-user sing-box render end-to-end (#167 data model, #168 renderer, #169 builder + BatchedApplier narrow, #170 subscription per-user render); audit-log call-site wiring into every mutating service (#166); frontend dependency batch — TS / CSS / axios / vue-tsconfig / postcss (#159, #161, #163, #165) | #159, #161, #163, #165–#170 |
+| `v0.8.1` | `59a8735` | Auto-deploy bootstrap batch: shared `internal/crypto/envelope` package (#177 refactor); `brace-expansion` 5.0.8 → 5.0.9 CVE (#178 chore); password-based first auth + persistent node SSH key (#179 feat); three-way radio in the provision UI (#180 feat). Migration 0020 (`nodes.ssh_private_key_ciphertext` BYTEA). OpenAPI spec bumped to 0.8.1. | #177–#180 |
+| `v0.8.2` | `e431f34` | Server-side `auth.me` fix on pg backend (PR #182); HTTP admin surface for `user_inbound_credentials` (`/api/v1/credentials/` mount + `ScopeCredentials` + OpenAPI + Credentials tab in the user detail page) — PR #183 | #182, #183 |
+| `v0.8.3` | `a2f3c8f` | Operator-side CLI `aegis admin node rotate-panel-key <node-uuid> --key <path>` for v0.3.0..v0.7.x nodes (PR #184) | #184 |
+| `v0.8.4` | `e698cba` | HTTP mirror of the v0.8.3 rotate-panel-key CLI: `POST /api/v1/nodes/{id}/rotate-panel-key` + NodesView dropdown entry (PR #185) | #185 |
+| `v0.8.5` | `1cdbd79` | "Show stored key" debug surface in NodesView: `GET /api/v1/nodes/{id}/stored-key` returns the public-key line + SHA-256 fingerprint (PR #186) | #186 |
+| `v0.8.6` | `87b1cf1` | JSON logs in production, hardened with `Config.validate()` guard (PR #187) | #187 |
+| `v0.8.7` | `f2adad0` | Refresh agent bearer: `nodes.Service.RefreshAgentBearer` (PR #188) | #188 |
+| `v0.8.8` | `ed20d2a` | BatchedApplier 401→auto-refresh integration (PR #189) | #189 |
+| `v0.8.9` | `ac18d49` | Release workflow hardening: cosign re-sign + verify on every release (PR #190). Pure workflow change, no code touched. | #190 |
+| `v0.8.10` | `5b2bc23` | Per-user credential filter in the Builder (PR #198) — `internal/users.Service.AllowedUsersForNode` + `internal/cores/builder.ListUsersAllowedForNode` interface + per-inbound filter inside `BuildCoreConfigForNode` (one DB round-trip per flush). Closes the v0.7.x Phase 2 multi-user TODO and unblocks the v1.0.0 GA tag. Pure backend change. | #198 |
+| `v0.8.11` | `7bdcf19` | Consolidation release closing the 3-PR gap (frontend-deps #196: `@vueuse/core` 11→14, `vite` 7→8, `jsdom` 25→30; Tailwind v4 #197: CSS-first config via `@tailwindcss/vite` plugin; PR #198 per-user credential filter). 0 backend / 0 schema / 0 env changes. | #196–#198 |
+| `v0.8.12` | `9bd524f` | Consolidation release closing the 3-PR gap (lint cleanup #200: `eslint --fix` on 5 target files; merged "Add node + Provision" dialog #201: `nodeAddSchema` extends `nodeCreateSchema` with `provisionNow` discriminator; shadcn-vue `RadioGroup` primitive #202: `components/ui/RadioGroup.vue` + `RadioGroupItem.vue` thin wrappers over `radix-vue`; docs closure #203). 0 backend / 0 OpenAPI / 0 env / 0 schema changes. | #200–#203 |
+| `v0.8.13` | `c6f389f` | Feature release: inbound-templates end-to-end (per-tenant `Params` defaults, 5-PR planned sequence — foundation #205 + docs sync #209 + renderer #210 + validation #211 + frontend #212) plus the audit-3.1 fix chain (HttpOnly refresh cookie #214, frontend `withCredentials` #215, Caddy CSP #216). First release where a single feature + a security fix chain both shipped together. Migration `0021_inbound_templates.sql` is the only schema change. | #205, #209–#212, #214–#216 |
+| `v0.8.14` | `9f8037a` | Consolidation + security tightening release: closes the v0.8.13 backwards-compat shim that kept the refresh token in the JSON body of `/auth/login` and `/auth/refresh` (PR #217). v0.8.14+ is cookie-only — drop the `RefreshToken` field from `loginResponse`; drop the `refreshRequest` struct + the body-fallback parse in `readRefreshToken`; document the previously-undocumented `POST /api/v1/auth/logout` endpoint; regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a **drop-in replacement for v0.8.13** on the server side. | #217 |
+| `v0.8.15` | `9d39907` | Multi-stage Dockerfile for `pg_dump` + `aegis-agent` + bootstrap `writeError` logging (PR #222). Closes the v0.8.14 silent-fail chain: backups (no `pg_dump` in image → 100% failed rows) and provision (no `aegis-agent` in image → 502 on first `os.Stat` step). Runtime base switched from `distroless/static` to `distroless/base`; `+~50 MB` image size. | #222, #223 |
+| `v0.8.16` | `7c30b4c` | `postgresql-client-15` + `joinHostPort` host:port parse fix (PR #224). v0.8.15 still used a symlink to the distroless `pg_wrapper` shell script → no shell in the runtime image → `pg_dump` exited 1 silently. | #224, #225 |
+| `v0.8.17` | `e923feb` | `rm /usr/bin/pg_dump && cp /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump` in the tooling stage (PR #226). v0.8.16's installed symlink was still pointing at the wrapper; this commit replaces the symlink with the real binary. | #226, #227 |
+| `v0.8.18` | `1fdba32` | `Dumper` / `Restorer` interfaces + `pgDumpArgs` / `pgRestoreArgs` pure functions (PR #228). Architectural refactor: replaces the single `dumpFn` callback with consumer-side interfaces; the service holds the full DSN in `Config` and delegates extract to injected `Dumper` / `Restorer`. Fixed 3 silent bugs: full DSN was stripped to bare db name, `pg_dump` exit code was discarded, `pgDumpReader.Close()` now returns the subprocess exit code. `pgDumpArgs` is a pure table-tested function; PGPASSWORD is set via env, NEVER argv. | #228 |
+| `v0.8.19` | `d3164fc` | `pg_dump` 15 → 16 via PGDG apt repo (PR #229). v0.8.18 fixed the silent-fail mode but the binary was still pg_dump 15 against a postgres-16 server, which fails with "server version mismatch". v0.8.19 adds the PGDG GPG key + `apt.postgresql.org` repo in the tooling stage + installs `postgresql-client-16` + copies the real binary. | #229 |
+| `v0.8.20` | `c3b53d0` | `bootstrap.hostKeyCallback` TOFU-policy fix (PR #230). Pre-PR the callback early-returned the strict `knownhosts.New` whenever the `known_hosts` file existed (even an empty one), which short-circuited the TOFU policy entirely. v0.8.20 lifts the TOFU logic to be the single source of truth. | #230 |
+| `v0.8.21` | `5e6bbc7` | SSH fingerprint from binary wire format (PR #231). Pre-PR the panel used Go's `ssh.FingerprintSHA256` which hashes the *authorized_keys* line format, not the binary wire format. v0.8.21 adds `sshFingerprintWire` helper that SHA-256s `key.Marshal()` + strips trailing `=`. | #231 |
+| `v0.8.22` | `f94bca2` | `HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}` (PR #232). Pre-PR the panel accepted any of `{rsa, ecdsa, ed25519}`; the server's `kexinit` preferred ECDSA, the operator's ed25519 pin was rejected as "mismatch". | #232 |
+| `v0.8.23` | `3d7ede7` | `stripFingerprintPrefix(fp)` + `fingerprintEqual(a, b)` (PR #233). Pre-PR the compare was literal: `pCnGi…` ≠ `SHA256:pCnGi…`. v0.8.23 strips `SHA256:` / `MD5:` (case-insensitive) from both sides. | #233 |
+| `v0.8.24` | `003e100` | `BootstrapNodeProvider.Update` propagates `State` (PR #234). Pre-PR the method mutated `current.State` locally then called `a.Svc.Update(ctx, current.ID, UpdateInput{})` with an empty struct; `UpdateInput` is pointer-field, all-nil = "leave alone" = no SQL UPDATE. v0.8.24 passes the new state via `UpdateInput{State: &newState}`. | #234 |
+| `v0.8.25` | `c4e9024` | `Client.UploadAndSwap(ctx, src, dst, mode)` for ETXTBSY-safe binary replacement (PR #235). Pre-PR the SFTP step did direct overwrite of `/usr/local/bin/aegis-agent`, which Linux refused with `ETXTBSY` on a re-provision of a running node — the agent's mmap'd text region can't be unlinked by another process. v0.8.25 splits the upload into SFTP-to-temp + `mv -f` over the target via SSH; `rename(2)` is always permitted, the running process keeps the unlinked inode alive until it exits. | #235 |
+
+> **BFG scrub (2026-08-12):** все SHAs в колонке выше — **pre-BFG**.
+> The 11 release-SHA от `v0.8.16` до `v0.8.25` (включая `c4e9024`)
+> были переписаны BFG для удаления упоминания публичного домена
+> из CHANGELOG.md (privacy rule — operator-only state lives in
+> `~/.aegis/deploy.local.md`, never in the repo). Пост-BFG:
+> см. `git log --oneline v0.8.16..v0.8.25` для актуальных
+> SHA. Оператор перед force-push делал бэкап `~/.aegis/repos/`
+> (3 точки: до scrub, между проходами BFG, после BFG).
+
+### v0.5 — v0.8.25 vs §21 roadmap: что планировалось и что фактически
+
+| §21 план | Факт | Комментарий |
+| --- | --- | --- |
+| Phase 0 (foundation) | ✅ done | PR #1–#43, тег `v0.0.1-skeleton` |
+| MVP-0.1 (Render-only) | ✅ done | PR #50, #51, #54–#58, тег `v0.1.0-mvp-render` |
+| MVP-0.2 (Agent) | ✅ done | PR #47, #59–#66, тег `v0.2.0-mvp-agent` |
+| MVP-0.3 (BYO Node) | ✅ done | Backend provisioner (#67), UI Add+Provision dialog (#201 в v0.8.12), реальный aegis-agent бинарь. §21 помечал `[wip]` с pending b/c; фактически закрыто в v0.3.0 + последующих v0.8.x. |
+| MVP-0.4 (Batched Apply) | ✅ done | PR #92–#94 (tag `v0.4.0-mvp-batched`), PR #157 (real FlushFn в v0.7.2), PR #158 (e2e integration в v0.7.2). Per-user render и metrics отложены в Phase 2 / backlog. |
+| **MVP-1.0 (Soft launch)** | ⚪ **блокер** | Код-сторона готова (v0.8.25 — все silent-bug chain закрыты); **operational confidence** (restore-drill на чистой VM, 24h soak, release.yml hard-gate) ещё нет. См. Tier 1 ниже. |
+| Phase 2 (v1.1 — v1.8) | 🟡 частично | Из 8 пунктов Phase 2 — **5 закрыты** в v0.5..v0.8.x (sops+age secrets, plans CRUD, webhooks, multi-port+inbound-templates, per-user render); 3 отложены (mTLS Panel↔Agent, observability с Prometheus, decoy sites). См. Phase 2 backlog ниже. |
+| Phase 3 (Xray) | ⚪ не начат | Xray как second provider — v2.0.0+ per §21. Не блокирует v1.0. |
+
+### Tier 1 / 2 / 3 / 4 (следующие шаги после v0.8.25)
+
+См. [`docs/gap-analysis-v0.8.24.md`](./docs/gap-analysis-v0.8.24.md) §6
+для полного Tier 1 / 2 / 3 / 4 плана. TL;DR:
+
+- **Tier 1 (MVP-1.0 gate, 5-6 days solo):**
+  1. `release.yml` hard-gate smoke test (`pg_dump --version` + tiny
+     backup против свеже-собранного image). **Single most-important
+     infra change to prevent future silent bugs** (would have caught
+     every one of bugs A-J в цепочке v0.8.15..v0.8.25).
+  2. `tools/scripts/branch-start.sh` + `release.sh` (dry-run прогон).
+  3. **Restore-drill на чистой VM** (the single missing piece for
+     MVP-1.0). terraform + ansible + boot-log артефакт в CI.
+  4. Backup cron + retention policy (`AEGIS_BACKUP_SCHEDULE` +
+     `AEGIS_BACKUP_RETENTION_DAYS` + `BackupScheduler` goroutine +
+     audit log).
+  5. 24h soak (1 panel + 1 node + 10 users).
+  6. Operational runbook `docs/RUNBOOKS/oncall.md`.
+  7. Docs sync (README, KNOWN_LIMITATIONS, ARCHITECTURE, .env.example,
+     deploy.local.md) — частично закрыто в PR #236 (this PR).
+- **Tier 2 (UI polish + browser repro, 1-2 days, parallel to Tier 1):**
+  SVG `width="icon"`, RadioGroup desync, dropdown rendering — нужны
+  F12 DOM-snapshot от оператора для воспроизведения.
+- **Tier 3 (Phase 2 backlog):** mTLS Panel↔Agent (~2 нед), Prometheus
+  exporter + Grafana dashboard (~1 нед), outgoing notifications
+  через n8n / generic webhook (~1 нед), `known_hosts` mount ownership
+  fix (~0.5 дня).
+- **Tier 4 (Phase 3 — v2.0.0+):** Xray как second provider
+  (~3-4 нед, per ADR-0003).
+
+---
+
 ## 22. Что добавлено «сверх минимума» (обоснование)
 
 **Из исходного плана (v1):**

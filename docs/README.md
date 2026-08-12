@@ -24,8 +24,8 @@ title: Aegis documentation
 - [Getting started](./guide/getting-started) — running the local
   dev stack on a laptop.
 - [API reference](./api/) — auto-generated from the OpenAPI spec
-  (still at v0.7.0; v0.7.1, v0.7.2, v0.8.0 did not change the
-  API surface).
+  (still at v0.7.0; v0.7.1, v0.7.2, v0.8.0..v0.8.25 did not change
+  the API surface).
 - [Admin user guide](./user-guide/admin/) — operator-facing manual.
 - [Developer guide](./developer/) — module overview, testing,
   contributing.
@@ -35,8 +35,8 @@ title: Aegis documentation
 | Component | Status |
 | --- | --- |
 | Architecture (this doc tree) | ✅ Finalised (v9.5) |
-| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.14 |
-| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups, credentials, inbound-templates) | ✅ v0.8.14 |
+| Backend (Go 1.26+ — panel, agent, BatchedApplier, backups, CLI) | ✅ v0.8.25 |
+| Frontend (Vue 3 — dashboard, nodes, users, plans, webhooks, backups, credentials, inbound-templates) | ✅ v0.8.25 |
 | Local dev environment (docker compose) | ✅ v0.5.0 |
 | Core (sing-box provider, GitHub-API SHA-256 install) | ✅ v0.5.0 |
 | sops+age secrets (`configure_secrets` Ansible role + decrypt-on-operator pattern) | ✅ v0.5.0 (canonical manual path refined in v0.8.x) |
@@ -75,11 +75,23 @@ title: Aegis documentation
 | Per-user credential filter in Builder (closes the v0.7.x Phase 2 multi-user TODO) | ✅ shipped (v0.8.10+) |
 | Audit 3.1 fix chain (HttpOnly refresh cookie + frontend `withCredentials` + Caddy CSP) | ✅ shipped (v0.8.13+ / v0.8.14, PRs #214 / #215 / #216 / #217) |
 | v0.8.13 body-field shim closure (refresh token is cookie-only) | ✅ shipped (v0.8.14, PR #217) |
+| v0.8.15 multi-stage Dockerfile (real `pg_dump` + `aegis-agent` in image + bootstrap `writeError` logging) | ✅ shipped (PR #222) |
+| v0.8.16 `postgresql-client-15` + `joinHostPort` | ✅ shipped (PR #224) |
+| v0.8.17 replace `pg_dump` symlink with real binary | ✅ shipped (PR #226) |
+| v0.8.18 `Dumper`/`Restorer` interfaces + `pgDumpArgs` pure function | ✅ shipped (PR #228) |
+| v0.8.19 `pg_dump` 15 → 16 via PGDG apt repo | ✅ shipped (PR #229) |
+| v0.8.20 TOFU policy reachable when `known_hosts` file exists | ✅ shipped (PR #230) |
+| v0.8.21 SSH fingerprint from binary wire format (`sshFingerprintWire` helper) | ✅ shipped (PR #231) |
+| v0.8.22 `HostKeyAlgorithms: ed25519` (no more ECDSA-vs-ed25519 mismatch) | ✅ shipped (PR #232) |
+| v0.8.23 `stripFingerprintPrefix` (`SHA256:` / `MD5:` case-insensitive) | ✅ shipped (PR #233) |
+| v0.8.24 `BootstrapNodeProvider.Update` propagates `State` (the empty `UpdateInput{}` no-op fix) | ✅ shipped (PR #234) |
+| v0.8.25 `Client.UploadAndSwap` for ETXTBSY-safe binary replacement (the re-provision-while-running fix) | ✅ shipped (PR #235) |
 | Cabinet API (extended plans, hosts, decoys) | 🟡 v1.2+ |
 | S3-compatible backup storage | 🟡 v1.2+ |
 | Cascade topology | ⏳ Phase 4+ |
 | MCP integration | ⏳ Phase 4+ |
 | Smoke test on fresh VM in CI (terraform + ansible + boot log) | ⏳ v0.9.0 |
+| `release.yml` hard-gate smoke test (the single most-important infra change to prevent future silent bugs) | ⏳ v0.9.0 |
 | Tailwind v4 migration | ⏳ v1.5 |
 | Light theme polish | ⏳ v1.5 |
 

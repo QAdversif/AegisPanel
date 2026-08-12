@@ -106,8 +106,8 @@ sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env > /tmp/aegis-env
 #  docs/RUNBOOKS/deploy.md §6.4 for a worked python env-flag builder)
 
 # 5. Pull the panel image
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.14'
-ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.14'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel:0.8.25'
+ssh root@panel.example.com 'docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.25'
 
 # 6. Start the panel + UI containers (one-shot docker run with the
 #    -e flags from step 4)
@@ -118,7 +118,7 @@ ssh root@panel.example.com "docker run -d --name aegis-panel --network aegis-net
   -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
   -p 127.0.0.1:8080:8080 \
   <the -e flags from step 4> \
-  ghcr.io/qadversif/aegispanel:0.8.14"
+  ghcr.io/qadversif/aegispanel:0.8.25"
 
 # 7. Smoke test
 curl -fsS http://panel.example.com:8080/api/v1/health
@@ -394,7 +394,7 @@ keep all three.
 Pin the panel image tag in `group_vars/all.yml`:
 
 ```yaml
-aegis_panel_image_tag: "0.8.14"   # no 'v' prefix; release.yml rewrites in #111
+aegis_panel_image_tag: "0.8.25"   # no 'v' prefix; release.yml rewrites in #111
 ```
 
 Then re-run the `install_panel` role. The role is idempotent:
@@ -403,7 +403,7 @@ Then re-run the `install_panel` role. The role is idempotent:
 config matches the new compose.
 
 The release pipeline (`ghcr.io/qadversif/aegispanel`) pushes the
-bare semver (`0.8.14`), the major.minor shorthand (`0.8`), and
+bare semver (`0.8.25`), the major.minor shorthand (`0.8`), and
 `latest` (only for non-prerelease tags, per
 `flavor: latest=auto`).
 
@@ -434,6 +434,115 @@ token in the body, the refresh token is in the
 fix chain (HttpOnly cookie + frontend
 `withCredentials` + Caddy CSP) is end-to-end
 active.
+
+### v0.8.14 → v0.8.25 upgrade (the silent-bug chain)
+
+v0.8.14..v0.8.25 is **eleven releases** that
+collectively closed **nine silent production
+bugs** in the panel's backup + provision code
+path. None of them changed the wire format,
+the OpenAPI spec, the env-var contract, or the
+schema. **The upgrade is a straight bounce
+through the chain** — no special rolling-upgrade
+pattern is needed; the canonical "server before
+client" applies but the UI image only changed
+when the build pipeline produced a new layer
+(v0.8.15, v0.8.18, v0.8.20; in between the UI
+image is byte-identical to the previous release).
+
+> **Operator note**: the canonical bounce script
+> is `~/.aegis/scripts/deploy-v0.8.<X>-bounce.sh`
+> (rename-then-run pattern: stop the canonical
+> `aegis-panel` / `aegis-ui`, rename them to
+> `-prev2`, pull the new image, run the new
+> container with the same env, port, and volume
+> mounts). The script enforces the
+> `-p 127.0.0.1:8080:8080` (NOT
+> `-p 8080:8080` — that would conflict with
+> host-level Caddy) and the 11
+> `AEGIS_*_BACKEND=pg` env vars (the v0.8.6
+> `Config.validate()` guard refuses to boot if
+> any is missing under `AEGIS_ENV=production`).
+> See "Top-level Caddy" below for
+> the `handle_path` reverse-proxy contract.
+>
+> **Operator note**: the v0.8.15 multi-stage
+> Dockerfile change (`+~50 MB` image size, runtime
+> base switched from `distroless/static` to
+> `distroless/base`) means the v0.8.14 → v0.8.15
+> bounce is the only one with a non-trivial image
+> size delta. v0.8.16..v0.8.25 deltas are
+> sub-megabyte (Go code-only).
+
+The eleven releases in order, with the closed
+bug for context:
+
+1. **v0.8.15** (PR #222) — multi-stage Dockerfile
+   for `pg_dump` + `aegis-agent`; bootstrap
+   `writeError` logs every 4xx/5xx. Closes
+   "backups return `status="failed"` (no
+   `pg_dump` in image)" + "provision returns
+   502 (no `aegis-agent` in image)".
+2. **v0.8.16** (PR #224) — `postgresql-client-15`
+   + `joinHostPort` host:port parse. Closes
+   "pg_dump symlink to `pg_wrapper` shell
+   script in distroless/runtime".
+3. **v0.8.17** (PR #226) — replace symlink
+   with real binary. Closes "pg_dump exits 1
+   silently in runtime".
+4. **v0.8.18** (PR #228) — `Dumper` /
+   `Restorer` interfaces + `pgDumpArgs` pure
+   function. Closes three: "DSN stripped to
+   bare db name" (23-byte empty dump files),
+   "pg_dump exit code discarded" (silent
+   failures), and "`pgDumpReader.Close()`
+   returned best-effort close instead of
+   subprocess exit code".
+5. **v0.8.19** (PR #229) — `pg_dump` 15 → 16
+   via PGDG apt repo. Closes "pg_dump 15 vs
+   postgres 16 server version mismatch".
+6. **v0.8.20** (PR #230) — `bootstrap.hostKeyCallback`
+   TOFU-policy fix. Closes "TOFU policy was
+   unreachable when `known_hosts` file exists"
+   (early-return short-circuited).
+7. **v0.8.21** (PR #231) — `sshFingerprintWire`
+   helper. Closes "fingerprint from
+   authorized_keys line, not binary wire
+   format" (Go `ssh.FingerprintSHA256` misnomer).
+8. **v0.8.22** (PR #232) — `HostKeyAlgorithms:
+   ed25519`. Closes "server picks ECDSA,
+   ed25519 pin rejected as 'mismatch'".
+9. **v0.8.23** (PR #233) — `stripFingerprintPrefix`.
+   Closes "literal compare rejected
+   `pCnGi…` ≠ `SHA256:pCnGi…`".
+10. **v0.8.24** (PR #234) — `UpdateInput{State:
+    &newState}`. Closes "provision returns
+    200 with `new_state:"online"` but DB row
+    still shows `state: "new"`" (the empty
+    `UpdateInput{}` pointer-field struct was a
+    no-op write).
+11. **v0.8.25** (PR #235) — `Client.UploadAndSwap`
+    (SFTP-to-temp + `mv -f`). Closes
+    "re-provision of a running node fails
+    with `sftp: "Failure"` (Linux `ETXTBSY`:
+    direct overwrite of an mmap'd binary)".
+
+The full historical record is in
+[`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md)
+"v0.8.16..v0.8.25 — the silent-bug chain
+(closed)" + the
+[`docs/gap-analysis-v0.8.24.md`](./gap-analysis-v0.8.24.md)
+"## 5. The v0.8.17 → v0.8.24 silent-bug chain
+(closed)" + "## 6. Tier 1 / 2 / 3 / 4
+priorities" sections.
+
+**A v0.9.0 follow-up** is a `release.yml`
+hard-gate smoke test that runs `pg_dump --version`
++ a tiny backup against the freshly-built image
+BEFORE publishing. This would have caught every
+one of bugs #1-#5 in CI. Tracked in
+[`docs/gap-analysis-v0.8.24.md`](./gap-analysis-v0.8.24.md)
+Tier 1.
 
 ## Observability
 
@@ -539,7 +648,7 @@ is exactly what a memory-only dev install wants.
   cabinet API** — see [ROADMAP.md](./ROADMAP.md) for the
   milestone status of each.
 - **S3-compatible backup storage** — local-only backups are the
-  v0.5.0-v0.8.14 contract. The `Store/Backend` interface in
+  v0.5.0-v0.8.25 contract. The `Store/Backend` interface in
   `internal/backups/` is the extension point; the S3 implementation
   is a future PR.
 - **A high-availability topology.** Aegis is single-instance.

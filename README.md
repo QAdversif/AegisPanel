@@ -1,28 +1,32 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.15** (latest tagged release, 2026-08-11) closes
-> two silent functional gaps in the v0.8.14 panel image: backups
-> that 100% failed with `pg_dump not found` (because the
-> distroless/static runtime had no dynamic linker), and provision
-> requests that 100% returned 502 with no detail in `docker logs`
-> (because the bootstrap handler's `writeError` only wrote the
-> response body, no log line). Both fixed in a single multi-stage
-> Dockerfile change (PR #222): adds a `debian:12-slim` tooling
-> stage that runs `apt-get install postgresql-client`, switches
-> the runtime base from `distroless/static` to `distroless/base`,
-> copies `pg_dump` + the whole `/usr/lib/x86_64-linux-gnu` tree
-> into the runtime, adds a second `go build` for `./cmd/aegis-agent`
-> in the same build stage, copies the resulting binary to
-> `/app/bin/aegis-agent`, and sets `AEGIS_AGENT_BINARY=/app/bin/aegis-agent`
-> as the runtime default. Also adds a `log.Error().Int("status",...).Str("error",...).Msg(...)`
-> to `writeError` so every 4xx/5xx from `internal/bootstrap/handler.go`
-> lands in the structured log stream. v0.8.15 is a **drop-in
-> replacement for v0.8.14** on the server side; the rolling-upgrade
-> pattern is the standard "server before client". Image size
-> grows by ~50 MB (mostly the .so tree). Still 2x smaller than
-> a `debian:12-slim` runtime. No OpenAPI / env / migration changes;
-> no breaking changes for the UI.
+> services. **v0.8.25** (latest tagged release, 2026-08-12) closes
+> the last silent production bug in the v0.8.17 → v0.8.24 live-smoke
+> chain: re-provisioning an already-running node failed with
+> `sftp: "Failure" (SSH_FX_FAILURE)` at the `upload-agent` stage.
+> Root cause is Linux `ETXTBSY` — the kernel refuses to let one
+> process unlink or truncate a binary currently mmap'd for
+> execution by another process. Fix is a new
+> `bootstrap.Client.UploadAndSwap` interface method (PR #235) that
+> SFTP-writes the new agent binary to a `.aegis-agent.swap.<8-hex>`
+> temp file in the same directory, then atomically renames it
+> over the target via `mv -f` (POSIX rename(2), which is always
+> permitted even when the target is being executed — the
+> running process keeps the unlinked inode alive until it exits,
+> and a new process or the systemd `Restart=always` loop picks
+> up the new binary at the same path). `Installer.uploadAgent`
+> switched to the new method. End-to-end verified: v0.8.25
+> deployed, Demo-нода re-provisioned without the `systemctl stop`
+> workaround that v0.8.24 needed. Closes the **9-bug
+> silent-production chain** that started in v0.8.15 (pg_dump
+> missing in image) and ran through v0.8.16..v0.8.24 (symlink
+> wrapper, DSN-stripped dump call, postgres 15 vs 16 mismatch,
+> known_hosts TOFU unreachable, wire-vs-line fingerprint, ed25519
+> HostKeyAlgorithms pin, `SHA256:` prefix-strip, state-write
+> `UpdateInput{}` empty struct). No OpenAPI / env / migration
+> changes. v0.8.25 is a **drop-in replacement for v0.8.24** on
+> the server side.
 >
 > **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend
 > (Vite + shadcn-vue), PostgreSQL, Caddy, fail2ban, sops+age
@@ -32,23 +36,32 @@
 > for the MVP strategy.
 >
 > **Gap analysis vs. roadmap:** see
-> [`docs/gap-analysis-v0.8.15.md`](./docs/gap-analysis-v0.8.15.md)
+> [`docs/gap-analysis-v0.8.24.md`](./docs/gap-analysis-v0.8.24.md)
 > for the full Phase 0 / 0.1 / 0.2 / 0.3 / 0.4 / 1.0 status, what's
 > blocking the v1.0.0-mvp-soft-launch tag, and the recommended
 > Tier 1 / 2 / 3 / 4 plan to get there.
 
 ## Status
 
-**v0.8.15 — multi-stage Dockerfile for pg_dump + aegis-agent — shipped.**
-Closes the two silent functional gaps in v0.8.14: backups now
-have `pg_dump` available (so `POST /api/v1/backups/` returns a
-row with `status="running"` instead of `status="failed"`), and
-provision requests now have `aegis-agent` available locally (so
-`POST /api/v1/nodes/{id}/provision` can run the install path
-instead of failing on the first `os.Stat` step). The bootstrap
-handler's `writeError` now logs every 4xx/5xx to the structured
-log stream. PR #222 (squash merge `6a46881`). CHANGELOG surgery
-in PR #223.
+**v0.8.25 — `UploadAndSwap` for ETXTBSY-safe re-provision — shipped.**
+Closes the last silent production bug in the v0.8.17 → v0.8.24
+chain (9 bugs total, all closed across the v0.8.15..v0.8.25
+releases). New `bootstrap.Client.UploadAndSwap(ctx, src, dst, mode)`
+method on the SSH client; the existing `Upload` is unchanged
+and remains the right call for non-binary uploads. PR #235
+(squash merge `0ce05992`). CHANGELOG surgery in v0.8.25 cut
+(`890ded6`).
+
+**v0.8.24 — `BootstrapNodeProvider.Update` propagates State — shipped.**
+The final piece of the silent-bug chain: the `Update` method
+mutated `current.State` locally then called
+`a.Svc.Update(ctx, current.ID, UpdateInput{})` with an EMPTY
+`UpdateInput`. `UpdateInput` is a pointer-field struct where
+nil pointers mean "leave alone", so the underlying service
+update wrote nothing. v0.8.24 passes the new state via
+`UpdateInput{State: &newState}`. One real-line code change + a
+comment block documenting the pre-PR-#234 bug. PR #234 (squash
+merge `58efd97`).
 
 **v0.8.13 — inbound-templates + audit-3.1 fix chain — shipped.**
 Two big things in one release. (1) The inbound-templates
@@ -155,8 +168,18 @@ The release ladder:
 | `v0.8.13` | **shipped** | Feature release: inbound-templates end-to-end (per-tenant `Params` defaults, 5-PR planned sequence — foundation #205 + docs sync #209 + renderer #210 + validation #211 + frontend #212) plus the audit-3.1 fix chain (HttpOnly refresh cookie #214, frontend `withCredentials` #215, Caddy CSP #216). First release where a single feature + a security fix chain both shipped together. Migration `0021_inbound_templates.sql` is the only schema change. |
 | `v0.8.14` | **shipped** | Consolidation + security tightening release: closes the v0.8.13 backwards-compat shim that kept the refresh token in the JSON body of `/auth/login` and `/auth/refresh` (PR #217). v0.8.14+ is cookie-only — drop the `RefreshToken` field from `loginResponse`; drop the `refreshRequest` struct + the body-fallback parse in `readRefreshToken`; document the previously-undocumented `POST /api/v1/auth/logout` endpoint; regenerate `frontend/src/types/api.d.ts`. v0.8.14 is a **drop-in replacement for v0.8.13** on the server side. |
 | `v0.8.15` | **shipped** | Multi-stage Dockerfile for `pg_dump` + `aegis-agent` + bootstrap `writeError` logging (PR #222, squash merge `6a46881`). Closes two silent functional gaps from v0.8.14: backups (no `pg_dump` in image → 100% failed rows) and provision (no `aegis-agent` in image → 502 on first `os.Stat` step). Runtime base switched from `distroless/static` to `distroless/base`; `+~50 MB` image size (mostly the .so tree). No OpenAPI / env / migration / UI breaking changes. |
-| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222). |
-| `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) + restore-drill on a clean VM (download backup → restore → first-boot → panel reachable). The single missing piece for the v1.0.0-mvp-soft-launch tag. |
+| `v0.8.16` | **shipped** | `postgresql-client-15` + `joinHostPort` host:port parse fix (PR #224). v0.8.15 still used a symlink to the distroless `pg_wrapper` shell script → no shell in the runtime image → `pg_dump` exited 1 silently. v0.8.16 installs the real client package + handles `host:22:22` (double-colon) parse path. No OpenAPI / env / migration changes. |
+| `v0.8.17` | **shipped** | `rm /usr/bin/pg_dump && cp /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump` in the tooling stage of the multi-stage Dockerfile (PR #226). v0.8.16's installed symlink was still pointing at the wrapper; this commit replaces the symlink with the real binary so the runtime image has a working `pg_dump` that postgres-16 server accepts. No OpenAPI / env / migration changes. |
+| `v0.8.18` | **shipped** | `Dumper` / `Restorer` interfaces + `pgDumpArgs` / `pgRestoreArgs` pure functions (PR #228). Architectural refactor: replaces the single `dumpFn` callback with consumer-side interfaces; the service holds the full DSN in `Config` and delegates extract to injected `Dumper` / `Restorer`. Production wiring installs `pgBinaries`. Fixed 3 silent bugs: full-DSN was stripped to bare db name, `pg_dump` exit code was discarded by `closeQuiet(src)`, and `pgDumpReader.Close()` now returns the subprocess exit code (no more 23-byte empty-dump files masquerading as backups). `pg_dumpArgs` is a pure table-tested function; PGPASSWORD is set via env, NEVER argv. No OpenAPI / migration / UI changes. |
+| `v0.8.19` | **shipped** | `pg_dump` 15 → 16 via PGDG apt repo (PR #229). v0.8.18 fixed the silent-fail mode but the binary was still pg_dump 15 against a postgres-16 server, which fails with "server version mismatch". v0.8.19 adds the PGDG GPG key + `apt.postgresql.org` repo in the tooling stage + installs `postgresql-client-16` + copies the real binary. PGDG trust anchor removed at end of `RUN` (no third-party repos in the runtime image long-term). Live smoke on the first deploy: backup row `status="ok"`, `size_bytes=21982` (real 21KB dump, not 23 bytes). No OpenAPI / migration / UI changes. |
+| `v0.8.20` | **shipped** | `bootstrap.hostKeyCallback` TOFU-policy fix (PR #230). Pre-PR the callback early-returned the strict `knownhosts.New` whenever the `known_hosts` file existed (even an empty one), which short-circuited the TOFU policy entirely. v0.8.20 lifts the TOFU logic to be the single source of truth: the `known_hosts` file is consulted INSIDE the `TofuAcceptAndAppend` callback (and inside `TofuReject`), never as an early exit. 3 regression tests: empty-file TOFU accepts, known-key accepts silently, mismatch rejects with `ErrHostKeyMismatch`. No OpenAPI / migration / UI changes. |
+| `v0.8.21` | **shipped** | SSH fingerprint from binary wire format (PR #231). Pre-PR the panel used Go's `ssh.FingerprintSHA256` which (in modern Go) actually hashes the *authorized_keys* line format (`"ssh-ed25519 AAAA…\n"`), not the binary wire format. The operator's OpenSSH-generated fingerprint pin therefore mismatched the actual key. v0.8.21 adds a new `sshFingerprintWire(key) string` helper that SHA-256s `key.Marshal()` + strips trailing `=` from the base64, matching `ssh-keygen -lf` byte-for-byte. Test fixture uses a real Demo-нода public-key blob. No OpenAPI / migration / UI changes. |
+| `v0.8.22` | **shipped** | `HostKeyAlgorithms: []string{ssh.KeyAlgoED25519}` (PR #232). Pre-PR the panel accepted any of `{rsa, ecdsa, ed25519}` during SSH kex; the server's `kexinit` preferred ECDSA, the operator's ed25519 pin was rejected as "mismatch". v0.8.22 pins the algorithm to ed25519. v0.9.0 candidate: parse the algorithm from the expected fingerprint (32-byte ed25519 vs 64-byte P-256 vs 256-byte RSA-2048) and pin the algorithm list accordingly. No OpenAPI / migration / UI changes. |
+| `v0.8.23` | **shipped** | `stripFingerprintPrefix(fp)` + `fingerprintEqual(a, b)` (PR #233). Pre-PR the compare was literal: `pCnGi…` ≠ `SHA256:pCnGi…` (the actual key matched the un-prefixed side, the operator's pin had the `SHA256:` prefix). v0.8.23 strips `SHA256:` / `MD5:` (case-insensitive) from both sides. 5 table-driven cases: case-insensitive, different base64, mixed prefix, MD5 prefix, unknown prefix (passes through → surfaces as real mismatch). No OpenAPI / migration / UI changes. |
+| `v0.8.24` | **shipped** | `BootstrapNodeProvider.Update` propagates `State` (PR #234). Pre-PR the method mutated `current.State` locally then called `a.Svc.Update(ctx, current.ID, UpdateInput{})` with an empty struct; `UpdateInput` is pointer-field, all-nil = "leave alone" = no SQL UPDATE. v0.8.24 passes the new state via `UpdateInput{State: &newState}`. One real-line change + a comment block. No OpenAPI / migration / UI changes. |
+| `v0.8.25` | **shipped** | `Client.UploadAndSwap(ctx, src, dst, mode)` for ETXTBSY-safe binary replacement (PR #235). Pre-PR the SFTP step did direct overwrite of `/usr/local/bin/aegis-agent`, which Linux refused with `ETXTBSY` (text-file-busy) on a re-provision of a running node — the agent's mmap'd text region can't be unlinked by another process. v0.8.25 splits the upload into SFTP-to-temp (`.basename.swap.<8-hex>`) + `mv -f` over the target via SSH; `rename(2)` is always permitted, the running process keeps the unlinked inode alive until it exits, the systemd `Restart=always` loop picks up the new binary. Mock seam in `installer_test.go` records `uploadSwapPaths` separately from `uploadPaths`; `TestInstaller_SuccessPath` asserts the agent binary path uses `UploadAndSwap` (regression guard). No OpenAPI / migration / UI changes. |
+| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222), v0.8.16..v0.8.25 silent-bug chain (PRs #222/#224/#226/#228/#229/#230/#231/#232/#233/#234/#235). |
+| `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) + restore-drill on a clean VM (download backup → restore → first-boot → panel reachable) + `release.yml` hard-gate smoke (the single most-important infra change to prevent future silent bugs). The missing pieces for the v1.0.0-mvp-soft-launch tag. |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release. v0.8.15 unblocks the code path; v0.9.0 unblocks the operational confidence. |
 
 See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the milestone ladder,
@@ -271,7 +294,7 @@ is standardized on `npm ci` against the committed
 - **CHANGELOG** — [`CHANGELOG.md`](./CHANGELOG.md). Per-version release
   notes (Keep a Changelog format).
 - **Known limitations** — [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md).
-  Open gaps and the milestone that closes each.
+  Open gaps (v0.8.25) and the milestone that closes each.
 - **Runbooks** — [`docs/RUNBOOKS/`](./docs/RUNBOOKS/deploy.md).
   Operator runbooks (deploy, restore-drill).
 - **Developer guide** — [`docs/developer/`](./docs/developer/index.md).
