@@ -41,20 +41,54 @@
 # `pg_dump` ELF binary at
 # `/usr/lib/postgresql/15/bin/pg_dump` — copy
 # that path directly.
+#
+# v0.8.19 upgrade: install `postgresql-client-16`
+# from the PGDG apt repo. The panel runs against
+# `postgres:16-alpine` in production; pg_dump 15
+# refuses to dump a PostgreSQL 16 server ("server
+# version mismatch"), so we ship pg_dump 16 from
+# the official PGDG package stream. The package
+# name `postgresql-client-16` does not exist in
+# stock Debian 12 bookworm — only the PGDG repo
+# (https://apt.postgresql.org/) carries it. The
+# PGDG repo's package set is built against the
+# latest 16.x point release and is the standard
+# way to ship a current pg_dump on bookworm.
 FROM debian:12-slim AS tooling
 
-# v0.8.17: after install, replace the
-# `/usr/bin/pg_dump` symlink-to-pg_wrapper
-# with the actual `/usr/lib/postgresql/15/bin/pg_dump`
-# ELF binary. The runtime image just `COPY`s
-# both into place — no shell or `ln` needed.
+# v0.8.19: PGDG apt repo. We use the GPG-key
+# path that PGDG itself publishes in their
+# install docs (https://wiki.postgresql.org/wiki/Apt).
+# The PGDG list and the key live in the image
+# only for the duration of this RUN; both are
+# removed in the `rm` step at the end so the
+# image does not contain arbitrary third-party
+# trust anchors.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        postgresql-client-15 \
-        ca-certificates && \
+        ca-certificates curl gnupg && \
+    install -d /usr/share/postgresql-common/pgdg && \
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        postgresql-client-16 && \
+    rm /etc/apt/sources.list.d/pgdg.list && \
+    rm -rf /var/lib/apt/lists/* && \
+    # v0.8.17 pattern (continued in v0.8.19): the
+    # postgresql-client metapackage installs
+    # `/usr/bin/pg_dump` as a symlink to the
+    # `pg_wrapper` shell script. The wrapper needs
+    # `/bin/sh` + `dpkg-divert` + the postgresql-common
+    # runtime — none of which are in the distroless
+    # `base` image. Replace the symlink with the
+    # actual ELF binary at
+    # `/usr/lib/postgresql/16/bin/pg_dump` so the
+    # runtime image just COPYs a flat file.
     rm /usr/bin/pg_dump && \
-    cp /usr/lib/postgresql/15/bin/pg_dump /usr/bin/pg_dump && \
-    rm -rf /var/lib/apt/lists/*
+    cp /usr/lib/postgresql/16/bin/pg_dump /usr/bin/pg_dump
 
 # ---- Build stage --------------------------------------------------------
 FROM golang:1.26-alpine AS build
@@ -157,7 +191,15 @@ COPY --from=build /out/aegis-agent /app/bin/aegis-agent
 # avoids both problems: the runtime image just
 # gets a flat file at `/usr/bin/pg_dump` via
 # the `COPY` step.
-COPY --from=tooling /usr/lib/postgresql/15/bin/pg_dump /usr/lib/postgresql/15/bin/pg_dump
+#
+# v0.8.19: bumped the source path from
+# `/usr/lib/postgresql/15/bin/pg_dump` to
+# `/usr/lib/postgresql/16/bin/pg_dump` so the
+# panel ships a pg_dump whose major version
+# matches the production postgres:16-alpine
+# server. The substitution-and-COPY pattern is
+# unchanged.
+COPY --from=tooling /usr/lib/postgresql/16/bin/pg_dump /usr/lib/postgresql/16/bin/pg_dump
 COPY --from=tooling /usr/bin/pg_dump /usr/bin/pg_dump
 COPY --from=tooling /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 
