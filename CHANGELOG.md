@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.23] - 2026-08-12
+
+This is a **fingerprint-prefix-compare fix**
+that closes the last silent production bug
+from the v0.8.17 → v0.8.23 live smoke series.
+v0.8.22 forced the ed25519 key path so both
+sides now compute the same fingerprint, but
+the literal-string `fingerprintEqual` compare
+rejected `pCnGi…` ≠ `SHA256:pCnGi…` because
+one side included the `SHA256:` prefix and
+the other did not.
+
+Single PR (#233), bootstrap-only:
+
+### Fixed
+- **Bootstrap: `fingerprintEqual` now strips a
+  leading `SHA256:` or `MD5:` algorithm
+  prefix (case-insensitive) from both sides
+  before comparing.** The panel's internal
+  `sshFingerprintWire` returns just the base64
+  payload (no prefix). The operator's paste
+  from `ssh-keygen -lf` always has the
+  `SHA256:` prefix. The compare must accept
+  both forms. A new `stripFingerprintPrefix`
+  helper does the prefix detection; unknown
+  prefixes are passed through unchanged so a
+  future algorithm change surfaces as a real
+  mismatch.
+
+### Files
+- `backend/internal/bootstrap/ssh.go` —
+  new `stripFingerprintPrefix` helper;
+  `fingerprintEqual` updated to call it.
+- `backend/internal/bootstrap/ssh_test.go` —
+  `TestFingerprintEqual` rewritten as
+  table-driven; 5 cases (case-insensitive,
+  different base64, mixed prefix, MD5 prefix,
+  unknown prefix).
+
+### Verification
+v0.8.23's live smoke test on the live server.click:
+`POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
+with `tofu_policy: accept-and-append` and
+`expected_fingerprint: SHA256:***REMOVED***`
+should return 200 with `state: "online"`.
+
 ## [0.8.22] - 2026-08-12
 
 This is a **host-key-algorithm fix** that closes
