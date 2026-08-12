@@ -120,16 +120,32 @@ logs/
 # These patterns match the throwaway file convention
 # documented in agent memory: every PR cycle creates
 # `.git-commit-<name>.{txt,md}` (commit-message
-# draft) and `.tmp-*.py` (helper script); both must be
-# mavis-trash'd before `git add`. The
+# draft), `.git-pr-title.txt` (PR-title draft for
+# the current PR cycle), `.git-tag-<version>.txt`
+# (tag-message draft for the current release cut), and
+# `.tmp-*.{py,sh,log,json}` (helper scripts). All must
+# be mavis-trash'd before `git add`. The
 # .github/pr-body-<name>.md files are tracked
 # intentionally (see PR body convention).
+#
+# Note: `.git-pr-title.txt` was accidentally committed
+# in PR #220 (squash-amend included the local scratch
+# file alongside the real change). v0.8.26 removes it
+# from tracking and adds the broader pattern here so
+# the same drift cannot recur.
 .git-commit-*.txt
 .git-commit-*.md
+.git-pr-title*.txt
+.git-tag-*.txt
 .tmp-*.py
 .tmp-*.log
 .tmp-*.json
 .tmp-*.sh
+
+# --- Local scratch safety-net directory ---
+# Created by mavis cleanup operations; never tracked.
+.trash-*/
+.trash/
 
 # --- Operator deploy scripts (live in the repo path but are
 # operator-only; contain VPS IP, SSH pubkey, DB password,
