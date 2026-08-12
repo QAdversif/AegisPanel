@@ -5,12 +5,20 @@ package bootstrap
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"net"
 	"os"
 	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
 )
+
+// testAddr is a deterministic non-nil net.Addr
+// for the hostKeyCallback tests. The knownhosts
+// library dereferences the address for logging,
+// so nil panics.
+var testAddr = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}
 
 // TestNewClient_RequiredFields exercises the
 // ClientConfig validation. The function is the
@@ -196,4 +204,115 @@ func newTestSigner(t *testing.T) ssh.Signer {
 		t.Fatalf("NewSignerFromKey: %v", err)
 	}
 	return signer
+}
+
+// TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts
+// is the regression test for the v0.8.19
+// live-smoke bug. On a fresh install the panel's
+// known_hosts file exists as a 0-byte mount point;
+// before PR #230 the hostKeyCallback early-returned
+// the strict knownhosts.New callback and the TOFU
+// policy was never consulted, so the very first
+// provision hit "knownhosts: key is unknown" with
+// no fallback. The fix: the TOFU policy IS the
+// callback; the known_hosts file is consulted
+// inside the TofuAcceptAndAppend branch.
+func TestHostKeyCallback_EmptyKnownHosts_TOFU_Accepts(t *testing.T) {
+	path := t.TempDir() + "/known_hosts"
+	// Empty file (0 bytes) — the bug condition.
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatalf("seed empty known_hosts: %v", err)
+	}
+	signer := newTestSigner(t)
+	c := &sshClient{
+		cfg: ClientConfig{
+			Address:             "h:22",
+			User:                "root",
+			Password:            "secret",
+			KnownHosts:          path,
+			Tofu:                TofuAcceptAndAppend,
+			ExpectedFingerprint: ssh.FingerprintSHA256(signer.PublicKey()),
+		},
+	}
+	cb, err := c.hostKeyCallback()
+	if err != nil {
+		t.Fatalf("hostKeyCallback: %v", err)
+	}
+	if err := cb("h:22", testAddr, signer.PublicKey()); err != nil {
+		t.Fatalf("callback with empty known_hosts + matching fp: %v (pre-PR-#230 bug: 'key is unknown')", err)
+	}
+	// And the key must be stashed for the post-handshake append.
+	if c.tofuKey == nil {
+		t.Fatal("tofuKey not stashed — Connect will not append on success")
+	}
+}
+
+// TestHostKeyCallback_KnownKey_Accepted is the
+// happy-path: an existing known_hosts entry must
+// be accepted silently (no fingerprint compare, no
+// append). PR #230 preserves this behavior — the
+// known_hosts lookup runs inside the TOFU
+// callback and short-circuits on match.
+func TestHostKeyCallback_KnownKey_Accepted(t *testing.T) {
+	path := t.TempDir() + "/known_hosts"
+	signer := newTestSigner(t)
+	// Pre-populate known_hosts with the test key.
+	if err := appendKnownHosts(path, "h:22", signer.PublicKey()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	c := &sshClient{
+		cfg: ClientConfig{
+			Address:             "h:22",
+			User:                "root",
+			Password:            "secret",
+			KnownHosts:          path,
+			Tofu:                TofuAcceptAndAppend,
+			ExpectedFingerprint: "SHA256:wrong-on-purpose", // should be ignored
+		},
+	}
+	cb, err := c.hostKeyCallback()
+	if err != nil {
+		t.Fatalf("hostKeyCallback: %v", err)
+	}
+	if err := cb("h:22", testAddr, signer.PublicKey()); err != nil {
+		t.Fatalf("callback with known key: %v", err)
+	}
+	// The tofuKey must NOT be stashed — the key is
+	// already in known_hosts; no append needed.
+	if c.tofuKey != nil {
+		t.Error("tofuKey stashed for an already-known host — would re-append on Connect")
+	}
+}
+
+// TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch
+// is the safety net: even with an empty file,
+// TofuAcceptAndAppend must reject a key whose
+// fingerprint does not match ExpectedFingerprint.
+func TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch(t *testing.T) {
+	path := t.TempDir() + "/known_hosts"
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	signer := newTestSigner(t)
+	c := &sshClient{
+		cfg: ClientConfig{
+			Address:             "h:22",
+			User:                "root",
+			Password:            "secret",
+			KnownHosts:          path,
+			Tofu:                TofuAcceptAndAppend,
+			ExpectedFingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		},
+	}
+	cb, err := c.hostKeyCallback()
+	if err != nil {
+		t.Fatalf("hostKeyCallback: %v", err)
+	}
+	err = cb("h:22", testAddr, signer.PublicKey())
+	if err == nil {
+		t.Fatal("callback accepted mismatched fingerprint")
+	}
+	if !errors.Is(err, ErrHostKeyMismatch) {
+		t.Errorf("want ErrHostKeyMismatch, got %v", err)
+	}
 }

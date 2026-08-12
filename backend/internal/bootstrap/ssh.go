@@ -342,45 +342,59 @@ func (c *sshClient) Connect(ctx context.Context) error {
 // function is split out of Connect for the
 // unit test (it does not need a live
 // connection).
+//
+// The callback's job:
+//  1. If the key is already in known_hosts,
+//     accept it silently (no fingerprint
+//     compare, no append).
+//  2. If the key is NOT in known_hosts, apply
+//     the TOFU policy:
+//     - TofuReject: return ErrHostKeyUnknown.
+//     - TofuAcceptAndAppend: compare against
+//     ExpectedFingerprint; on match, stash
+//     the key so Connect can append after
+//     success; on mismatch, return
+//     ErrHostKeyMismatch.
+//
+// Pre-PR-#230 bug: this function early-returned
+// the strict knownhosts.New callback whenever
+// the file existed (even an empty one), which
+// short-circuited the TOFU policy entirely.
+// The result was that on a fresh install — where
+// /var/lib/aegis/known_hosts is created as a 0-byte
+// file by the volume mount — the very first
+// provision call hit "knownhosts: key is
+// unknown" with no fallback. PR #230 lifts the
+// TOFU logic to be the single source of truth:
+// the known_hosts file is consulted INSIDE the
+// TofuAcceptAndAppend callback (and inside
+// TofuReject), never as an early exit.
 func (c *sshClient) hostKeyCallback() (ssh.HostKeyCallback, error) {
-	// Load the existing known_hosts file. A
-	// missing file is fine; the TOFU path
-	// appends the first key it sees.
 	knownHostsPath := c.cfg.KnownHosts
-	callback, err := knownhosts.New(knownHostsPath)
-	if err != nil {
-		// A "file not found" is a fresh-deploy
-		// case; the callback below handles the
-		// first-seen host by TOFU. Other
-		// errors (e.g. malformed file) are
-		// hard failures.
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("bootstrap: load known_hosts: %w", err)
-		}
-		callback = nil
+	// knownCallback (or a synthetic "always-miss"
+	// one when the file is absent) is the inner
+	// known_hosts lookup. It is invoked from
+	// inside the TOFU policy callback so the
+	// lookup and the policy live in one place.
+	knownCallback, err := knownhosts.New(knownHostsPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Malformed known_hosts is a hard
+		// failure; a fresh install (file
+		// missing) is not.
+		return nil, fmt.Errorf("bootstrap: load known_hosts: %w", err)
 	}
-	if callback != nil {
-		// The known_hosts callback rejects
-		// anything not in the file. This is the
-		// "strict" path; the TOFU layer
-		// replaces it below.
-		return callback, nil
-	}
-	// Fallback: no known_hosts file. The
-	// TOFU policy decides what to do on the
-	// first contact.
-	switch c.cfg.Tofu {
-	case TofuReject:
-		return func(_ string, _ net.Addr, _ ssh.PublicKey) error {
+	// unknownKeyCallback is invoked by the
+	// known_hosts callback when the key is not
+	// in the file; it does the actual TOFU
+	// policy decision. If the file is missing,
+	// knownCallback is nil and we use a
+	// always-miss shim so unknownKeyCallback
+	// runs unconditionally.
+	unknownKeyCallback := func(_ string, remote net.Addr, key ssh.PublicKey) error {
+		switch c.cfg.Tofu {
+		case TofuReject:
 			return ErrHostKeyUnknown
-		}, nil
-	case TofuAcceptAndAppend:
-		// The actual append happens after
-		// success. The callback just records
-		// the presented key on the client so
-		// Connect can append + verify after
-		// the handshake.
-		return func(_ string, remote net.Addr, key ssh.PublicKey) error {
+		case TofuAcceptAndAppend:
 			// Compare against the operator-
 			// supplied fingerprint. The check
 			// is the safety net for the
@@ -399,10 +413,33 @@ func (c *sshClient) hostKeyCallback() (ssh.HostKeyCallback, error) {
 			c.tofuKey = key
 			c.tofuAddr = remote.String()
 			return nil
-		}, nil
-	default:
-		return nil, fmt.Errorf("bootstrap: unknown TofuPolicy %d", c.cfg.Tofu)
+		default:
+			return fmt.Errorf("bootstrap: unknown TofuPolicy %d", c.cfg.Tofu)
+		}
 	}
+	if knownCallback == nil {
+		// No known_hosts file: the unknown-key
+		// path runs for every host.
+		return func(host string, remote net.Addr, key ssh.PublicKey) error {
+			return unknownKeyCallback(host, remote, key)
+		}, nil
+	}
+	// known_hosts file exists: defer to it for
+	// any key that's in the file; for unknown
+	// keys, apply the TOFU policy.
+	return func(host string, remote net.Addr, key ssh.PublicKey) error {
+		// knownhosts.New returns a callback that
+		// returns nil if the key matches a line
+		// in the file and an error otherwise.
+		// We invoke it directly as a query
+		// rather than as the handshake callback.
+		if err := knownCallback(host, remote, key); err == nil {
+			// Known key — accept.
+			return nil
+		}
+		// Unknown key — apply TOFU policy.
+		return unknownKeyCallback(host, remote, key)
+	}, nil
 }
 
 // Close shuts down the SSH and SFTP sessions.
