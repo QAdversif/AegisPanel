@@ -292,10 +292,47 @@ func (c *sshClient) Connect(ctx context.Context) error {
 		timeout = 30 * time.Second
 	}
 	clientConfig := &ssh.ClientConfig{
-		User:            c.cfg.User,
-		Auth:            []ssh.AuthMethod{auth},
-		HostKeyCallback: hostKeyCb,
-		Timeout:         timeout,
+		User: c.cfg.User,
+		Auth: []ssh.AuthMethod{auth},
+		// HostKeyAlgorithms pins the algorithm
+		// the client will accept during the SSH
+		// kex. We restrict to ed25519 because:
+		//
+		//   1. The operator-pinned ExpectedFingerprint
+		//      is for ONE specific key. If the
+		//      client accepted any of {rsa, ecdsa,
+		//      ed25519} and the server happened to
+		//      negotiate a different one, the
+		//      fingerprint compare would reject a
+		//      perfectly-valid pin. This was the
+		//      v0.8.21 live-smoke bug: the server
+		//      offered rsa / ecdsa / ed25519, the
+		//      Go client accepted all three, the
+		//      server picked ecdsa, and the
+		//      operator's ed25519 pin was rejected
+		//      as a "mismatch".
+		//
+		//   2. ed25519 is the strongest currently-
+		//      deployed SSH host key algorithm
+		//      (256-bit security, no NIST curves,
+		//      no RSA factoring assumptions).
+		//
+		//   3. Every OpenSSH >= 6.5 (2014) ships
+		//      with ed25519. v0.3.0's documented
+		//      support floor is OpenSSH 7.0+,
+		//      so the ed25519 pin is universally
+		//      available.
+		//
+		// v0.9.0 candidate: parse the algorithm
+		// from the expected fingerprint (e.g.
+		// 32-byte ed25519 vs 64-byte P-256 vs
+		// 256-byte RSA-2048) and pin the
+		// algorithm list accordingly. Until then
+		// the operator is expected to pin an
+		// ed25519 fingerprint.
+		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
+		HostKeyCallback:   hostKeyCb,
+		Timeout:           timeout,
 	}
 	dialer := &net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
