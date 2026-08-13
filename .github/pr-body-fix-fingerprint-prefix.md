@@ -14,8 +14,8 @@ compare and rejected `pCnGi…` ≠ `SHA256:pCnGi…`.
 
 ```
 bootstrap: ssh host key mismatch:
-  actual   pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM
-  expected SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM
+  actual   <demo-node-fingerprint>
+  expected SHA256:<demo-node-fingerprint>
 ```
 
 The fingerprints are the SAME. The format
@@ -59,5 +59,5 @@ unknown prefix).
 v0.8.23's live smoke test on the live server.click:
 `POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
 with `tofu_policy: accept-and-append` and
-`expected_fingerprint: SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM`
+`expected_fingerprint: SHA256:<demo-node-fingerprint>`
 should return 200 with `state: "online"`.

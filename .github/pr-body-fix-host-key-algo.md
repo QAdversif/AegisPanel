@@ -18,7 +18,7 @@ negotiation.
 ```
 bootstrap: ssh host key mismatch:
   actual   SHA256:OeZk6KcG4XcldWVtuznX3gyIjsDzNiYHFMHKsfwBDfA
-  expected SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM
+  expected SHA256:<demo-node-fingerprint>
 ```
 
 `ssh-keyscan cdn2ne.<prod-host>.click` exposes
@@ -61,5 +61,5 @@ The v0.8.22 live smoke test on the live server.click:
 `POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
 with `tofu_policy: accept-and-append` and
 the Demo-нода's `expected_fingerprint:
-SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM`
+SHA256:<demo-node-fingerprint>`
 should return 200 with `state: "online"`.

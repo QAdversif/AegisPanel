@@ -64,7 +64,7 @@ the production Demo-нода's host key, captured
 via `ssh-keyscan -t ed25519`. The test asserts:
 
   1. `sshFingerprintWire(pubKey)` returns
-     `pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM`
+     `<demo-node-fingerprint>`
      — the exact value `ssh-keygen -lf` would
      print and the exact value the operator
      confirmed at deploy time.
@@ -98,5 +98,5 @@ helper) for their `ExpectedFingerprint` setup.
 The v0.8.21 live smoke test on the live server.click:
 `POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
 with `tofu_policy: accept-and-append` and
-`expected_fingerprint: SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM`
+`expected_fingerprint: SHA256:<demo-node-fingerprint>`
 should return 200 with `state: "online"`.
