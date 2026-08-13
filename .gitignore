@@ -122,11 +122,16 @@ logs/
 # `.git-commit-<name>.{txt,md}` (commit-message
 # draft), `.git-pr-title.txt` (PR-title draft for
 # the current PR cycle), `.git-tag-<version>.txt`
-# (tag-message draft for the current release cut), and
-# `.tmp-*.{py,sh,log,json}` (helper scripts). All must
-# be mavis-trash'd before `git add`. The
-# .github/pr-body-<name>.md files are tracked
-# intentionally (see PR body convention).
+# (tag-message draft for the current release cut),
+# `.tmp-*.{py,sh,log,json}` (helper scripts), and
+# `.github/release-notes-<version>.md` (release-
+# notes draft). All must be mavis-trash'd before
+# `git add`. The `.github/pr-body-<name>.md` files
+# are tracked intentionally — they are the historical
+# archive of merged PR bodies (one file per PR since
+# the convention was adopted). DO NOT gitignore them.
+# `.github/release-notes-<version>.md` files are
+# throwaway (handled above).
 #
 # Note: `.git-pr-title.txt` was accidentally committed
 # in PR #220 (squash-amend included the local scratch
@@ -141,6 +146,10 @@ logs/
 .tmp-*.log
 .tmp-*.json
 .tmp-*.sh
+# Release-notes drafts (per-PR; once a release is cut,
+# the body is copied into the GitHub release notes UI
+# and the local draft is mavis-trash'd).
+.github/release-notes-*.md
 
 # --- Local scratch safety-net directory ---
 # Created by mavis cleanup operations; never tracked.
