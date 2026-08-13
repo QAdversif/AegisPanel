@@ -52,6 +52,18 @@ export const useAuthStore = defineStore('auth', () => {
   const token = ref<AccessToken | null>(null)
   const me = ref<{ userId: string; username: string; scopes: string[] } | null>(null)
 
+  // v0.8.26+: latch flipped when the axios response
+  // interceptor detects that the refresh-cookie round-trip
+  // failed (i.e. the user truly is signed out, not just
+  // briefly between access-token expiry and refresh). The
+  // interceptor uses it to dedup a "Session expired" toast
+  // when 5 in-flight requests all 401 in parallel; the
+  // first one fires, the rest see the latch and stay
+  // quiet. The latch is reset on the next successful
+  // `login()` so the next session's expiry is also
+  // notified exactly once.
+  const sessionExpiredNotified = ref(false)
+
   // accessToken is the computed the axios request
   // interceptor reads. Exposed as a top-level
   // computed (rather than reading `token.value
@@ -87,6 +99,10 @@ export const useAuthStore = defineStore('auth', () => {
       accessToken: result.accessToken,
       expiresAt: result.expiresAt,
     }
+    // A fresh login means the user is no longer in the
+    // "session expired" state — arm the latch so the
+    // NEXT session expiry fires a toast again.
+    sessionExpiredNotified.value = false
     // Best-effort: cache identity. If it fails, we
     // still consider the user logged in — the next
     // page will retry.
@@ -178,6 +194,17 @@ export const useAuthStore = defineStore('auth', () => {
     me.value = null
   }
 
+  /** v0.8.26+: called by the axios interceptor the
+   * first time it detects a real session expiry
+   * (refresh failed, not just a transient 401). The
+   * flag prevents subsequent 401s from spawning
+   * duplicate toasts. Reset by a successful
+   * `login()` so the next expiry is also notified.
+   */
+  function markSessionExpired(): void {
+    sessionExpiredNotified.value = true
+  }
+
   return {
     status,
     lastCheckedAt,
@@ -185,6 +212,7 @@ export const useAuthStore = defineStore('auth', () => {
     accessToken,
     me,
     isAuthenticated,
+    sessionExpiredNotified,
     ping,
     boot,
     login,
@@ -192,5 +220,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     setAccessToken,
     clear,
+    markSessionExpired,
   }
 })
