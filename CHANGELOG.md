@@ -41,6 +41,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (bootstrap + installer + new `Client.UploadAndSwap`
   method) and this PR is a docs-only follow-up.
 
+## [0.8.26] - 2026-08-13
+
+UX polish release. No backend change, no API change, no
+wire-format change. Three operator-reported console errors
+closed end-to-end; one new `.trivyignore` entry.
+
+### Added
+- `frontend/src/api/client.ts` + `frontend/src/stores/auth.ts`
+  — when the refresh-cookie round-trip fails (true
+  session expiry, not a transient 401), surface a
+  destructive "Session expired" toast and
+  programmatically push the user to `/login` with
+  `?redirect=<currentPath>`. A `sessionExpiredNotified`
+  latch on the auth store dedups the toast when 5
+  in-flight requests 401 in parallel.
+- `frontend/src/App.vue` / `frontend/src/layouts/AppLayout.vue`
+  — move the global `Toaster` from `AppLayout` to the
+  root `App` component so it persists across the
+  layout swap on `/login`. Side effect: the "Welcome
+  back" toast fired by `LoginView` on successful sign-in
+  (silently queued since v0.1.0) is now actually rendered.
+- `frontend/src/i18n/locales/{en,ru}.json` —
+  `common.sessionExpired` + `common.sessionExpiredDescription`.
+
+### Fixed
+- `frontend/src/views/InboundTemplatesView.vue` +
+  `frontend/src/views/CredentialsView.vue` — the
+  row-actions kebab menu leaked `size: 'icon'` through
+  `DropdownMenuTrigger`'s `asChild` slot, producing
+  `<svg width="icon" height="icon">` on every `MoreHorizontal`
+  icon (lucide-vue-next uses the `size` prop to drive
+  SVG width / height; the string `"icon"` is not a
+  valid length). Fix: wrap the `MoreHorizontal` in a
+  real `<Button variant="ghost" size="icon">` instead
+  of passing those props to the trigger.
+- `frontend/src/views/InboundsView.vue` — `nodeOptions`
+  started with `{ id: '', name: 'All nodes' }` which
+  then flowed into `<SelectItem :value="opt.id">` as
+  an empty string; radix-vue's `SelectItem` setup
+  throws on non-empty-string contract. Fix: replace
+  the empty-string sentinel with `'all'`; the
+  `selectedNodeId` check becomes
+  `if (selectedNodeId && selectedNodeId !== 'all')`.
+
+### Security
+- `.trivyignore` — added `CVE-2026-46600`
+  (`golang.org/x/net/dns/dnsmessage` DoS) to the
+  risk-accept list. The CVE is in the custom Caddy
+  binary the UI image ships, but Caddy uses the OS
+  resolver for outbound DNS and never invokes
+  `dnsmessage` on the panel UI's surface — the AVD
+  attack vector is unreachable. Caddy 2.11.5
+  upstream will pull in a patched `golang.org/x/net`;
+  the next `CADDY_VERSION` bump picks up the fix.
+
+### Not changed
+- Wire format, OpenAPI spec, env-var contract, schema,
+  Go API surface: no changes since v0.8.25. v0.8.26 is
+  a frontend-only UX release.
+
 ## [0.8.25] - 2026-08-12
 
 This is a **re-provision fix** that closes the
