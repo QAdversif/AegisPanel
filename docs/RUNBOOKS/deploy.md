@@ -12,9 +12,9 @@ recovery. Lessons: see `topics/aegis-deploy.md` in agent memory.
 
 - **Panel image**: `ghcr.io/qadversif/aegispanel:X.Y.Z` (no `v` prefix on the tag)
 - **UI image**: `ghcr.io/qadversif/aegispanel-ui:vX.Y.Z` (with `v` prefix; this asymmetry is intentional and tracked in deploy.local.md)
-- **VPS**: Ubuntu 24.04, `aegis-deploy@31.77.147.146`, SSH key `~/.ssh/aegis-deploy`
+- **VPS**: Ubuntu 24.04, `aegis-deploy@<prod-host-ip>`, SSH key `<operator-ssh-key-path>`
 - **Adjacent infra**: `aegis-postgres` (postgres:16-alpine), `aegis-redis` (redis:7-alpine), `aegis-nats` (nats:2.10-alpine)
-- **Public URL**: `https://the live server.click/p-7k2mx9n4q8r3/`
+- **Public URL**: `https://the live server.click/<panel-sub-path>/`
 - **State on host**:
   - Migrations dir: `/var/lib/aegis/migrations/` (host → container at `/app/migrations`)
   - Agent TOFU: `/var/lib/aegis/known_hosts` (host → container at `/var/lib/aegis/known_hosts`)
@@ -23,8 +23,8 @@ recovery. Lessons: see `topics/aegis-deploy.md` in agent memory.
 - **Local notes** (operator-only, OUTSIDE the repo, never in public channels):
   - `~/.aegis/deploy.local.md` — env, image tags, deploy conventions
   - `~/.ssh/aegis-deploy-deploy-history.md` — append-only log of every deploy's env (THIS FILE MUST EXIST)
-  - `~/.ssh/aegis-deploy` — SSH private key (ed25519, chmod 600)
-  - `~/.ssh/aegis.age.key` — age private key (icacls 600 on Windows) — only after sops+age setup
+  - `<operator-ssh-key-path>` — SSH private key (ed25519, chmod 600)
+  - `<operator-age-key-path>` — age private key (icacls 600 on Windows) — only after sops+age setup
   - `~/.aegis/.sops.yaml` — sops config, pins the age public key as the recipient for `aegis-env*.env`
   - `~/.aegis/aegis-env.env` — plain env (the source for encryption; icacls 600)
   - `~/.aegis/aegis-env.enc.env` — sops-encrypted env (at-rest on operator AND on server)
@@ -55,7 +55,7 @@ Both must show a digest. If either is missing, do NOT deploy — the release wor
 
 ```bash
 ls -1 backend/migrations | wc -l      # local count
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "sudo ls -1 /var/lib/aegis/migrations | wc -l"  # server count
 ```
 
@@ -64,11 +64,11 @@ missing files first:
 
 ```bash
 LOCAL=$(ls -1 backend/migrations | sort)
-REMOTE=$(ssh aegis-deploy@31.77.147.146 "sudo ls -1 /var/lib/aegis/migrations" | sort)
+REMOTE=$(ssh aegis-deploy@<prod-host-ip> "sudo ls -1 /var/lib/aegis/migrations" | sort)
 comm -13 <(echo "$LOCAL") <(echo "$REMOTE")  # files missing on server
 # for each missing file:
-scp backend/migrations/NNNN_name.sql aegis-deploy@31.77.147.146:/tmp/
-ssh aegis-deploy@31.77.147.146 "sudo cp /tmp/NNNN_name.sql /var/lib/aegis/migrations/ && sudo rm /tmp/NNNN_name.sql"
+scp backend/migrations/NNNN_name.sql aegis-deploy@<prod-host-ip>:/tmp/
+ssh aegis-deploy@<prod-host-ip> "sudo cp /tmp/NNNN_name.sql /var/lib/aegis/migrations/ && sudo rm /tmp/NNNN_name.sql"
 ```
 
 **If the new release has a migration that is NOT on the server,
@@ -78,7 +78,7 @@ do NOT proceed to step 3.** The boot will fatal-loop on
 ### 1.3 Verify env contract
 
 Open `~/.aegis/deploy.local.md` and confirm:
-- AEGIS_PANEL_PATH is `/p-7k2mx9n4q8r3`
+- AEGIS_PANEL_PATH is `/<panel-sub-path>`
 - AEGIS_DECOY_ROOT is `/var/www/decoy`
 - AEGIS_AGENT_KNOWN_HOSTS is `/var/lib/aegis/known_hosts`
 - AEGIS_POSTGRES_DSN matches the local note
@@ -130,11 +130,11 @@ chain is what consumers verify against.
 
 ```bash
 TS=$(date -u +%Y%m%d-%H%M%S)
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "sudo docker exec aegis-postgres pg_dump -U aegis -d aegis | gzip > /var/lib/aegis/backups/pre-vX.Y.Z-${TS}.sql.gz"
 
 # verify the backup is non-empty and has the expected size (~ 18KB compressed for the current Phase 1 schema)
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "ls -la /var/lib/aegis/backups/pre-vX.Y.Z-${TS}.sql.gz"
 ```
 
@@ -148,8 +148,8 @@ DSN, etc.). Re-check the DSN before proceeding.
 ### 3.1 Pull images on the server
 
 ```bash
-ssh aegis-deploy@31.77.147.146 "sudo docker pull ghcr.io/qadversif/aegispanel:0.8.9"
-ssh aegis-deploy@31.77.146 "sudo docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9"
+ssh aegis-deploy@<prod-host-ip> "sudo docker pull ghcr.io/qadversif/aegispanel:0.8.9"
+ssh aegis-deploy@<prod-host-ip> "sudo docker pull ghcr.io/qadversif/aegispanel-ui:v0.8.9"
 ```
 
 If the pull fails (auth, network), the GHCR token in the daemon's
@@ -159,7 +159,7 @@ on the server.
 ### 3.2 Stop the current panel
 
 ```bash
-ssh aegis-deploy@31.77.147.146 "sudo docker stop aegis-panel && sudo docker rm aegis-panel"
+ssh aegis-deploy@<prod-host-ip> "sudo docker stop aegis-panel && sudo docker rm aegis-panel"
 ```
 
 The container is gone but the data is in `aegis-postgres-data` (named
@@ -179,11 +179,11 @@ ENV_ARGS=(
   -e AEGIS_DECOY_ROOT=/var/www/decoy
   -e AEGIS_LOG_LEVEL=info
   -e AEGIS_AUTH_BACKEND=pg
-  -e AEGIS_POSTGRES_DSN='postgres://aegis:aegis-fixture-db-password@aegis-postgres:5432/aegis?sslmode=disable'
+  -e AEGIS_POSTGRES_DSN='postgres://aegis:the v0.8.x fixture DB password (see deploy.local.md)@aegis-postgres:5432/aegis?sslmode=disable'
   -e AEGIS_JWT_SECRET="$(cat ~/.ssh/aegis-deploy-deploy-history.md | grep AEGIS_JWT_SECRET= | head -1 | cut -d= -f2-)"
   -e AEGIS_ENV=production          # or development, see §1.3
   -e AEGIS_AGENT_KNOWN_HOSTS=/var/lib/aegis/known_hosts
-  -e AEGIS_PANEL_PATH=/p-7k2mx9n4q8r3
+  -e AEGIS_PANEL_PATH=/<panel-sub-path>
   -e AEGIS_SUBSCRIPTION_BACKEND=pg
   -e AEGIS_USERS_BACKEND=pg
   -e AEGIS_REDIS_ADDR=aegis-redis:6379
@@ -202,7 +202,7 @@ ENV_ARGS=(
   -e AEGIS_WEBHOOKS_BACKEND=pg
 )
 
-ssh aegis-deploy@31.77.147.146 "sudo docker run -d \
+ssh aegis-deploy@<prod-host-ip> "sudo docker run -d \
   --name aegis-panel \
   --network aegis-net \
   --restart unless-stopped \
@@ -220,8 +220,8 @@ idempotently. The panel is Up in ~5s.
 ```bash
 # (panel image has no wget/curl, so use docker logs)
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  STATUS=$(ssh aegis-deploy@31.77.147.146 "sudo docker inspect aegis-panel --format '{{.State.Health.Status}}' 2>/dev/null")
-  LOG=$(ssh aegis-deploy@31.77.147.146 "sudo docker logs --tail=5 aegis-panel 2>&1 | grep 'HTTP server listening'")
+  STATUS=$(ssh aegis-deploy@<prod-host-ip> "sudo docker inspect aegis-panel --format '{{.State.Health.Status}}' 2>/dev/null")
+  LOG=$(ssh aegis-deploy@<prod-host-ip> "sudo docker logs --tail=5 aegis-panel 2>&1 | grep 'HTTP server listening'")
   if [ -n "$LOG" ]; then
     echo "panel is up after ${i} attempts"
     break
@@ -241,8 +241,8 @@ The UI image is independent. Bounce it AFTER the panel is up
 (so the panel can serve the UI's API calls).
 
 ```bash
-ssh aegis-deploy@31.77.147.146 "sudo docker stop aegis-ui && sudo docker rm aegis-ui"
-ssh aegis-deploy@31.77.147.146 "sudo docker run -d \
+ssh aegis-deploy@<prod-host-ip> "sudo docker stop aegis-ui && sudo docker rm aegis-ui"
+ssh aegis-deploy@<prod-host-ip> "sudo docker run -d \
   --name aegis-ui \
   --network aegis-net \
   --restart unless-stopped \
@@ -257,7 +257,7 @@ ssh aegis-deploy@31.77.147.146 "sudo docker run -d \
 ```bash
 cat >> ~/.ssh/aegis-deploy-deploy-history.md <<EOF
 $(date -u +%Y-%m-%d\ %H:%M:%S) UTC
-target: 31.77.147.146
+target: <prod-host-ip>
 panel_image: ghcr.io/qadversif/aegispanel:0.8.9
 ui_image: ghcr.io/qadversif/aegispanel-ui:v0.8.9
 AEGIS_JWT_SECRET=$(cat ~/.ssh/aegis-deploy-deploy-history.md | grep -c AEGIS_JWT_SECRET=)
@@ -271,30 +271,30 @@ chmod 600 ~/.ssh/aegis-deploy-deploy-history.md
 
 ```bash
 # /health
-curl -kfsS https://the live server.click/p-7k2mx9n4q8r3/api/v1/health
+curl -kfsS https://the live server.click/<panel-sub-path>/api/v1/health
 # expected: {"status":"ok","version":"X.Y.Z"}
 
 # /me without auth
-curl -kfsS -o /dev/null -w '%{http_code}\n' https://the live server.click/p-7k2mx9n4q8r3/api/v1/auth/me
+curl -kfsS -o /dev/null -w '%{http_code}\n' https://the live server.click/<panel-sub-path>/api/v1/auth/me
 # expected: 401
 
 # admin login (the one user)
 curl -kfsS -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"<from deploy.local.md>"}' \
-  https://the live server.click/p-7k2mx9n4q8r3/api/v1/auth/login
+  https://the live server.click/<panel-sub-path>/api/v1/auth/login
 # expected: 200 + JWT in body
 
 # admin-only endpoint (with the JWT)
 TOKEN=<paste from above>
-curl -kfsS -H "Authorization: Bearer $TOKEN" https://the live server.click/p-7k2mx9n4q8r3/api/v1/nodes/
+curl -kfsS -H "Authorization: Bearer $TOKEN" https://the live server.click/<panel-sub-path>/api/v1/nodes/
 # expected: 200 + JSON list of nodes
 
 # UI loads (Caddyfile serves index.html for SPA routes)
-curl -kfsS -o /dev/null -w '%{http_code}\n' https://the live server.click/p-7k2mx9n4q8r3/
+curl -kfsS -o /dev/null -w '%{http_code}\n' https://the live server.click/<panel-sub-path>/
 # expected: 200
 
 # migrations applied — check schema_migrations count
-ssh aegis-deploy@31.77.147.146 "sudo docker exec aegis-postgres \
+ssh aegis-deploy@<prod-host-ip> "sudo docker exec aegis-postgres \
   psql -U aegis -d aegis -c 'SELECT count(*) FROM schema_migrations;'"
 # expected: should match `ls -1 backend/migrations | wc -l` on the operator's machine
 ```
@@ -316,8 +316,8 @@ If anything is wrong, the rollback is:
 6. Append the rollback event to the history file
 
 ```bash
-ssh aegis-deploy@31.77.147.146 "sudo docker stop aegis-panel && sudo docker rm aegis-panel"
-ssh aegis-deploy@31.77.147.146 "sudo docker run -d \
+ssh aegis-deploy@<prod-host-ip> "sudo docker stop aegis-panel && sudo docker rm aegis-panel"
+ssh aegis-deploy@<prod-host-ip> "sudo docker run -d \
   --name aegis-panel \
   --network aegis-net --restart unless-stopped \
   -v /var/lib/aegis/migrations:/app/migrations:ro \
@@ -328,9 +328,9 @@ ssh aegis-deploy@31.77.147.146 "sudo docker run -d \
 
 Then restore DB if needed:
 ```bash
-ssh aegis-deploy@31.77.147.146 "sudo docker stop aegis-postgres"
-ssh aegis-deploy@31.77.147.146 "gunzip -c /var/lib/aegis/backups/pre-vX.Y.Z-TS.sql.gz | sudo docker exec -i aegis-postgres psql -U aegis -d aegis"
-ssh aegis-deploy@31.77.147.146 "sudo docker start aegis-postgres"
+ssh aegis-deploy@<prod-host-ip> "sudo docker stop aegis-postgres"
+ssh aegis-deploy@<prod-host-ip> "gunzip -c /var/lib/aegis/backups/pre-vX.Y.Z-TS.sql.gz | sudo docker exec -i aegis-postgres psql -U aegis -d aegis"
+ssh aegis-deploy@<prod-host-ip> "sudo docker start aegis-postgres"
 ```
 
 The DB restore is destructive — only do it if a migration
@@ -356,8 +356,8 @@ winget install FiloSottile.age
 
 # generate keypair; the public key is the last line of the file
 # (the line that starts with "# public key: age1...")
-age-keygen -o ~/.ssh/aegis.age.key
-cat ~/.ssh/aegis.age.key
+age-keygen -o <operator-age-key-path>
+cat <operator-age-key-path>
 # On Windows the file is created world-readable; tighten ACLs:
 icacls "$HOME\.ssh\aegis.age.key" /inheritance:r \
   /grant:r "$($env:USERNAME):(R,W)"
@@ -377,11 +377,11 @@ private key, so the host-side permissions should be tight.
 
 ```bash
 # Copy the operator's PRIVATE age key to the server
-scp ~/.ssh/aegis.age.key aegis-deploy@31.77.147.146:/tmp/
+scp <operator-age-key-path> aegis-deploy@<prod-host-ip>:/tmp/
 
 # On the server: install under /etc/aegis/, chown to the
 # container's nonroot UID, chmod 0640
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "sudo install -d -m 0700 -o root -g root /etc/aegis && \
    sudo install -m 0600 -o root -g root /tmp/aegis.age.key /etc/aegis/age.key"
 
@@ -391,7 +391,7 @@ ssh aegis-deploy@31.77.147.146 \
 #   fatal: webhooks: failed to build age secret cipher:
 #     envelope: read identity file "/etc/aegis/age.key":
 #     open /etc/aegis/age.key: permission denied
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "sudo chown 65532:65532 /etc/aegis/age.key && \
    sudo chmod 0640 /etc/aegis/age.key"
 ```
@@ -406,7 +406,7 @@ script reads to build the `docker run -e KEY=VALUE` flags.
 # Plain env at ~/.aegis/aegis-env.env, chmod 600 (Windows:
 # icacls with owner-only grant). Content shape:
 #
-# AEGIS_PANEL_PATH=/p-7k2mx9n4q8r3
+# AEGIS_PANEL_PATH=/<panel-sub-path>
 # AEGIS_HTTP_ADDR=:8080
 # AEGIS_LOG_LEVEL=info
 # AEGIS_ENV=production
@@ -475,8 +475,8 @@ Push the encrypted copy to the server for at-rest storage
 
 ```bash
 scp ~/.aegis/aegis-env.enc.env \
-  aegis-deploy@31.77.147.146:/tmp/aegis-env.enc.env
-ssh aegis-deploy@31.77.147.146 \
+  aegis-deploy@<prod-host-ip>:/tmp/aegis-env.enc.env
+ssh aegis-deploy@<prod-host-ip> \
   "sudo install -d -m 0700 -o root -g root /etc/aegis && \
    sudo install -m 0600 -o root -g root /tmp/aegis-env.enc.env \
      /etc/aegis/aegis-env.enc.env && \
@@ -504,7 +504,7 @@ The current workflow is:
 
 ```bash
 # Decrypt locally
-SOPS_AGE_KEY_FILE=~/.ssh/aegis.age.key \
+SOPS_AGE_KEY_FILE=<operator-age-key-path> \
   sops --config ~/.aegis/.sops.yaml \
        -d ~/.aegis/aegis-env.enc.env \
        > ~/.aegis/aegis-env.plain.env
@@ -526,7 +526,7 @@ print(" ".join(flags))
 # untracked. Output is a single line of `-e KEY=VALUE` flags.)
 
 # Push over SSH and run the container
-ssh aegis-deploy@31.77.147.146 \
+ssh aegis-deploy@<prod-host-ip> \
   "sudo docker run -d --name aegis-panel \
      --network aegis-net --restart unless-stopped \
      -v /var/lib/aegis/migrations:/app/migrations:ro \
