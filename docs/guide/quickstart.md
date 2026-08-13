@@ -78,13 +78,13 @@ git commit -m "chore(ops): bootstrap secrets file"
 scp ~/.aegis/aegis-env.enc.env root@panel.example.com:/etc/aegis/
 # Age key (the server-side counterpart; needed by the distroless
 # container to decrypt webhooks secrets + nodes.ssh_private_key_ciphertext)
-scp ~/.ssh/aegis.age.key root@panel.example.com:/etc/aegis/age.key
+scp ~/.aegis/age.key root@panel.example.com:/etc/aegis/age.key
 # On the server, fix the perms for the distroless nonroot UID
 ssh root@panel.example.com 'chown 65532:65532 /etc/aegis/age.key && chmod 0640 /etc/aegis/age.key && chmod 0600 /etc/aegis/aegis-env.enc.env'
 ```
 
 > **v0.8.x note**: the age private key lives on the **operator's
-> local machine** (`~/.ssh/aegis.age.key`, mode 0600), not on
+> local machine** (the operator's age key, mode 0600), not on
 > the panel host. The panel host only needs the public
 > counterpart to verify signatures, and a copy of the private
 > key as `/etc/aegis/age.key` for runtime decrypts of
@@ -99,7 +99,7 @@ ssh root@panel.example.com 'chown 65532:65532 /etc/aegis/age.key && chmod 0640 /
 
 ```bash
 # On your local machine, decrypt the env into a temp file
-SOPS_AGE_KEY_FILE=~/.ssh/aegis.age.key \
+SOPS_AGE_KEY_FILE=~/.aegis/age.key \
 sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env \
   > /tmp/aegis-env.plain
 
@@ -143,7 +143,7 @@ xdg-open https://panel.example.com
 
 The default admin login is `admin` + the password you set in
 `AEGIS_JWT_SECRET`'s neighbouring admin password field (or
-the default `aegis-fixture-admin-password` if you used the
+the default v0.8.x fixture-admin-password (see deploy.local.md) if you used the
 v0.8.x first-run fixture — change it on first login). The
 admin is created via `aegis admin add admin --email <email>
 --role super-admin` on the panel host (the aegis binary

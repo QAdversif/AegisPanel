@@ -660,7 +660,7 @@ auditable.
 
 ### Admin password rotation — closed 2026-08-10 22:38 MSK
 
-The `aegis-fixture-admin-password` rotation was
+The v0.8.x fixture-admin-password (see deploy.local.md) rotation was
 performed on the prod panel (the live server.click). The new
 password is a 28-char `secrets.choice`-generated
 value over a 70-char alphabet (letters + digits +
