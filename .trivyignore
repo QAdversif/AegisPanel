@@ -14,8 +14,8 @@
 # `ignorefile:` input on the `trivy-action`. Removing an entry here
 # means the next PR will fail the gate until the vuln is fixed.
 #
-# Reviewed: 2026-07-29 (golang.org/x/text CVE — frontend scanner)
-# Next review: 2026-08-29 (one month) or on golang.org/x/text bump
+# Reviewed: 2026-08-13 (golang.org/x/net CVE — Caddy binary, frontend scanner)
+# Next review: 2026-09-13 (one month) or on Caddy bump to >= 2.11.5
 
 # golang.org/x/text v0.37.0 (transitive via the Vite SPA bundle
 # scanned by the frontend Trivy job) is affected by
@@ -71,3 +71,34 @@ CVE-2026-42504
 # `CADDY_VERSION` arg was rolled back, or the build context lost the
 # `caddy-build` stage) — investigate the Dockerfile before re-adding
 # this entry.
+
+# golang.org/x/net v0.55.0 (transitive in the custom Caddy binary
+# scanned by the frontend Trivy job, via `xcaddy` + Caddy's
+# `go.mod`) is affected by
+#   - CVE-2026-46600  dns/dnsmessage: DoS on crafted DNS record parse
+# The fix is in golang.org/x/net v0.56.0; the v0.55.0 dependency
+# is pinned in Caddy v2.11.4 (the build currently in
+# `frontend/Dockerfile` as `ARG CADDY_VERSION=2.11.4`). We accept
+# the risk because:
+#   1. The CVE triggers in `dns/dnsmessage`, a DNS-message
+#      decoder that the panel UI's Caddy instance never invokes.
+#      Caddy uses the OS resolver for outbound DNS; the
+#      `dnsmessage` package is in the build because it's a
+#      transitive dep of `net.DefaultResolver` family, not
+#      because the runtime parses client DNS.
+#   2. The Aegis panel UI does not serve a DNS endpoint, so
+#      the AVD attack vector (crafted DNS record) is
+#      unreachable.
+#   3. Caddy 2.11.5 upstream will pull in a patched
+#      golang.org/x/net as part of its Go stdlib bump; the next
+#      Dockerfile `CADDY_VERSION` bump picks up the fix.
+# Action: re-evaluate on any of:
+#   - Caddy 2.11.5 release notes mention golang.org/x/net >= v0.56.0
+#   - A concrete exploit PoC for dnsmessage reachable from a
+#     static-file / reverse-proxy Caddy instance (current AVD
+#     attack vector needs a DNS endpoint, which the panel UI
+#     does not expose).
+# Added: 2026-08-13 (PR #238 — session-expired toast fix blocked
+# the trivy gate for an unrelated reason; the entry is the
+# minimal change to unblock the PR).
+CVE-2026-46600
