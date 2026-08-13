@@ -105,10 +105,9 @@ Stack: Go 1.24, Vue 3 + Vite + TypeScript, Postgres 16, Redis
   instance", or by the operator's 1Password entry name.
 - **Draft / scratch files** at the repo root that capture
   banned values (`.git-pr-title*.txt`, `.git-tag-*.txt`,
-  `.github/pr-body-*.md`, `.github/release-notes-v*.md`,
-  `.tmp-*`). All of these patterns are gitignored as of
-  v0.8.26. If a draft file slips in, the secret-scan gate
-  will fail it.
+  `.github/release-notes-*.md`, `.tmp-*`). All of
+  these patterns are gitignored. If a draft file slips
+  in, the secret-scan gate will fail it.
 
 ## Banned patterns (machine-checked)
 
