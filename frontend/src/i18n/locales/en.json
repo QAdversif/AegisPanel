@@ -49,7 +49,9 @@
     "on": "On",
     "off": "Off",
     "required": "Required",
-    "invalidUuid": "Invalid UUID"
+    "invalidUuid": "Invalid UUID",
+    "sessionExpired": "Session expired",
+    "sessionExpiredDescription": "Please sign in again to continue."
   },
   "login": {
     "title": "Sign in to Aegis",

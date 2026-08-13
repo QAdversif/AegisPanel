@@ -37,7 +37,6 @@ import DropdownMenuItem from '@/components/ui/DropdownMenuItem.vue'
 import DropdownMenuSeparator from '@/components/ui/DropdownMenuSeparator.vue'
 import DropdownMenuLabel from '@/components/ui/DropdownMenuLabel.vue'
 import Sheet from '@/components/ui/Sheet.vue'
-import Toaster from '@/components/ui/Toaster.vue'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -249,9 +248,6 @@ onMounted(() => {
           </RouterView>
         </main>
       </div>
-
-      <!-- Global toaster (mount once) -->
-      <Toaster />
     </div>
   </TooltipProvider>
 </template>

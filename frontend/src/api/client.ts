@@ -36,6 +36,9 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
 
 import { useAuthStore } from '@/stores/auth'
+import { useToastStore } from '@/stores/toast'
+import { i18n } from '@/i18n'
+import { router } from '@/router'
 import type { ApiError } from '@/types'
 
 // Recursively convert snake_case object keys to camelCase.
@@ -138,9 +141,41 @@ async function refreshTokens(): Promise<string | null> {
     return data.access_token
   } catch {
     // Refresh failed: the cookie is gone or
-    // revoked. Clear the store so the UI re-routes
-    // to /login.
-    useAuthStore().clear()
+    // revoked. Clear the store and surface a clear
+    // "session expired" signal so the user knows
+    // why the page is about to re-route.
+    //
+    // v0.8.26+: before this fix the interceptor
+    // silently dropped the tokens; the user saw a
+    // generic per-action "401 — http_error" toast
+    // (from the view's catch block) and the page
+    // itself didn't navigate, so the operator had
+    // to refresh the tab to land on /login. With
+    // the fix: the first stale-session 401 fires a
+    // destructive toast, sets the
+    // `sessionExpiredNotified` latch, and
+    // programmatically pushes the user to /login
+    // with the original URL in `?redirect=`. The
+    // latch dedups the toast when 5 in-flight
+    // requests all 401 in parallel.
+    const auth = useAuthStore()
+    auth.clear()
+    if (!auth.sessionExpiredNotified) {
+      auth.markSessionExpired()
+      useToastStore().add({
+        title: i18n.global.t('common.sessionExpired'),
+        description: i18n.global.t('common.sessionExpiredDescription'),
+        variant: 'destructive',
+        duration: 6000,
+      })
+      const currentRoute = router.currentRoute.value
+      if (currentRoute.name !== 'login') {
+        void router.push({
+          name: 'login',
+          query: { redirect: currentRoute.fullPath },
+        })
+      }
+    }
     flushRefreshQueue(null)
     return null
   } finally {
