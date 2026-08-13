@@ -7,12 +7,26 @@
       chrome. Used by /login.
     * 'app' -> AppLayout wrapping <RouterView />.
       Used by every authenticated page.
+
+  v0.8.26+: the global Toaster is mounted at the
+  root level (not in AppLayout) so it persists
+  across layout changes. The auth layout has no
+  AppLayout (and therefore no Toaster under the
+  v0.8.25 placement), which meant any toast
+  queued while on /login (e.g. the "Welcome back"
+  success toast on /auth/login, or a "Session
+  expired" toast fired by the axios interceptor
+  just before the redirect to /login) had no
+  rendering surface. Mounting Toaster at the root
+  fixes both: the toast is visible on /login and
+  the redirect no longer unmounts it.
 -->
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AppLayout from '@/layouts/AppLayout.vue'
+import Toaster from '@/components/ui/Toaster.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
@@ -46,4 +60,10 @@ onMounted(() => {
     <component :is="Component" />
   </RouterView>
   <AppLayout v-else />
+
+  <!-- v0.8.26+: Toaster lives at the root, not in
+       AppLayout, so it survives the layout swap when
+       the interceptor redirects an expired session
+       to /login. -->
+  <Toaster />
 </template>

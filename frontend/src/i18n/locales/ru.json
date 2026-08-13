@@ -48,7 +48,9 @@
     "on": "Вкл",
     "off": "Выкл",
     "required": "Обязательно",
-    "invalidUuid": "Некорректный UUID"
+    "invalidUuid": "Некорректный UUID",
+    "sessionExpired": "Сессия истекла",
+    "sessionExpiredDescription": "Войдите снова, чтобы продолжить."
   },
   "login": {
     "title": "Вход в Aegis",
