@@ -273,10 +273,26 @@ const columns = computed<ColumnDef<Credential>[]>(() => [
         {},
         {
           default: () => [
+            // v0.8.26+: same fix as
+            // InboundTemplatesView.vue — wrap the
+            // MoreHorizontal in a Button rather than
+            // passing `as: Button, size: 'icon'` to
+            // DropdownMenuTrigger. The previous
+            // pattern leaked `size: 'icon'` through
+            // asChild to the lucide icon and produced
+            // `<svg width="icon" height="icon">` in
+            // the DOM.
             h(
               DropdownMenuTrigger,
-              { as: Button, variant: 'ghost', size: 'icon' },
-              { default: () => h(MoreHorizontal, { class: 'size-4' }) },
+              null,
+              {
+                default: () =>
+                  h(
+                    Button,
+                    { variant: 'ghost', size: 'icon' },
+                    { default: () => h(MoreHorizontal, { class: 'size-4' }) },
+                  ),
+              },
             ),
             h(
               DropdownMenuContent,
