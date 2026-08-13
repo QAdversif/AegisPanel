@@ -62,7 +62,7 @@ function camelizeKeys<T>(value: T): T {
 export const api = axios.create({
   // Base URL is the directory part of the current URL.
   // In the Phase 1 sub-path deploy this resolves to
-  // "/***REMOVED***/" so API calls go through top-level
+  // "/<panel-sub-path>/" so API calls go through top-level
   // Caddy's `handle_path` rule; in dev it resolves to "/"
   // and Vite's `/api` dev-proxy takes over. The previous
   // hard-coded `'/'` sent every request to the apex, which

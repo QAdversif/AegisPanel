@@ -242,6 +242,6 @@ env-var change, no `openapi.yaml` bump.
 
 This PR contains no deploy URL, server IP, admin
 credentials, JWT secret, or SSH key path. The production
-URL `the live server.click` and the public IP `***REMOVED***` are
+URL `the live server.click` and the public IP `<prod-host-ip>` are
 referenced only in the operator-only `deploy.local.md` on
 the operator's local machine, never in this PR.

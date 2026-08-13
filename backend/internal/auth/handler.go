@@ -19,7 +19,7 @@ const (
 	refreshCookieName = "aegis_rt"
 	// refreshCookiePath is "/" (not "/api/v1/auth") because
 	// the panel is mounted under a rotated sub-path
-	// (e.g. "/***REMOVED***/api/v1/auth/login"); the
+	// (e.g. "/<panel-sub-path>/api/v1/auth/login"); the
 	// request URL the panel sees INCLUDES the sub-path, so
 	// a cookie scoped to "/api/v1/auth" would not match
 	// the request URL and the browser would drop it. "/"

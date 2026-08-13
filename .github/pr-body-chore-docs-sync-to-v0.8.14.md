@@ -53,7 +53,7 @@ Touches:
   bottom (admin password rotation is the only
   remaining GA-blocker). The new v0.8.14 section
   is the actionable state: it documents the
-  `***REMOVED***` public-knowledge
+  `the v0.8.x fixture-admin-password (see deploy.local.md)` public-knowledge
   risk, the rotation path (`aegis admin passwd`
   with the Python `subprocess.Popen` +
   `time.sleep(1.0)` workaround for the

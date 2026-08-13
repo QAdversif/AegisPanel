@@ -107,6 +107,6 @@ Three regression tests in
 The v0.8.20 live smoke test on the live server.click:
 `POST /api/v1/nodes/9ded165d-7ef1-427c-b5f2-41483c10df7b/provision`
 with the Demo-нода's `tofu_policy: accept-and-append`
-and `expected_fingerprint: SHA256:***REMOVED***`
+and `expected_fingerprint: SHA256:<demo-node-fingerprint>`
 should return 200 with `state: "online"`
 (transition from `new` → `provisioning` → `online`).

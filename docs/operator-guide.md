@@ -44,7 +44,7 @@ deploy is the **decrypt-on-operator** pattern:
   file is public-readable by design; the security boundary is
   the age private key.
 - The age private key lives on the **operator's local machine**
-  (e.g. `~/.ssh/aegis.age.key`, mode 0600). The panel host gets
+  (e.g. the operator's age key, mode 0600). The panel host gets
   only the public counterpart (and only because the panel needs
   to decrypt webhooks secrets / nodes.ssh_private_key_ciphertext
   at runtime — the age key is mounted into the distroless container
@@ -79,8 +79,8 @@ brew install sops age     # or apt: sudo apt install sops age
 # want the role-based path (deploy/ansible/playbooks/panel.yml).
 
 # 1. One-time: generate the age keypair (BACK THIS UP)
-age-keygen -o ~/.ssh/aegis.age.key
-cat ~/.ssh/aegis.age.key.pub   # → paste into .sops.yaml under &main
+age-keygen -o ~/.aegis/age.key
+cat ~/.aegis/age.key.pub   # → paste into .sops.yaml under &main
 
 # 2. Fill in the env file (operator-side, plaintext → encrypt)
 $EDITOR ~/.aegis/aegis-env.env    # set AEGIS_PANEL_PATH, AEGIS_JWT_SECRET,
@@ -95,11 +95,11 @@ sops --config ~/.aegis/.sops.yaml \
 
 # 3. Stage on the target host
 scp ~/.aegis/aegis-env.enc.env root@panel.example.com:/etc/aegis/
-scp ~/.ssh/aegis.age.key      root@panel.example.com:/etc/aegis/age.key
+scp ~/.aegis/age.key      root@panel.example.com:/etc/aegis/age.key
 # (then chown 65532:65532 /etc/aegis/age.key + chmod 0640)
 
 # 4. Decrypt on the operator + build the docker -e flag list
-SOPS_AGE_KEY_FILE=~/.ssh/aegis.age.key \
+SOPS_AGE_KEY_FILE=~/.aegis/age.key \
 sops --config ~/.aegis/.sops.yaml -d ~/.aegis/aegis-env.enc.env > /tmp/aegis-env.plain
 # (parse /tmp/aegis-env.plain into a list of -e KEY='VALUE' flags —
 #  see .tmp-build-env-flags.py in the operator's local repo, or

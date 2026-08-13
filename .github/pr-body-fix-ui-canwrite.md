@@ -61,7 +61,7 @@ breaks).
 
 ## Manual verification (post-deploy)
 
-- Login admin at `/***REMOVED***/login`
+- Login admin at `/<panel-sub-path>/login`
 - Navigate to `/nodes` — the "Add node" button
   is visible (was hidden before this fix)
 - Same for `/inbounds`, `/hosts`, `/users`,

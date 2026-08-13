@@ -1,7 +1,7 @@
 ## Problem
 
 The Phase 1 sub-path deploy at
-`https://domain.com/***REMOVED***/` made four runtime
+`https://domain.com/<panel-sub-path>/` made four runtime
 quirks visible. They were all invisible on dev
 (Vite's `/api` proxy short-circuits them) and only
 showed up once a real login + real `/me` + real list
@@ -14,7 +14,7 @@ endpoints were exercised.
 Bare `'/'` + relative `/api/v1/auth/login` produced
 `https://domain.com/api/...` on the sub-path deploy.
 Top-level Caddy has no route for `/api/*` on the apex
-— only `handle_path /***REMOVED***/*`. So every API
+— only `handle_path /<panel-sub-path>/*`. So every API
 call landed on the decoy HTML and axios hung forever
 (opaque CORS response, no clean throw).
 
@@ -30,7 +30,7 @@ baseURL: (() => {
 
 In dev `pathname` is `/` so this is `/` and Vite's
 `/api` proxy takes over; in the sub-path deploy it
-resolves to `/***REMOVED***/`.
+resolves to `/<panel-sub-path>/`.
 
 ### 2. snake_case -> camelCase in the response interceptor
 
