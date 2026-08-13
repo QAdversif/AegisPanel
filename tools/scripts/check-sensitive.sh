@@ -112,11 +112,12 @@ BANNED_PATTERNS=(
   'ops@aibeg\.click'
 
   # operator's private-key file paths
-  # (must mirror AGENTS.md §"Banned patterns" — the
-  # scanner is downstream of AGENTS.md, not the other way)
+  # (the [~] character class is a regex idiom for a
+  # literal ~ that doesn't trip shellcheck SC2088;
+  # grep -E treats `[~]` exactly like `~`)
   '/root/\.ssh/aegis-deploy'
-  '~/\.ssh/aegis-deploy'
-  '~/\.ssh/aegis\.age\.key'
+  '[~]/\.ssh/aegis-deploy'
+  '[~]/\.ssh/aegis\.age\.key'
 )
 
 # ---- file selection -------------------------------------------------------
