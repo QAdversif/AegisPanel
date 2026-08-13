@@ -109,7 +109,7 @@ func TestFingerprintEqual(t *testing.T) {
 	}{
 		{"case-insensitive", "SHA256:abc123", "sha256:abc123", true},
 		{"different base64", "SHA256:abc123", "SHA256:def456", false},
-		{"mixed: with and without prefix", "pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM", "SHA256:pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM", true},
+		{"mixed: with and without prefix", "kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk", "SHA256:kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk", true},
 		{"MD5 prefix", "MD5:abc123", "abc123", true},
 		{"unknown prefix passed through", "CUSTOM:abc123", "abc123", false},
 	}
@@ -343,28 +343,32 @@ func TestHostKeyCallback_EmptyKnownHosts_RejectsOnMismatch(t *testing.T) {
 // matched what an operator pastes from
 // `ssh-keyscan` / `ssh-keygen -lf`.
 //
-// The fixture is the production Demo-РЅРѕРґР°'s host
-// key. The expected fingerprint is the one the
-// operator confirmed at deploy time; the raw key
-// material is captured here as a constant so a
-// future regression is reproducible without
-// hitting the network.
+// The fixture is a synthetic ed25519 key
+// (all-zero public-key bytes, 32 bytes of 0x00)
+// generated in-process by the dev-only
+// `cmd/fixturegen` tool. The expected
+// fingerprint is the SHA-256 of the wire format
+// (the same buffer OpenSSH hashes), base64-
+// encoded without padding. Captured here as a
+// constant so a future regression is reproducible
+// without hitting the network.
 func TestSshFingerprintWire_MatchesOpenSSH(t *testing.T) {
-	// Demo-РЅРѕРґР° (cdn2ne.<prod-host>.click) host key,
-	// captured via `ssh-keyscan -t ed25519`:
-	//   cdn2ne.<prod-host>.click ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEQ8y2RfN1kT5Kn0GWtQMRyEncX5o/uhVUWRU4wUY0ib
-	// The base64 form is the wire-encoded key
-	// (the part after the algorithm). We pass it
+	// Synthetic ed25519 host key with all-zero
+	// public-key bytes (32 bytes of 0x00). The
+	// base64 form is the wire-encoded key (the
+	// part after the algorithm). We pass it
 	// through the Go ssh parser to get a real
 	// ssh.PublicKey, then assert sshFingerprintWire
 	// matches what `ssh-keygen -lf` would print.
-	const wireKeyB64 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEQ8y2RfN1kT5Kn0GWtQMRyEncX5o/uhVUWRU4wUY0ib"
-	// Operator-pinned fingerprint, identical to
-	// `ssh-keygen -lf` output and to what the
-	// v0.8.20 live-smoke `provision` call
-	// supplied. Pre-PR-#231 this never matched
-	// because the panel hashed the wrong buffer.
-	const expectedFingerprint = "pCnGi8kyWPaDdcRUpSPBM9y2wAJfqe3smcTmADywvJM"
+	const wireKeyB64 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	// Expected fingerprint for the synthetic key
+	// above. Pre-PR-#231 the panel hashed the
+	// authorized_keys LINE format instead of the
+	// binary wire format and produced a different
+	// hash; the test pins the correct value so a
+	// future regression is reproducible without
+	// hitting the network.
+	const expectedFingerprint = "kmYcvdi2GkPeWxB6XLjrZB8JHsy2Hm8luHMFp9GMvqk"
 
 	// Parse the wire-format key into a
 	// ssh.PublicKey the way the SSH library does
