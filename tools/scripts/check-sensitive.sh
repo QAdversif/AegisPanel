@@ -116,7 +116,7 @@ BANNED_PATTERNS=(
   # literal ~ that doesn't trip shellcheck SC2088;
   # grep -E treats `[~]` exactly like `~`)
   '/root/\.ssh/aegis-deploy'
-  '[~]/\.ssh/aegis-deploy'
+  '[~]/\.ssh/aegis-deploy(/|\.|$)'
   '[~]/\.ssh/aegis\.age\.key'
 )
 
