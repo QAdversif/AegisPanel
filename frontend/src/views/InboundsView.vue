@@ -78,8 +78,22 @@ const templates = ref<InboundTemplate[]>([])
 const loading = ref(false)
 const selectedNodeId = ref<string>('')
 
+// v0.8.26+: the "all nodes" placeholder entry
+// used to be `{ id: '', name: ... }`, which then
+// flowed into the SelectItem as `:value="opt.id"`
+// === "". radix-vue's SelectItem throws on a
+// non-empty-string contract:
+//
+//   "A <SelectItem /> must have a value prop that
+//    is not an empty string. This is because the
+//    Select value can be set to an empty string to
+//    clear the selection and show the placeholder."
+//
+// The sentinel `'all'` is non-empty, distinct from
+// every Node UUID, and used consistently in the
+// `selectedNodeId` check below.
 const nodeOptions = computed(() => [
-  { id: '', name: t('inbounds.allNodes') },
+  { id: 'all', name: t('inbounds.allNodes') },
   ...nodes.value,
 ])
 
@@ -117,7 +131,14 @@ function templatesForProtocol(p: Protocol | undefined): InboundTemplate[] {
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    if (selectedNodeId.value) {
+    // v0.8.26+: `selectedNodeId === 'all'` is the
+    // "show every node" sentinel (the SelectItem
+    // can't carry an empty-string value, so 'all'
+    // replaces the previous `''`). The 'all' case
+    // is the same as the "all nodes" branch and
+    // loads the nodes list so each row can show
+    // its inbounds below.
+    if (selectedNodeId.value && selectedNodeId.value !== 'all') {
       inbounds.value = await listInboundsForNode(selectedNodeId.value)
     } else {
       const nodeList = await listNodes()
@@ -499,7 +520,11 @@ async function startCreate(): Promise<void> {
   // now I want to add an inbound there" flow.
   createForm.resetForm({
     values: {
-      nodeId: selectedNodeId.value || '',
+      // v0.8.26+: the "all nodes" sentinel is 'all',
+      // not ''. Reset to '' (the zod-required
+      // `nodeId` field) so the operator picks a
+      // specific node for the new inbound.
+      nodeId: selectedNodeId.value && selectedNodeId.value !== 'all' ? selectedNodeId.value : '',
       name: '',
       protocol: 'vless' as Protocol,
       listen: '::',
@@ -632,7 +657,7 @@ const columns: ColumnDef<Inbound, unknown>[] = [
           <SelectContent>
             <SelectItem
               v-for="opt in nodeOptions"
-              :key="opt.id || 'all'"
+              :key="opt.id"
               :value="opt.id"
             >
               {{ opt.name }}

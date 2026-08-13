@@ -366,10 +366,28 @@ const columns = computed<ColumnDef<InboundTemplate>[]>(() => [
     cell: (info) => {
       const tpl = info.row.original
       return h(DropdownMenu, null, () => [
+        // v0.8.26+: the trigger renders as a Button
+        // via the as-child slot pattern, NOT via
+        // DropdownMenuTrigger's `as: Button` prop.
+        // The previous pattern (`{ as: Button,
+        // variant, size }` on the trigger) leaked
+        // `size: 'icon'` through asChild and ended
+        // up as `<svg width="icon" height="icon">`
+        // on the MoreHorizontal icon (lucide-vue-next
+        // uses the `size` prop to drive SVG width /
+        // height; "icon" is not a valid length).
+        // Wrapping the icon in a Button component
+        // keeps the props on the Button where they
+        // belong.
         h(
           DropdownMenuTrigger,
-          { as: Button, variant: 'ghost', size: 'icon' },
-          () => h(MoreHorizontal, { class: 'h-4 w-4' }),
+          null,
+          () =>
+            h(
+              Button,
+              { variant: 'ghost', size: 'icon' },
+              () => h(MoreHorizontal, { class: 'h-4 w-4' }),
+            ),
         ),
         h(DropdownMenuContent, () => [
           h(
