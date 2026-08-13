@@ -165,11 +165,12 @@ ops@aibeg\.click
 ~/\.ssh/aegis\.age\.key
 ```
 
-The script scans `**/*.md`, `**/*.go`, `**/*.ts`, `**/*.vue`,
-`**/*.json`, `**/*.yml`, `**/*.yaml`, `**/*.sh` under the
-working tree, with these exceptions (gitignored or test-only):
-`node_modules/`, `dist/`, `backups/`, `.trash-*/`, `coverage/`,
-`*.test.go`, `*.spec.ts`.
+The script scans the canonical extensions under the working
+tree, ignoring gitignored directories (`node_modules/`,
+`dist/`, `backups/`, `.trash-*/`, `coverage/`) and the explicit
+ALLOWLIST (in check-sensitive.sh). The ALLOWLIST is the
+durable per-file contract; suffix-ignoring is intentionally
+NOT used (a real leak inside a test file is still a real leak).
 
 ## Enforcement
 

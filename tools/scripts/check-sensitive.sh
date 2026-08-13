@@ -110,6 +110,13 @@ BANNED_PATTERNS=(
 
   # operator email at the live server's domain
   'ops@aibeg\.click'
+
+  # operator's private-key file paths
+  # (must mirror AGENTS.md §"Banned patterns" — the
+  # scanner is downstream of AGENTS.md, not the other way)
+  '/root/\.ssh/aegis-deploy'
+  '~/\.ssh/aegis-deploy'
+  '~/\.ssh/aegis\.age\.key'
 )
 
 # ---- file selection -------------------------------------------------------
