@@ -151,8 +151,8 @@ audit-3.1 fix chain rationale + the historical
   with the right version bump) + `release.sh` (build +
   push + tag + cosign re-sign + verify) dry-runs are
   the missing scripts. ~1 day. Without these, every
-  future release is manual (bounce script + smoke test
-  + git tag) and the 9 silent bugs from the v0.8.17 →
+  future release is manual (bounce script + smoke test,
+  and git tag) and the 9 silent bugs from the v0.8.17 →
   v0.8.24 chain will recur.
 - **Operational runbook `docs/RUNBOOKS/oncall.md`** —
   the 3 most-likely incidents (panel boot loop on sops
@@ -258,8 +258,8 @@ incident forces one forward.
   chain (PR #216), but no test asserts the response
   headers. A 30-line Go test that boots a Caddy
   instance with the panel Caddyfile + asserts
-  `Content-Security-Policy` + `Strict-Transport-Security`
-  + `X-Frame-Options` on the index response would
+  `Content-Security-Policy` + `Strict-Transport-Security`,
+  and `X-Frame-Options` on the index response would
   catch a future CSP regression. ~0.5 day.
 - **Remove dead `@vueuse/core` and `swaggo/swag`
   imports** — `@vueuse/core` is declared in
@@ -373,8 +373,8 @@ closes.
    client. Ship them first, in that order.
 3. **Tier 2 can ship in any order** after Tier 1
    starts. The postmortem + AGENTS.md subagent-roster
-   sync are independent; the OpenAPI version drift fix
-   + the `RUNBOOKS/deploy.md` reference refresh are
+   sync are independent; the OpenAPI version drift fix,
+   and the `RUNBOOKS/deploy.md` reference refresh are
    independent; the stale-comment cleanup + the
    ClickHouse dead-surface decision are independent.
    None of them change the GA claim; all of them
@@ -414,10 +414,10 @@ order or be deferred.
 
 **Source of truth for this file:**
 `KNOWN_LIMITATIONS.md` (engineering view, the
-per-bug fix PRs + closure dates) +
+per-bug fix PRs + closure dates),
 `CHANGELOG.md` (shipped view, the per-PR release
-notes) + `docs/ROADMAP.md` (the milestone ladder
-+ the v0.9.0 / v1.0.0-mvp-soft-launch rows) +
+notes), `docs/ROADMAP.md` (the milestone ladder,
+the v0.9.0 / v1.0.0-mvp-soft-launch rows),
 `AGENTS.md` (the security contract + the
 subagent-roster surface). When this file disagrees
 with any of those, the other file wins; the
