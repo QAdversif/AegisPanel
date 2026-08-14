@@ -55,7 +55,7 @@ RUN npm run build
 # golang:1.26-alpine is required because Caddy v2.11.4 is built with
 # Go 1.25.1+ (per the upstream `go.mod`), and 1.26 is the LTS that
 # also matches the project's backend toolchain pin.
-FROM golang:1.26-alpine AS caddy-build
+FROM golang:1.26.6-alpine AS caddy-build
 
 ARG CADDY_VERSION
 ARG GRPCGO_PIN

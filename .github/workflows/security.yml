@@ -56,7 +56,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.6'
           cache-dependency-path: backend/go.sum
           cache: true
 
@@ -196,7 +196,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.6'
 
       - name: Audit (osv-scanner)
         # `pnpm audit` was retired by the npm registry in 2025 —

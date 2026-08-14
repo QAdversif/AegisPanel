@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        go: ['1.26']
+        go: ['1.26.6']
 
     # `services: postgres` is what makes the integration suite possible
     # without testcontainers. The image is pinned to a specific Postgres

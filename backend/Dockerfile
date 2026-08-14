@@ -91,7 +91,7 @@ RUN apt-get update && \
     cp /usr/lib/postgresql/16/bin/pg_dump /usr/bin/pg_dump
 
 # ---- Build stage --------------------------------------------------------
-FROM golang:1.26-alpine AS build
+FROM golang:1.26.6-alpine AS build
 
 WORKDIR /src
 
