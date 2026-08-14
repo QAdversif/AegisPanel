@@ -27,6 +27,36 @@ jobs:
     # UI image and the panel semver tags end up on the same ref.
     env:
       release_tag: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    # Service containers for the smoke-test step (Tier 1 item #1 of
+    # `docs/gap-analysis-v0.8.24.md`). The smoke step itself is
+    # currently `if: false` (gated off until the
+    # `tools/scripts/smoke-test-env.enc.env` sops+age fixture
+    # lands in a follow-up PR), so the service container is
+    # provisioned but not exercised; flipping the step to
+    # `if: true` is a one-liner once the fixture is committed.
+    # The `postgres` hostname below is the GitHub Actions
+    # service-alias — that's the host the panel's
+    # `AEGIS_POSTGRES_DSN` reaches.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aegis
+          POSTGRES_PASSWORD: aegis
+          POSTGRES_DB: aegis_smoke
+        ports:
+          - 5432:5432
+        # health-cmd is required — without it, GitHub Actions
+        # marks the service as "ready" before postgres actually
+        # accepts connections. `pg_isready -U aegis` exits 0 the
+        # moment pg is up and accepting auth, so the smoke
+        # step's `pg_isready` retry loop terminates as soon as
+        # the panel can connect.
+        options: >-
+          --health-cmd "pg_isready -U aegis -d aegis_smoke"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,6 +160,223 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+
+      # Smoke-test gate (Tier 1 item #1 of `docs/gap-analysis-v0.8.24.md`).
+      # Runs AFTER the panel + UI images are built and pushed, BEFORE the
+      # cosign re-sign step. If any smoke substep fails, the job exits 1
+      # and the images remain unsigned (the cosign re-sign never runs);
+      # the `Create GitHub release` step is also gated on all prior
+      # steps passing, so a release tag on a broken image is impossible.
+      #
+      # GATED OFF (`if: false`) until `tools/scripts/smoke-test-env.enc.env`
+      # lands in a follow-up PR. The env vars below are HARDCODED
+      # placeholders (`<dev-mode fixture>`); they are NOT real secrets
+      # — the literal banned values live in the operator's
+      # `~/.aegis/deploy.local.md` (out of repo) and never appear here.
+      # Flipping `if: false` → `if: true` is a one-liner once the
+      # sops+age-encrypted env fixture is committed (the fixture will
+      # carry the real dev-mode values + a known age recipient; the
+      # workflow decrypts it via the sops+age action).
+      #
+      # The smoke covers the 3 categories of the v0.8.15..v0.8.25
+      # silent-bug chain (per `KNOWN_LIMITATIONS.md` §"v0.8.16..v0.8.25"):
+      #   1. distroless + symlink + Dockerfile multi-stage failures
+      #      → substep (e) `pg_dump --version` + (f) ELF magic check
+      #   2. SSH provision path failures
+      #      → substep (h)/(i) backup create + on-disk assertion
+      #   3. secret-decryption-on-operator workflow gap
+      #      → substep (g) login + JWT round-trip
+      - name: Smoke test panel image
+        if: false
+        env:
+          PANEL_IMAGE: ghcr.io/qadversif/aegispanel@${{ steps.build_panel.outputs.digest }}
+          AEGIS_POSTGRES_DSN: postgres://aegis:aegis@postgres:5432/aegis_smoke?sslmode=disable
+          AEGIS_AUTH_BACKEND: pg
+          AEGIS_HOSTS_BACKEND: pg
+          AEGIS_NODES_BACKEND: pg
+          AEGIS_INBOUNDS_BACKEND: pg
+          AEGIS_SUBSCRIPTION_BACKEND: pg
+          AEGIS_USERS_BACKEND: pg
+          AEGIS_PLANS_BACKEND: pg
+          AEGIS_WEBHOOKS_BACKEND: pg
+          AEGIS_AUDITS_BACKEND: pg
+          AEGIS_CREDENTIALS_BACKEND: pg
+          AEGIS_INBOUND_TEMPLATES_BACKEND: pg
+          AEGIS_SECRETS_BACKEND: sops
+          AEGIS_SOPS_AGE_RECIPIENTS: "<dev-mode fixture>"
+          AEGIS_SOPS_AGE_KEY_FILE: /run/secrets/age.key
+          AEGIS_JWT_SECRET: "<dev-mode fixture>"
+          AEGIS_ADMIN_BOOTSTRAP_USERNAME: admin
+          AEGIS_ADMIN_BOOTSTRAP_PASSWORD: "<dev-mode fixture>"
+          AEGIS_PANEL_PATH: /
+          AEGIS_DECOY_ROOT: /tmp/smoke-decoy
+          AEGIS_LISTEN: ":8080"
+          AEGIS_ENV: development
+        run: |
+          set -euo pipefail
+
+          # ----- (a) Wait for the `postgres` service to be ready. -----
+          # (Declared at job level via the `services:` block above.)
+          echo "==> [a] Waiting for postgres services container"
+          for i in $(seq 1 30); do
+            if pg_isready -h postgres -U aegis -d aegis_smoke >/dev/null 2>&1; then
+              echo "  postgres OK after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "SMOKE TEST FAILED: postgres did not become ready within 30s" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # ----- (b/c) Start the panel container from the just-built
+          # image. /tmp/smoke-decoy is created on-the-fly (per the
+          # parent brief); /tmp/smoke-backups is bind-mounted at
+          # /var/lib/aegis/backups so the smoke can assert the
+          # backup file landed on disk. The panel image is distroless
+          # so no shell is available inside the container — we exec
+          # binaries directly (`/usr/bin/pg_dump`, `stat`, `ls`, etc.)
+          # via `docker exec` and let the host's `sh` handle the
+          # pipeline. -----
+          echo "==> [b/c] Starting panel container from just-built image"
+          echo "  image = ${PANEL_IMAGE}"
+          mkdir -p /tmp/smoke-decoy /tmp/smoke-backups
+          docker run -d \
+            --name aegis-panel-smoke \
+            --restart no \
+            -p 8080:8080 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /tmp/smoke-backups:/var/lib/aegis/backups \
+            -e AEGIS_POSTGRES_DSN \
+            -e AEGIS_AUTH_BACKEND \
+            -e AEGIS_HOSTS_BACKEND \
+            -e AEGIS_NODES_BACKEND \
+            -e AEGIS_INBOUNDS_BACKEND \
+            -e AEGIS_SUBSCRIPTION_BACKEND \
+            -e AEGIS_USERS_BACKEND \
+            -e AEGIS_PLANS_BACKEND \
+            -e AEGIS_WEBHOOKS_BACKEND \
+            -e AEGIS_AUDITS_BACKEND \
+            -e AEGIS_CREDENTIALS_BACKEND \
+            -e AEGIS_INBOUND_TEMPLATES_BACKEND \
+            -e AEGIS_SECRETS_BACKEND \
+            -e AEGIS_SOPS_AGE_RECIPIENTS \
+            -e AEGIS_SOPS_AGE_KEY_FILE \
+            -e AEGIS_JWT_SECRET \
+            -e AEGIS_ADMIN_BOOTSTRAP_USERNAME \
+            -e AEGIS_ADMIN_BOOTSTRAP_PASSWORD \
+            -e AEGIS_PANEL_PATH \
+            -e AEGIS_DECOY_ROOT \
+            -e AEGIS_LISTEN \
+            -e AEGIS_ENV \
+            "${PANEL_IMAGE}"
+
+          # On any failure below, dump the panel log + cleanup the
+          # container so the runner does not leave a zombie.
+          trap 'echo "--- last 80 lines of aegis-panel-smoke log ---" >&2; docker logs aegis-panel-smoke 2>&1 | tail -80 >&2 || true; docker stop aegis-panel-smoke 2>/dev/null || true; docker rm aegis-panel-smoke 2>/dev/null || true' EXIT
+
+          # ----- (d) Wait for /api/v1/health to return 200. -----
+          echo "==> [d] Waiting for /api/v1/health"
+          HEALTH_URL="http://127.0.0.1:8080/api/v1/health"
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "$HEALTH_URL" || true)"
+            if [ "$code" = "200" ]; then
+              echo "  health OK after ${i}s (200)"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "SMOKE TEST FAILED: /api/v1/health did not return 200 within 30s (last code=$code)" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # ----- (e) /usr/bin/pg_dump --version inside the panel. -----
+          # Catches the v0.8.16 shell-symlink `pg_wrapper` bug — if
+          # `pg_dump` is a shell script or symlink to `pg_wrapper`,
+          # the exit code may be 0 but the binary is wrong.
+          echo "==> [e] docker exec /usr/bin/pg_dump --version"
+          if ! docker exec aegis-panel-smoke /usr/bin/pg_dump --version; then
+            echo "SMOKE TEST FAILED: /usr/bin/pg_dump --version exited non-zero (catches v0.8.16 shell-symlink bug)" >&2
+            exit 1
+          fi
+
+          # ----- (f) /app/bin/aegis-agent ELF magic check. -----
+          # Catches the v0.8.15 missing-build-artifact bug. The first
+          # 4 bytes of a real ELF binary are `7f 45 4c 46` (0x7f 'E' 'L' 'F').
+          echo "==> [f] docker exec ls -la /app/bin/aegis-agent + ELF magic check"
+          if ! docker exec aegis-panel-smoke ls -la /app/bin/aegis-agent; then
+            echo "SMOKE TEST FAILED: /app/bin/aegis-agent does not exist" >&2
+            exit 1
+          fi
+          MAGIC="$(docker exec aegis-panel-smoke sh -c 'head -c 4 /app/bin/aegis-agent' | od -An -tx1 | tr -d ' \n')"
+          if [ "$MAGIC" != "7f454c46" ]; then
+            echo "SMOKE TEST FAILED: /app/bin/aegis-agent does not start with ELF magic (got '$MAGIC', expected '7f454c46')" >&2
+            exit 1
+          fi
+          echo "  aegis-agent ELF magic OK ($MAGIC)"
+
+          # ----- (g) Login as the seeded admin + save JWT. -----
+          # Catches the v0.8.x secret-decryption-on-operator gap
+          # (the smoke proves the sops envelope decrypts AND the
+          # seeded creds round-trip end-to-end through /auth/login).
+          echo "==> [g] POST /api/v1/auth/login (sops envelope + seeded creds)"
+          LOGIN_BODY="$(curl -sf -X POST \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${AEGIS_ADMIN_BOOTSTRAP_USERNAME}\",\"password\":\"${AEGIS_ADMIN_BOOTSTRAP_PASSWORD}\"}" \
+            "${HEALTH_URL%/health}/auth/login")"
+          JWT="$(printf '%s' "$LOGIN_BODY" | jq -er '.access_token // .token // .jwt // empty')"
+          if [ -z "$JWT" ]; then
+            echo "SMOKE TEST FAILED: no JWT in login response: $LOGIN_BODY" >&2
+            exit 1
+          fi
+          echo "  login OK (token length=${#JWT})"
+
+          # ----- (h) POST /api/v1/backups/ (manual trigger). -----
+          # Catches the v0.8.x backup-API codepath regression — the
+          # smoke proves the panel accepts a manual trigger AND
+          # writes a backup file to disk.
+          echo "==> [h] POST /api/v1/backups/ (trigger=manual)"
+          BACKUP_BODY="$(curl -sf -X POST \
+            -H "Authorization: Bearer $JWT" \
+            -H 'Content-Type: application/json' \
+            -d '{"trigger":"manual"}' \
+            "${HEALTH_URL%/health}/backups/")"
+          BACKUP_ID="$(printf '%s' "$BACKUP_BODY" | jq -er '.id // .backup_id // empty')"
+          if [ -z "$BACKUP_ID" ]; then
+            echo "SMOKE TEST FAILED: no backup id in response: $BACKUP_BODY" >&2
+            exit 1
+          fi
+          echo "  backup created id=$BACKUP_ID"
+
+          # ----- (i) /var/lib/aegis/backups/ has a non-empty file. -----
+          # Catches the v0.8.18 33-byte empty-dump bug — the bug was
+          # that the panel called pg_dump correctly but the file
+          # on disk was 33 bytes (the "PostgreSQL 16.x..." header
+          # only, with no data). We assert size > 1024 to give
+          # margin against the smallest legitimate dump.
+          echo "==> [i] docker exec ls -la /var/lib/aegis/backups/ (assert size > 1024)"
+          sleep 2
+          docker exec aegis-panel-smoke ls -la /var/lib/aegis/backups/
+          BACKUP_FILE="$(docker exec aegis-panel-smoke sh -c 'ls -1 /var/lib/aegis/backups/ | head -1')"
+          if [ -z "$BACKUP_FILE" ]; then
+            echo "SMOKE TEST FAILED: /var/lib/aegis/backups/ is empty" >&2
+            exit 1
+          fi
+          SIZE="$(docker exec aegis-panel-smoke stat -c '%s' "/var/lib/aegis/backups/$BACKUP_FILE")"
+          if [ "$SIZE" -le 1024 ]; then
+            echo "SMOKE TEST FAILED: backup file $BACKUP_FILE is ${SIZE} bytes (must be > 1024; catches v0.8.18 empty-dump bug)" >&2
+            exit 1
+          fi
+          echo "  backup file $BACKUP_FILE = ${SIZE} bytes (> 1024 OK)"
+
+          # ----- (j) Cleanup. -----
+          echo "==> [j] docker stop + rm aegis-panel-smoke"
+          docker stop aegis-panel-smoke >/dev/null
+          docker rm aegis-panel-smoke >/dev/null
+          trap - EXIT
+          echo "==> smoke-test OK"
 
       # Sign the panel image by its actual digest (NOT by
       # tag) — the digest is what the signature is bound
