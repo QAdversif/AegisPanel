@@ -22,18 +22,18 @@ Cross-referenced each of the original 10 tasks against the current code on `main
 
 ## Updated Task List (7 tasks, down from 10)
 
-| # | Task | Effort | Priority | Depends on |
-|---|---|---|---|---|
-| 3 | Deduplicate `ChangePasswordRequest` | 1 h | P1 | — |
-| 4 | Replace `window.confirm` with `ConfirmDialog` | 2-3 h | P1 | — |
-| 5 | Eliminate `as never` cast in `HostsView` (generic `setFieldValue`) | 3-4 h | P1 | — |
-| 6 | Eliminate N+1 fetch in `HostsView` (single endpoint) | 4-6 h | P1 | backend coordination |
-| 7 | Decide: expand `api.d.ts` usage OR disable codegen | 4-6 h | P2 | Task 1 (deps stable — N/A, skipped) |
-| 8 | Add frontend test coverage (5 critical files) | 1-2 days | P2 | — |
-| 9 | Optimize `camelizeKeys` (memoize) | 2-3 h | P3 | — |
-| 10 | Split god-view files (`NodesView` first, then `HostsView`) | 2-3 days | P3 | Task 4 (Dialog pattern established) |
+| # | Task | Effort | Priority | Depends on | Status |
+|---|---|---|---|---|---|
+| 3 | Deduplicate `ChangePasswordRequest` | 1 h | P1 | — | Ready |
+| 4 | Replace `window.confirm` with `ConfirmDialog` | 2-3 h | P1 | — | Ready |
+| 5 | Eliminate `as never` cast in `HostsView` (generic `setFieldValue`) | 3-4 h | P1 | — | Ready |
+| 6 | Eliminate N+1 fetch in `HostsView` (single endpoint) | 4-6 h | P1 | backend coordination | Ready |
+| 7 | Decide: expand `api.d.ts` usage OR disable codegen | 4-6 h | P2 | — | **DEFERRED** per operator decision (2026-08-16) |
+| 8 | Add frontend test coverage (5 critical files) | 1-2 days | P2 | — | Ready |
+| 9 | Optimize `camelizeKeys` (memoize) | 2-3 h | P3 | — | Ready |
+| 10 | Split god-view files (`NodesView` first, then `HostsView`) | 2-3 days | P3 | Task 4 (Dialog pattern established) | Ready (scope EXPANDED per operator 2026-08-16) |
 
-**Total:** ~10-15 working days, 8 PR'ов (was 10).
+**Total:** ~10-15 working days, 7 PR'ов (Task 7 deferred, Task 10 expanded to cover 2 view files).
 
 ## Task Order
 
@@ -92,7 +92,8 @@ The original plan was based on a snapshot of the codebase at some earlier point.
 - **Task 6**: separate subagent, requires backend `GET /api/v1/inbounds` endpoint first (cross-team coordination)
 - **Task 7**: HALT — ask operator which branch (A or B) before starting
 - **Task 8**: dedicated subagent, 1-2 days
-- **Task 10**: split into 2 sub-PRs (`NodesView` first, then `HostsView`), 2-3 days wall time
+- **Task 10**: split into 2 sub-PRs (`NodesView` first, then `HostsView`), 2-3 days wall time. Scope expanded per operator decision (2026-08-16) — `HostsView.vue` is 1310 lines (+64% larger than original plan's 800 estimate) and has the same N+1 (Task 6) + same `as never` cast (Task 5) problems, making it more urgent than `NodesView` for the split.
+- **Task 7**: deferred per operator decision (2026-08-16). Will revisit after Tasks 3-6 are merged.
 
 ## Refs
 
