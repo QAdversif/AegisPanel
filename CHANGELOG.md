@@ -166,4 +166,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - chore(repo): gitignore operator deploy scripts under tools/scripts/ (#118)
 
 [0.8.27]: 6b48879
-[v0.8.26]: 6c22ca5
