@@ -71,6 +71,7 @@ import { useZodForm } from "@/composables/useZodForm";
 import DataTable from "@/components/DataTable.vue";
 import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import Dialog from "@/components/ui/Dialog.vue";
 import DialogContent from "@/components/ui/DialogContent.vue";
 import DialogHeader from "@/components/ui/DialogHeader.vue";
@@ -686,10 +687,20 @@ function closeInspectDialog(): void {
 
 // --- Delete -----------------------------------------------------------------
 
+const deleteConfirmOpen = ref(false);
+const pendingDelete = ref<Node | null>(null);
+
 async function confirmDelete(node: Node): Promise<void> {
-  if (!window.confirm(t("nodes.confirmDelete", { name: node.name }))) return;
+  pendingDelete.value = node;
+  deleteConfirmOpen.value = true;
+}
+
+async function performDelete(): Promise<void> {
+  const target = pendingDelete.value;
+  if (!target) return;
+  pendingDelete.value = null;
   try {
-    await deleteNode(node.id);
+    await deleteNode(target.id);
     toast.add({ title: t("nodes.deleted"), variant: "success" });
     await refresh();
   } catch (error) {
@@ -1932,6 +1943,14 @@ const canWrite = computed(() => {
         </div>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      v-model:open="deleteConfirmOpen"
+      :title="t('nodes.confirmDelete', { name: pendingDelete?.name ?? '' })"
+      :variant="'destructive'"
+      :confirm-label="t('common.delete')"
+      @confirm="performDelete"
+    />
   </section>
 </template>
 
