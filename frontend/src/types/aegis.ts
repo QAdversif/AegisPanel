@@ -456,7 +456,11 @@ export interface AuditEntry {
  * body round-trips through the auth handler.
  */
 export interface ChangePasswordRequest {
+  /** The operator's CURRENT password. Verified to defend
+   * against a stolen access token. */
   current_password: string;
+  /** The new password to set. Operator-side validation
+   * applies (length, complexity). */
   new_password: string;
 }
 
