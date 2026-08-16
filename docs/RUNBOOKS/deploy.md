@@ -6,6 +6,13 @@
 **Last incident**: 2026-08-08, v0.8.0→v0.8.9 attempted deploy, 90-min
 recovery. Lessons: see `topics/aegis-deploy.md` in agent memory.
 
+> **For INCIDENTS** (3am alert, something broke, panel
+> unreachable, DB down) see [`oncall.md`](oncall.md) —
+> this file (`deploy.md`) is for PLANNED deploys only.
+> For dry-run validation of the release cut itself, see §1.6
+> below and the `release.sh --snapshot` cross-ref in
+> `oncall.md` §8.
+
 ---
 
 ## 0. Definitions
