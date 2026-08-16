@@ -49,6 +49,8 @@ RUN if [ -f package-lock.json ]; then npm ci; \
 COPY frontend/ ./
 ARG VITE_API_BASE=/api
 ENV VITE_API_BASE=${VITE_API_BASE}
+ARG VITE_VERSION=dev
+ENV VITE_VERSION=${VITE_VERSION}
 RUN npm run build
 
 # ---- Stage 2: custom Caddy binary ---------------------------------------

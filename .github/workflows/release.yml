@@ -157,6 +157,9 @@ jobs:
           file: frontend/Dockerfile
           push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: ghcr.io/qadversif/aegispanel-ui:${{ env.release_tag }}
+          build-args: |
+            VITE_API_BASE=/api
+            VITE_VERSION=${{ steps.rel.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false

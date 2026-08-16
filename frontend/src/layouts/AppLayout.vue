@@ -44,6 +44,12 @@ const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
 
+// Build-time version injected by Vite from the VITE_VERSION
+// env var (set by frontend/Dockerfile ARG → release.yml
+// build-args). Falls back to 'dev' for `npm run dev` where
+// no VITE_VERSION is set.
+const version = import.meta.env.VITE_VERSION || 'dev'
+
 const mobileNavOpen = ref(false)
 
 // Nav entries. v0.1.0 enables everything that has
@@ -146,7 +152,7 @@ onMounted(() => {
         </nav>
 
         <div class="aegis-layout__sidebar-footer">
-          <small>v0.0.0-dev</small>
+          <small>v{{ version }}</small>
         </div>
       </aside>
 
