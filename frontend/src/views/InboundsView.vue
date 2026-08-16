@@ -39,6 +39,7 @@ import { useZodForm } from '@/composables/useZodForm'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import DataTable from '@/components/DataTable.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import DialogContent from '@/components/ui/DialogContent.vue'
@@ -558,10 +559,20 @@ async function startEdit(inbound: Inbound): Promise<void> {
   editOpen.value = true
 }
 
+const deleteConfirmOpen = ref(false)
+const pendingDelete = ref<Inbound | null>(null)
+
 async function confirmDelete(inbound: Inbound): Promise<void> {
-  if (!window.confirm(t('inbounds.confirmDelete', { name: inbound.name }))) return
+  pendingDelete.value = inbound
+  deleteConfirmOpen.value = true
+}
+
+async function performDelete(): Promise<void> {
+  const target = pendingDelete.value
+  if (!target) return
+  pendingDelete.value = null
   try {
-    await deleteInbound(inbound.nodeId, inbound.id)
+    await deleteInbound(target.nodeId, target.id)
     toast.add({ title: t('inbounds.deleted'), variant: 'success' })
     await refresh()
   } catch (error) {
@@ -1080,6 +1091,14 @@ const columns: ColumnDef<Inbound, unknown>[] = [
         </Form>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      v-model:open="deleteConfirmOpen"
+      :title="t('inbounds.confirmDelete', { name: pendingDelete?.name ?? '' })"
+      :variant="'destructive'"
+      :confirm-label="t('common.delete')"
+      @confirm="performDelete"
+    />
   </section>
 </template>
 
