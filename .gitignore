@@ -15,6 +15,10 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# Local app state (gh CLI, psql, sops cache under .local/share/,
+# .local/state/). Captures device-id, auth tokens etc.
+# Surfaced by PR #248 staging.
+.local/
 *.pem
 *.key
 *.crt
