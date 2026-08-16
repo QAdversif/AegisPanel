@@ -36,7 +36,7 @@ ARG CADDY_VERSION=2.11.4
 ARG GRPCGO_PIN=1.82.1
 
 # ---- Stage 1: SPA bundle -------------------------------------------------
-FROM node:20-alpine AS build
+FROM node:24.19.0-alpine AS build
 
 WORKDIR /src
 
