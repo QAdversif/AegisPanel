@@ -241,6 +241,11 @@ on the host filesystem, untouched.
 will fatal-loop the container. The bind mount is
 `-v /var/lib/aegis/migrations:/app/migrations:ro` (read-only).
 
+**Mount all 4 volumes** (migrations, known_hosts, age key, backups).
+The operator-side `deploy-vX.Y.Z-bounce.sh` is the source of truth
+for the canonical `-v` flag list — this runbook mirrors that
+pattern.
+
 ```bash
 # build env from the live container's env (capture before stopping) + override AEGIS_ENV
 ENV_ARGS=(
@@ -262,7 +267,7 @@ ENV_ARGS=(
   -e AEGIS_INBOUNDS_BACKEND=pg
   -e AEGIS_AUDITS_BACKEND=pg
   -e AEGIS_AGENT_BINARY=/usr/local/bin/aegis-agent
-  -e AEGIS_SECRETS_BACKEND=memory
+  -e AEGIS_SECRETS_BACKEND=sops
   -e AEGIS_HOSTS_BACKEND=pg
   # add the v0.8.6+ stores as you migrate them:
   -e AEGIS_PLANS_BACKEND=pg
@@ -276,8 +281,10 @@ ssh aegis-deploy@<prod-host-ip> "sudo docker run -d \
   --restart unless-stopped \
   -v /var/lib/aegis/migrations:/app/migrations:ro \
   -v /var/lib/aegis/known_hosts:/var/lib/aegis/known_hosts:ro \
+  -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
+  -v /var/lib/aegis/backups:/app/var/backups \
   ${ENV_ARGS[@]} \
-  ghcr.io/qadversif/aegispanel:0.8.9"
+  ghcr.io/qadversif/aegispanel:X.Y.Z"
 ```
 
 The `app.Build` call on the binary's first boot runs migrations
@@ -377,21 +384,33 @@ to the history file.
 
 If anything is wrong, the rollback is:
 1. `docker stop aegis-panel && docker rm aegis-panel`
-2. Start v0.8.0 (or last known-good) panel with the same env
-3. Bounce the UI to the same release line
-4. Verify the JWT secret matches the history file (otherwise admin must re-login)
-5. Restore DB from backup if migrations are broken
-6. Append the rollback event to the history file
+2. **`docker start aegis-panel-prev2`** — the previous-version
+   container, kept around as the rollback target. The operator-side
+   `deploy-vX.Y.Z-bounce.sh` renames the old container to
+   `aegis-panel-prev2` BEFORE starting the new one, so this
+   start brings the old image back without re-pulling.
+3. If `aegis-panel-prev2` is missing (older deploy didn't
+   follow the convention): re-pull the last known-good image
+   manually, e.g. `docker run -d --name aegis-panel-prev2 ...
+   ghcr.io/qadversif/aegispanel:<last-good>`.
+4. Bounce the UI to the matching release line (see §3.5).
+5. Verify the JWT secret matches the history file (otherwise
+   admin must re-login).
+6. Restore DB from backup if migrations are broken
+   (see "DB restore" sub-section below).
+7. Append the rollback event to the history file.
 
 ```bash
 ssh aegis-deploy@<prod-host-ip> "sudo docker stop aegis-panel && sudo docker rm aegis-panel"
 ssh aegis-deploy@<prod-host-ip> "sudo docker run -d \
-  --name aegis-panel \
+  --name aegis-panel-prev2 \
   --network aegis-net --restart unless-stopped \
   -v /var/lib/aegis/migrations:/app/migrations:ro \
   -v /var/lib/aegis/known_hosts:/var/lib/aegis/known_hosts:ro \
-  ${ENV_ARGS_FOR_v0.8.0[@]} \
-  ghcr.io/qadversif/aegispanel:0.8.0"
+  -v /etc/aegis/age.key:/etc/aegis/age.key:ro \
+  -v /var/lib/aegis/backups:/app/var/backups \
+  ${ENV_ARGS[@]} \
+  ghcr.io/qadversif/aegispanel:<last-good>"
 ```
 
 Then restore DB if needed:
