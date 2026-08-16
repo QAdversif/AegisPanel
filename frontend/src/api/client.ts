@@ -44,16 +44,26 @@ import type { ApiError } from '@/types'
 // Recursively convert snake_case object keys to camelCase.
 // Used in the response interceptor to bridge the panel's
 // snake_case OpenAPI output to the UI's camelCase TS types.
+// Memoised via a WeakMap keyed by the source object. The cache
+// is GC'd automatically when the response object is no longer
+// referenced, so there is no memory leak. The `!== undefined`
+// check (rather than a truthy check) is intentional — a cached
+// `undefined` value is impossible because the only branch that
+// stores into the cache runs after `out` is fully populated.
+const camelCache = new WeakMap<object, unknown>()
 function camelizeKeys<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((item) => camelizeKeys(item)) as unknown as T
   }
   if (value && typeof value === 'object') {
+    const cached = camelCache.get(value as object)
+    if (cached !== undefined) return cached as T
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const camelKey = k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase())
       out[camelKey] = camelizeKeys(v as unknown)
     }
+    camelCache.set(value as object, out)
     return out as unknown as T
   }
   return value
