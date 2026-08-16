@@ -124,6 +124,67 @@ the signature status. The release workflow's `Re-sign and verify`
 step (§3) is the trust anchor — the panel's OIDC keyless signing
 chain is what consumers verify against.
 
+### 1.6 Dry-run validation (Tier 1 #5)
+
+Before the v0.9.0 release cut, validate the release tooling
+itself — verify that `branch-start.sh` and `release.sh` would
+succeed, without actually creating a branch or tag. This is
+predictive validation: it catches the two highest-impact
+"I would have failed" scenarios (dirty working tree, tag
+already exists) before any mutation happens.
+
+#### 1.6.1 Validate branch creation
+
+```bash
+$ tools/scripts/branch-start.sh feat backend/example --dry-run
+✓ would create branch: feat/backend/example (base: main)
+```
+
+Exit code 0 = would-succeed. Exit code 2 = would-fail
+(invalid type, branch exists, bad args). The dry-run is
+non-destructive: zero local mutation, zero network calls.
+
+`--dry-run` is accepted in any position
+(`--dry-run feat backend/example` works the same way).
+`--help` prints the usage block. Unknown `--flag` exits 2.
+
+#### 1.6.2 Validate release cut
+
+```bash
+$ bash tools/scripts/release.sh 0.9.0 --snapshot
+snapshot release of v0.9.0 (no changes applied)
+previous tag: v0.8.26
+range:        v0.8.26..HEAD
+commits:
+  6bc0b2e chore(deps): bump go 1.26.5 → 1.26.6 (govulncheck 6 stdlib advisories) (#248)
+  398d416 ci(release): add smoke-test gate before cosign re-sign (#247)
+  27e407a docs: recreate docs/gap-analysis-v0.8.24.md (3 broken links) (#246)
+  07d8584 chore(docs): scrub historical banned-value leaks in RUNBOOKS/deploy.md + fix scanner regex anchor (#245)
+  10e93ad chore(repo): scrub historical banned-value leaks (14 docs/code files) (#244)
+  15262ba chore(test): replace real banned value in ssh_test.go with synthetic fixture (#243)
+  49ebaff chore(repo): gitignore release-notes drafts + sync AGENTS.md (#242)
+  f4543e6 feat(repo): anti-leak infrastructure (AGENTS.md + scanner + pre-commit + CI) (#241)
+  5fe6a7d chore(release): cut v0.8.26 - CHANGELOG surgery (#240)
+  (... ~127 more commits since v0.8.26, full list from `git log v0.8.26..HEAD` ...)
+```
+
+Preconditions (`working tree clean`, `tag v0.9.0 does not
+exist`) run BEFORE the snapshot branch in `release.sh`, so
+the two highest-impact failure modes surface in snapshot
+mode too:
+
+- `error: working tree has uncommitted changes` → commit
+  or stash first
+- `error: tag v0.9.0 already exists` → pick a new version
+  or delete the tag first
+
+If you see either of those in snapshot mode, fix it BEFORE
+the real cut (this is the whole point of the dry-run). If
+your actual output matches the structure above, the release
+cut is safe to perform for real.
+
+Updated: 2026-08-16 (most recent v0.9.0-pre dry-run).
+
 ---
 
 ## 2. Backup (5 min, do this BEFORE bouncing anything)
