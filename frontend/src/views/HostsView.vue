@@ -47,6 +47,7 @@ import { z } from 'zod'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import DataTable from '@/components/DataTable.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import DialogContent from '@/components/ui/DialogContent.vue'
@@ -518,10 +519,20 @@ async function startEdit(host: Host): Promise<void> {
   editOpen.value = true
 }
 
+const deleteConfirmOpen = ref(false)
+const pendingDelete = ref<Host | null>(null)
+
 async function confirmDelete(host: Host): Promise<void> {
-  if (!window.confirm(t('hosts.confirmDelete', { name: host.remark }))) return
+  pendingDelete.value = host
+  deleteConfirmOpen.value = true
+}
+
+async function performDelete(): Promise<void> {
+  const target = pendingDelete.value
+  if (!target) return
+  pendingDelete.value = null
   try {
-    await deleteHost(host.id)
+    await deleteHost(target.id)
     toast.add({ title: t('hosts.deleted'), variant: 'success' })
     await refresh()
   } catch (error) {
@@ -1295,6 +1306,14 @@ const balancerStrategies: BalancerStrategy[] = [
         </Form>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      v-model:open="deleteConfirmOpen"
+      :title="t('hosts.confirmDelete', { name: pendingDelete?.remark ?? '' })"
+      :variant="'destructive'"
+      :confirm-label="t('common.delete')"
+      @confirm="performDelete"
+    />
   </section>
 </template>
 

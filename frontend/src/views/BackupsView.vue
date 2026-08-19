@@ -36,6 +36,7 @@ import type { Backup, BackupStatus, BackupTrigger } from '@/types'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import DataTable from '@/components/DataTable.vue'
 
 const { t } = useI18n()
@@ -152,15 +153,25 @@ async function onDownload(row: Backup): Promise<void> {
   }
 }
 
+const deleteConfirmOpen = ref(false)
+const pendingDelete = ref<Backup | null>(null)
+
 async function onDelete(row: Backup): Promise<void> {
-  if (!window.confirm(t('backups.confirmDelete', { id: row.id }))) return
-  deletingId.value = row.id
+  pendingDelete.value = row
+  deleteConfirmOpen.value = true
+}
+
+async function performDelete(): Promise<void> {
+  const target = pendingDelete.value
+  if (!target) return
+  pendingDelete.value = null
+  deletingId.value = target.id
   try {
-    await deleteBackup(row.id)
-    rows.value = rows.value.filter((r) => r.id !== row.id)
+    await deleteBackup(target.id)
+    rows.value = rows.value.filter((r) => r.id !== target.id)
     toast.add({
       title: t('backups.deleted'),
-      description: row.id,
+      description: target.id,
     })
   } catch (error) {
     toast.add({
@@ -347,6 +358,14 @@ onMounted(() => {
       :loading="loading"
       :search-key="'backups.search'"
       :empty-key="'backups.empty'"
+    />
+
+    <ConfirmDialog
+      v-model:open="deleteConfirmOpen"
+      :title="t('backups.confirmDelete', { id: pendingDelete?.id ?? '' })"
+      :variant="'destructive'"
+      :confirm-label="t('common.delete')"
+      @confirm="performDelete"
     />
   </section>
 </template>

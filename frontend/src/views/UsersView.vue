@@ -35,6 +35,7 @@ import { useZodForm } from '@/composables/useZodForm'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import DataTable from '@/components/DataTable.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import DialogContent from '@/components/ui/DialogContent.vue'
@@ -448,10 +449,20 @@ const columns: ColumnDef<User, unknown>[] = [
   },
 ]
 
+const softDeleteConfirmOpen = ref(false)
+const pendingSoftDelete = ref<User | null>(null)
+
 async function softDelete(user: User): Promise<void> {
-  if (!window.confirm(t('users.confirmSoftDelete', { username: user.username }))) return
+  pendingSoftDelete.value = user
+  softDeleteConfirmOpen.value = true
+}
+
+async function performSoftDelete(): Promise<void> {
+  const target = pendingSoftDelete.value
+  if (!target) return
+  pendingSoftDelete.value = null
   try {
-    await updateUser(user.id, { status: 'deleted' })
+    await updateUser(target.id, { status: 'deleted' })
     toast.add({ title: t('users.deleted'), variant: 'success' })
     await refresh()
   } catch (error) {
@@ -873,6 +884,14 @@ async function softDelete(user: User): Promise<void> {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <ConfirmDialog
+      v-model:open="softDeleteConfirmOpen"
+      :title="t('users.confirmSoftDelete', { username: pendingSoftDelete?.username ?? '' })"
+      :variant="'destructive'"
+      :confirm-label="t('common.delete')"
+      @confirm="performSoftDelete"
+    />
   </section>
 </template>
 

@@ -36,6 +36,7 @@ import type { PanelPathConfig } from '@/types'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import CardHeader from '@/components/ui/CardHeader.vue'
 import CardTitle from '@/components/ui/CardTitle.vue'
 import CardDescription from '@/components/ui/CardDescription.vue'
@@ -90,8 +91,17 @@ async function rotateRandom(): Promise<void> {
   }
 }
 
+const resetConfirmOpen = ref(false)
+const pendingReset = ref(false)
+
 async function reset(): Promise<void> {
-  if (!window.confirm(t('settings.confirmReset'))) return
+  pendingReset.value = true
+  resetConfirmOpen.value = true
+}
+
+async function performReset(): Promise<void> {
+  if (!pendingReset.value) return
+  pendingReset.value = false
   resetting.value = true
   try {
     active.value = await resetPanelPath()
@@ -268,6 +278,14 @@ onMounted(() => {
         <CardDescription>{{ t('settings.warningDescription') }}</CardDescription>
       </CardHeader>
     </Card>
+
+    <ConfirmDialog
+      v-model:open="resetConfirmOpen"
+      :title="t('settings.confirmReset')"
+      :variant="'destructive'"
+      :confirm-label="t('settings.reset')"
+      @confirm="performReset"
+    />
   </section>
 </template>
 
