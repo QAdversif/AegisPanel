@@ -5,30 +5,53 @@ All notable changes to Aegis are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.8.28] - 2026-08-20
+## [0.8.28] - 2026-08-21
 
-Tier 3 dialog extraction closeout + Tier 2 dependency
-batch + tests. The 17-PR batch (#254-#270) lands on
-`main` after the v0.8.27 cut. v0.8.28 is the next
-release tag; this section enumerates the per-PR
-contributions. Dialogs split: HostsView and NodesView
-each shed their per-action dialogs into 8 self-
-contained Vue components under
+Tier 3 dialog extraction closeout + Tier 1 #3 (backup
+cron) closeout + Tier 2 dependency batch + tests +
+anti-leak infra hardening. The 17-PR Tier 3 batch
+(#254-#270) lands the 8-dialog split of HostsView and
+NodesView; the 3-PR Tier 1 #3 batch (#273-#275) ships
+the cron-parser step + range + list syntax, the
+scheduler goroutine test coverage, and the
+`GET /api/v1/backups/schedule` endpoint + BackupsView
+"Schedule" section. PR #272 closes the 2026-08-20
+incident loop by adding a `ghp_` / `github_pat_` regex
+to the secret scanner. Dialogs split: HostsView and
+NodesView each shed their per-action dialogs into 8
+self-contained Vue components under
 `frontend/src/views/dialogs/`; the view files keep
 only the trigger refs + per-row pointers, the
 dialogs own the form state + wire-payload builder +
-success card surface.
+success card surface. Backup cron: the parser now
+supports the full Vixie `*`, `N`, `N-M`, `N-M/S`,
+`*/S`, `N,M,K` construct set; the scheduler goroutine
+is covered by 33 tests (4 new test functions
+including the `IdempotentWithinMinute`,
+`AdvancesLastEvenOnNonMatch`,
+`RespectsCancelledContext`, `TriggersAtScheduledTime`
+coverage); the new read-only `GET
+/api/v1/backups/schedule` endpoint surfaces the
+active schedule (admin-scoped, `backups` scope); the
+`Backups → Schedule` section in the admin UI renders
+the active cron + retention + `scheduleActive` flag
+so the operator can audit at a glance.
+
+### Added
+
+- feat(backups): extend cron parser with step + range + list syntax — `N-M`, `N-M/S`, `*/S`, `N,M,K` now supported in `parseCronField`; gocritic `unnamedResult` compliance (named returns + 2 body `:=` → `=`) (#273)
+- feat(backups): add hot-reload + admin UI for schedule + retention — `Service.ReloadCron` + `GET /api/v1/backups/schedule` endpoint (admin-scoped, `backups` scope) + `BackupsView.vue` "Schedule" section + 10 i18n keys (`backups.schedule.*` in en.json + ru.json) + OpenAPI schema bump to `0.8.28` + auto-regenerated `api.d.ts` (#275)
 
 ### Changed
 
-- refactor(frontend): dedup ChangePasswordRequest type (#254)
+- refactor(frontend): dedup `ChangePasswordRequest` type (#254)
 - refactor(frontend): replace `window.confirm` with `ConfirmDialog` component (HostsView + InboundsView) (#256)
 - refactor(frontend): replace `as never` with typed `as Parameters<...>` casts in HostsView + NodesView (#263)
-- refactor(frontend): extract HostCreateDialog + HostEditDialog from HostsView (#265)
-- refactor(frontend): extract NodeCreateDialog + NodeEditDialog from NodesView (#266)
-- refactor(frontend): extract NodeProvisionDialog from NodesView (#267)
-- refactor(frontend): extract NodeRotateDialog from NodesView (#268)
-- refactor(frontend): extract NodeRefreshDialog + NodeInspectDialog from NodesView (#269)
+- refactor(frontend): extract `HostCreateDialog` + `HostEditDialog` from HostsView (#265)
+- refactor(frontend): extract `NodeCreateDialog` + `NodeEditDialog` from NodesView (#266)
+- refactor(frontend): extract `NodeProvisionDialog` from NodesView (#267)
+- refactor(frontend): extract `NodeRotateDialog` from NodesView (#268)
+- refactor(frontend): extract `NodeRefreshDialog` + `NodeInspectDialog` from NodesView (#269)
 
 ### Performance
 
@@ -38,6 +61,11 @@ success card surface.
 ### Tests
 
 - test(frontend): add vitest coverage for 8 extracted dialogs (52 new tests, 39 existing → 91 total) (#270)
+- test(backups): add scheduler goroutine test coverage — 33 tests across 4 new test functions (`IdempotentWithinMinute`, `AdvancesLastEvenOnNonMatch`, `RespectsCancelledContext`, `TriggersAtScheduledTime`) in `scheduler_test.go` (#274)
+
+### Security
+
+- chore(ci): add `ghp_` / `github_pat_` regex to `BANNED_PATTERNS` in `tools/scripts/check-sensitive.sh` (and AGENTS.md mirror) — closes the 2026-08-20 3-PAT incident loop; the scanner now catches classic `ghp_`/fine-grained `github_pat_`/OAuth `gho_`/`ghu_`/`ghs_`/`ghr_` tokens. All three leaked tokens from the 2026-08-20 session have been rotated by the operator (#272)
 
 ### Chore
 
@@ -206,5 +234,5 @@ success card surface.
 - chore(ops): secrets via sops+age (#119) (#119)
 - chore(repo): gitignore operator deploy scripts under tools/scripts/ (#118)
 
-[0.8.28]: c58a1b4
+[0.8.28]: 4a3c31a
 [0.8.27]: 6b48879

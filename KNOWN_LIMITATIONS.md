@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.27
+# Known Limitations — AegisPanel v0.8.28
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,34 +6,60 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.27** (the
-anti-leak infrastructure + `release.yml` hard-gate smoke +
-`docs/RUNBOOKS/oncall.md` + recreated `docs/gap-analysis-
-v0.8.24.md` batch; PRs #241 / #246 / #247 / #249 / #250 /
-PR #251 / PR #252; release cut at `6b48879`). v0.8.27 is
-the first release where the anti-leak infrastructure
-gates a merge end-to-end (pre-commit + CI + the agent's
-banned-
-list). v0.8.25 still closes the **9-bug silent-production
-chain** that started in v0.8.15 (pg_dump missing in image)
-and ran through v0.8.16..v0.8.24 (symlink wrapper,
-DSN-stripped dump call, postgres 15 vs 16 mismatch,
-known_hosts TOFU unreachable, wire-vs-line fingerprint,
-ed25519 HostKeyAlgorithms pin, `SHA256:` prefix-strip,
-state-write `UpdateInput{}` empty struct, ETXTBSY on
-direct binary overwrite). All nine bugs were caught by
+The current state of the project is **v0.8.28** (the
+Tier 3 dialog-extraction closeout + Tier 1 #3
+backup-cron closeout; PRs #254-#275; release cut at
+`4a3c31a`). v0.8.28 ships two release tracks in one
+tag. **Tier 3 (PRs #254-#270)**: 5 dialog-extraction
+PRs split HostsView and NodesView into 8 self-contained
+dialog components under `frontend/src/views/dialogs/`
+(HostCreateDialog + HostEditDialog #265, NodeCreateDialog
+and NodeEditDialog #266, NodeProvisionDialog #267,
+NodeRotateDialog #268, NodeRefreshDialog and
+NodeInspectDialog #269); adjacent refactors
+`ChangePasswordRequest` dedup (#254), `window.confirm`
+→ `ConfirmDialog` migration (#256), typed
+`as Parameters<...>` casts replacing `as never` (#263);
+two perf wins (`camelizeKeys` memoization #255, new
+`GET /api/v1/inbounds` batch endpoint #264); 52 new
+vitest tests (39 → 91 total, #270). **Tier 1 #3
+(PRs #273-#275)**: backup-cron hardening. PR #273
+extends `parseCronField` to the full Vixie construct
+set (`N-M`, `N-M/S`, `*/S`, `N,M,K`). PR #274 adds
+33 scheduler goroutine tests across 4 new test
+functions (`IdempotentWithinMinute`,
+`AdvancesLastEvenOnNonMatch`,
+`RespectsCancelledContext`,
+`TriggersAtScheduledTime`). PR #275 ships the
+admin-UI surface — `Service.ReloadCron` + the
+read-only `GET /api/v1/backups/schedule` endpoint +
+`Backups → Schedule` section in `BackupsView.vue` +
+10 i18n keys + OpenAPI schema bump to `0.8.28` +
+auto-regenerated `frontend/src/types/api.d.ts`. **Anti-
+leak infra hardening (PR #272)**: a `ghp_` /
+`github_pat_` regex is added to `BANNED_PATTERNS` in
+`tools/scripts/check-sensitive.sh` (and the AGENTS.md
+mirror), closing the 2026-08-20 3-PAT incident loop.
+**v0.8.27** (the anti-leak infrastructure + `release.yml`
+hard-gate smoke + `docs/RUNBOOKS/oncall.md` + recreated
+`docs/gap-analysis-v0.8.24.md` batch; PRs #241 / #246 /
+\#247 / #249 / #250 / PR #251 / PR #252; release cut at
+`6b48879`) is the first release where the anti-leak
+infrastructure gates a merge end-to-end (pre-commit +
+CI + the agent's banned-list). v0.8.25 still closes the
+**9-bug silent-production chain** that started in
+v0.8.15 (pg_dump missing in image) and ran through
+v0.8.16..v0.8.24 (symlink wrapper, DSN-stripped dump
+call, postgres 15 vs 16 mismatch, known_hosts TOFU
+unreachable, wire-vs-line fingerprint, ed25519
+HostKeyAlgorithms pin, `SHA256:` prefix-strip, state-
+write `UpdateInput{}` empty struct, ETXTBSY on direct
+binary overwrite). All nine bugs were caught by
 post-deploy live smoke tests, never by the
 `release.yml` workflow — the v0.9.0 `release.yml`
 hard-gate smoke test (PR #247) is the first release
 where the smoke is a CI gate, not a manual post-deploy
-check. **v0.8.28 (Tier 3 closeout) is on `main` HEAD**
-and is the next release tag; it ships the dialog
-extraction (PRs #265-#269), the typed-casts refactor
-(#263), the `window.confirm` → `ConfirmDialog` migration
-(#256), the `camelizeKeys` memoization (#255), the new
-`GET /api/v1/inbounds` batch endpoint (#264), and 52 new
-vitest tests (39 → 91 total, #270). The full gap-vs-
-roadmap analysis is in
+check. The full gap-vs-roadmap analysis is in
 [`docs/gap-analysis-v0.8.24.md`](./docs/gap-analysis-v0.8.24.md);
 the TL;DR is: the v0.8.x code is **richer** than the
 v9.5 roadmap expected at this point (per-user credentials,
@@ -1110,6 +1136,72 @@ focused effort). The pre-existing
 `tools/scripts/restore.sh` covers the operator
 side; a CI job that runs it against a
 fresh-provisioned VM is the missing piece.
+
+## v0.8.28 — closed in v0.8.28 (Tier 3 + Tier 1 #3 + anti-leak)
+
+The v0.8.28 release cut at `4a3c31a` closes two
+release tracks in one tag plus one anti-leak
+infrastructure hardening.
+
+### Tier 3 — dialog extraction (PRs #254-#270)
+
+Five dialog-extraction PRs split HostsView and
+NodesView into 8 self-contained Vue components
+under `frontend/src/views/dialogs/`. The view files
+keep only the trigger refs + per-row pointers; the
+dialogs own the form state, the wire-payload
+builder, and the success card surface.
+
+| Item | Closed by |
+| --- | --- |
+| `HostCreateDialog` + `HostEditDialog` extracted from `HostsView.vue` — `HostsView.vue` 1417→302 lines | PR #265 |
+| `NodeCreateDialog` + `NodeEditDialog` extracted from `NodesView.vue` — `NodesView.vue` 2003→1463 lines | PR #266 |
+| `NodeProvisionDialog` extracted from `NodesView.vue` — auth-method radio (key / password / stored) + conditional key/password fields, single-step form — `NodesView.vue` 1463→1162 lines | PR #267 |
+| `NodeRotateDialog` extracted from `NodesView.vue` — `NodesView.vue` 1162→1035 lines | PR #268 |
+| `NodeRefreshDialog` + `NodeInspectDialog` extracted from `NodesView.vue` — `NodesView.vue` 1035→639 lines. Fixed a pre-existing missing `.nodes__refresh-*` CSS block in the same PR | PR #269 |
+| `ChangePasswordRequest` type dedup — the type was redefined in 3 places (UsersView, Settings, ProfileView); now a single shared type in `frontend/src/types/forms.ts` | PR #254 |
+| `window.confirm` → `ConfirmDialog` component migration (HostsView + InboundsView) — typed wrapper over shadcn-vue's `AlertDialog`, replaces the native browser confirm that v0.7.0-era code used | PR #256 |
+| `as never` → typed `as Parameters<typeof fn>[0]` casts in HostsView + NodesView (15 + 2 occurrences; the 2 in `provisionNode` use a different cast and are also fixed) | PR #263 |
+| `camelizeKeys` memoization for large response bodies — 30%+ latency win on HostsView / NodesView open with > 50 nodes | PR #255 |
+| `GET /api/v1/inbounds` batch endpoint — replaces the per-row `GetByNode` fan-out that the v0.8.x frontend (HostsView, NodesView) had to make on each view open. OpenAPI spec bumped to `0.8.27`; auto-regenerated `frontend/src/types/api.d.ts`; hand-mirrored `frontend/src/api/services/inbounds.ts` updated | PR #264 |
+| 52 new vitest tests across 8 dialog test files (39 → 91 total) | PR #270 |
+
+### Tier 1 #3 — backup-cron hardening (PRs #273-#275)
+
+The backup-cron subsystem gets a 3-PR hardening
+pass: parser extension, scheduler test coverage,
+and admin-UI surface.
+
+| Item | Closed by |
+| --- | --- |
+| `parseCronField` extended to the full Vixie construct set — `*` (wildcard), `N` (specific value), `N-M` (range, inclusive), `N-M/S` (range with step), `*/S` (every S-th value), `N,M,K` (list of values, sorted + deduplicated). Parser stays wall-clock only (5 fields required, no `@`-syntax, no sub-minute granularity, no timezones). `gocritic` `unnamedResult` compliance (named returns + 2 body `:=` → `=`). 38 new tests | PR #273 |
+| Scheduler goroutine test coverage — 33 tests across 4 new test functions in `backend/internal/backups/scheduler_test.go`: `IdempotentWithinMinute` (two ticks in the same minute collapse to one fire), `AdvancesLastEvenOnNonMatch` (the `lastFire` field advances even when the expression does not match), `RespectsCancelledContext` (a cancelled `ctx` stops the loop cleanly), `TriggersAtScheduledTime` (the goroutine actually fires `nextFire` — uses a fake clock to avoid real time) | PR #274 |
+| Admin-UI surface — `Service.ReloadCron(ctx, expr)` method on `backups.Service`; read-only `GET /api/v1/backups/schedule` endpoint (admin-scoped, `backups` scope; response is `{cron, retentionDays, maxCount, scheduleActive}`); `Backups → Schedule` section in `BackupsView.vue` (renders the active cron + retention + `scheduleActive` flag); 10 i18n keys (`backups.schedule.*` in en.json + ru.json); OpenAPI schema bump to `0.8.28`; auto-regenerated `frontend/src/types/api.d.ts` | PR #275 |
+
+### Anti-leak infra hardening (PR #272)
+
+| Item | Closed by |
+| --- | --- |
+| `BANNED_PATTERNS` in `tools/scripts/check-sensitive.sh` (and the AGENTS.md mirror) extended with a `ghp_[A-Za-z0-9]{36,}` / `gho_[A-Za-z0-9]{36,}` / `ghu_[A-Za-z0-9]{36,}` / `ghs_[A-Za-z0-9]{36,}` / `ghr_[A-Za-z0-9]{36,}` / `github_pat_[A-Za-z0-9_]{82,}` regex set. Catches classic `ghp_` / fine-grained `github_pat_` / OAuth `gho_` / `ghu_` / `ghs_` / `ghr_` tokens. Closes the 2026-08-20 3-PAT incident loop (the three leaked tokens have all been rotated by the operator; the regex form is the durable preventive). Pre-commit + CI gate + agent banned-list now all three catch a `ghp_` leak end-to-end | PR #272 |
+
+## v0.9.1 — currently open (7 Tier 1 #3 follow-up items)
+
+v0.8.28 closed the Tier 1 #3 batch but parked 7
+follow-up items for v0.9.1. All 7 are pure Tier 1
+\#3 (no schema, no OpenAPI, no breaking env
+changes); the only surface that changes is the
+optional `POST /api/v1/backups/schedule` payload
+shape.
+
+| # | Item | Notes |
+| --- | --- | --- |
+| 1 | Resolve the data race in `scheduler.maybeFire` | `loadSchedule` + `setNextFire` on the same `Scheduler` struct are concurrent (the manual-backup path writes while the scheduler reads). Currently benign (the read sees a stale `cron` for at most one tick) but `go test -race` flags it. Fix: a `sync.Mutex` around the two-field read+write pair, or a `sync/atomic.Pointer[ScheduleState]` |
+| 2 | Add handler tests for `GET /api/v1/backups/schedule` | Cover: the `{cron, retentionDays, maxCount, scheduleActive}` response shape; the `backups`-scope guard (401 with no token, 403 with non-`backups` scope, 200 with admin token); the empty-`AEGIS_BACKUPS_CRON` case (`scheduleActive: false`); the case where the cron expression failed to parse at boot (`scheduleActive: false`, the raw `cron` field still reflects the input) |
+| 3 | Document the `scheduleActive` semantic | `true` means the scheduler goroutine is running AND a `cron` expression is set AND it's parseable. `false` is manual-only mode (either `AEGIS_BACKUPS_CRON` is empty OR the expression failed to parse at boot). Add to the `GET /api/v1/backups/schedule` OpenAPI schema docstring + the operator-guide "Hot-reload" section |
+| 4 | Wire a `POST /api/v1/backups/schedule` endpoint | Calls `Service.ReloadCron` and returns the refreshed schedule. The in-process `Service.ReloadCron(ctx, expr)` is already in place from PR #275; the UI surface for the POST is the missing piece. Add a matching form in the `Backups → Schedule` UI section (the current section is read-only) |
+| 5 | Add a weekly cron that sweeps orphan on-disk dump files | Rows already deleted from the DB but the file still in `/var/lib/aegis/backups/`. Today these are left orphaned; `Cleanup` errors are non-fatal. A weekly sweep keeps the disk in sync with the DB without operator action |
+| 6 | Field-naming consistency for `BackupsCron` | Pick a single convention (env var `AEGIS_BACKUPS_CRON` vs `BackupsCron` Go field vs `cron` OpenAPI schema vs `cron` UI form field) and propagate. Currently the env var is `AEGIS_BACKUPS_CRON`, the Go field is `Config.BackupsCron`, the OpenAPI schema is `cron`, and the UI form field is also `cron`. Two of the four are consistent; align the other two |
+| 7 | Add syntax examples for the new Vixie constructs in `docs/operator-guide.md` §"Cron expression syntax" | Examples: `0 9-17/2 * * *` (every 2 hours from 09:00 to 17:00), `30 0 * * 1-5` (weekdays at 00:30), `0 0 1,15 * *` (1st and 15th of every month at midnight), `*/10 9-18 * * 1-5` (every 10 min during business hours on weekdays). The `*` / `N` / `N-M` examples are already there; the new constructs aren't |
 
 ## What's NOT a limitation
 
