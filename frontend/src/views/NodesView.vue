@@ -313,7 +313,7 @@ const createForm = useZodForm({
         try {
           const res = await provisionNode(
             created.id,
-            wirePayload as never,
+            wirePayload as Parameters<typeof provisionNode>[1],
           );
           toast.add({
             title: t("nodes.createdAndProvisioned", {
@@ -488,7 +488,7 @@ const provisionForm = useZodForm({
     try {
       const res = await provisionNode(
         provisioning.value.id,
-        wirePayload as never,
+        wirePayload as Parameters<typeof provisionNode>[1],
       );
       provisionOpen.value = false;
       provisioning.value = null;

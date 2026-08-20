@@ -552,7 +552,8 @@ async function onEndpointNodeChange(idx: number, form: ReturnType<typeof useZodF
   await loadInboundsForNode(nodeId)
   // Reset the inboundId when the node changes so
   // we never carry over a stale inbound reference.
-  form.setFieldValue(`endpoints.${idx}.inboundId` as never, '' as never)
+  const resetPath = `endpoints.${idx}.inboundId` as Parameters<typeof form.setFieldValue>[0]
+  form.setFieldValue(resetPath, '' as Parameters<typeof form.setFieldValue>[1])
 }
 
 // --- table columns ------------------------------------------------------
@@ -614,16 +615,16 @@ const columns: ColumnDef<Host, unknown>[] = [
 // keeps both dialogs in lock-step.
 
 function addEndpoint(form: ReturnType<typeof useZodForm>): void {
-  const path = 'endpoints' as never
+  const path = 'endpoints' as Parameters<typeof form.setFieldValue>[0]
   const current = (form.values as { endpoints?: unknown[] }).endpoints ?? []
   form.setFieldValue(path, [
     ...current,
     { nodeId: '', inboundId: '', weight: 1, addressText: '', portText: '' },
-  ] as never)
+  ] as Parameters<typeof form.setFieldValue>[1])
 }
 
 function removeEndpoint(form: ReturnType<typeof useZodForm>, idx: number): void {
-  const path = 'endpoints' as never
+  const path = 'endpoints' as Parameters<typeof form.setFieldValue>[0]
   const current = (form.values as { endpoints?: unknown[] }).endpoints ?? []
   const next = [...current]
   next.splice(idx, 1)
@@ -634,7 +635,7 @@ function removeEndpoint(form: ReturnType<typeof useZodForm>, idx: number): void 
     // stuck with a 0-row form.
     next.push({ nodeId: '', inboundId: '', weight: 1, addressText: '', portText: '' })
   }
-  form.setFieldValue(path, next as never)
+  form.setFieldValue(path, next as Parameters<typeof form.setFieldValue>[1])
 }
 
 const balancerStrategies: BalancerStrategy[] = [
@@ -825,7 +826,8 @@ const balancerStrategies: BalancerStrategy[] = [
                     <Select
                       :model-value="(createForm.values as CreateFormValues).endpoints[idx]?.nodeId"
                       @update:model-value="(v: string) => {
-                        createForm.setFieldValue(`endpoints.${idx}.nodeId` as never, v as never)
+                        const nodePath = `endpoints.${idx}.nodeId` as Parameters<typeof createForm.setFieldValue>[0]
+                        createForm.setFieldValue(nodePath, v as Parameters<typeof createForm.setFieldValue>[1])
                         void onEndpointNodeChange(idx, createForm, v)
                       }"
                       @blur="onBlur"
@@ -853,7 +855,7 @@ const balancerStrategies: BalancerStrategy[] = [
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(createForm.values as CreateFormValues).endpoints[idx]?.inboundId"
-                      @update:model-value="(v: string) => createForm.setFieldValue(`endpoints.${idx}.inboundId` as never, v as never)"
+                      @update:model-value="(v: string) => { const inboundPath = `endpoints.${idx}.inboundId` as Parameters<typeof createForm.setFieldValue>[0]; createForm.setFieldValue(inboundPath, v as Parameters<typeof createForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     >
                       <SelectTrigger :class="hasError && 'border-destructive'">
@@ -884,7 +886,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       min="1"
                       max="1000"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => createForm.setFieldValue(`endpoints.${idx}.weight` as never, Number(v) as never)"
+                      @update:model-value="(v: string) => { const weightPath = `endpoints.${idx}.weight` as Parameters<typeof createForm.setFieldValue>[0]; createForm.setFieldValue(weightPath, Number(v) as Parameters<typeof createForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
@@ -900,7 +902,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       :model-value="String(value ?? '')"
                       :rows="3"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => createForm.setFieldValue(`endpoints.${idx}.addressText` as never, v as never)"
+                      @update:model-value="(v: string) => { const addressPath = `endpoints.${idx}.addressText` as Parameters<typeof createForm.setFieldValue>[0]; createForm.setFieldValue(addressPath, v as Parameters<typeof createForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
@@ -918,7 +920,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       min="1"
                       max="65535"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => createForm.setFieldValue(`endpoints.${idx}.portText` as never, v as never)"
+                      @update:model-value="(v: string) => { const portPath = `endpoints.${idx}.portText` as Parameters<typeof createForm.setFieldValue>[0]; createForm.setFieldValue(portPath, v as Parameters<typeof createForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
@@ -1142,7 +1144,8 @@ const balancerStrategies: BalancerStrategy[] = [
                     <Select
                       :model-value="(editForm.values as EditFormValues).endpoints?.[idx]?.nodeId"
                       @update:model-value="(v: string) => {
-                        editForm.setFieldValue(`endpoints.${idx}.nodeId` as never, v as never)
+                        const nodePath = `endpoints.${idx}.nodeId` as Parameters<typeof editForm.setFieldValue>[0]
+                        editForm.setFieldValue(nodePath, v as Parameters<typeof editForm.setFieldValue>[1])
                         void onEndpointNodeChange(idx, editForm, v)
                       }"
                       @blur="onBlur"
@@ -1170,7 +1173,7 @@ const balancerStrategies: BalancerStrategy[] = [
                   <template #default="{ onBlur, hasError }">
                     <Select
                       :model-value="(editForm.values as EditFormValues).endpoints?.[idx]?.inboundId"
-                      @update:model-value="(v: string) => editForm.setFieldValue(`endpoints.${idx}.inboundId` as never, v as never)"
+                      @update:model-value="(v: string) => { const inboundPath = `endpoints.${idx}.inboundId` as Parameters<typeof editForm.setFieldValue>[0]; editForm.setFieldValue(inboundPath, v as Parameters<typeof editForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     >
                       <SelectTrigger :class="hasError && 'border-destructive'">
@@ -1200,7 +1203,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       min="1"
                       max="1000"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => editForm.setFieldValue(`endpoints.${idx}.weight` as never, Number(v) as never)"
+                      @update:model-value="(v: string) => { const weightPath = `endpoints.${idx}.weight` as Parameters<typeof editForm.setFieldValue>[0]; editForm.setFieldValue(weightPath, Number(v) as Parameters<typeof editForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
@@ -1215,7 +1218,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       :model-value="String(value ?? '')"
                       :rows="3"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => editForm.setFieldValue(`endpoints.${idx}.addressText` as never, v as never)"
+                      @update:model-value="(v: string) => { const addressPath = `endpoints.${idx}.addressText` as Parameters<typeof editForm.setFieldValue>[0]; editForm.setFieldValue(addressPath, v as Parameters<typeof editForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
@@ -1232,7 +1235,7 @@ const balancerStrategies: BalancerStrategy[] = [
                       min="1"
                       max="65535"
                       :class="hasError && 'border-destructive'"
-                      @update:model-value="(v: string) => editForm.setFieldValue(`endpoints.${idx}.portText` as never, v as never)"
+                      @update:model-value="(v: string) => { const portPath = `endpoints.${idx}.portText` as Parameters<typeof editForm.setFieldValue>[0]; editForm.setFieldValue(portPath, v as Parameters<typeof editForm.setFieldValue>[1]) }"
                       @blur="onBlur"
                     />
                   </template>
