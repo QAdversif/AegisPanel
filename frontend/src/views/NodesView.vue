@@ -31,11 +31,12 @@
   rotate a key on a node they later intend to
   re-enable).
 
-  v0.9.x: the create + edit + provision
-  dialogs were extracted into
+  v0.9.x: the create + edit + provision +
+  rotate dialogs were extracted into
   ./dialogs/NodeCreateDialog.vue,
-  ./dialogs/NodeEditDialog.vue, and
-  ./dialogs/NodeProvisionDialog.vue. The view
+  ./dialogs/NodeEditDialog.vue,
+  ./dialogs/NodeProvisionDialog.vue, and
+  ./dialogs/NodeRotateDialog.vue. The view
   keeps the per-row DropdownMenu actions
   (Provision / Rotate / Refresh / Inspect /
   Delete) and the list state. The `editing`
@@ -59,18 +60,14 @@ import {
   getStoredNodeKey,
   listNodes,
   refreshNodeAgentBearer,
-  rotateNodePanelKey,
 } from "@/api/services";
 import type {
   Node,
   NodeRefreshAgentBearerResponse,
-  NodeRotatePanelKeyResponse,
   NodeState,
   NodeStoredKey,
   UUID,
 } from "@/types";
-import { nodeRotatePanelKeySchema } from "@/schemas";
-import { useZodForm } from "@/composables/useZodForm";
 
 import DataTable from "@/components/DataTable.vue";
 import Button from "@/components/ui/Button.vue";
@@ -82,18 +79,17 @@ import DialogHeader from "@/components/ui/DialogHeader.vue";
 import DialogTitle from "@/components/ui/DialogTitle.vue";
 import DialogDescription from "@/components/ui/DialogDescription.vue";
 import DialogFooter from "@/components/ui/DialogFooter.vue";
-import DialogClose from "@/components/ui/DialogClose.vue";
 import DropdownMenu from "@/components/ui/DropdownMenu.vue";
 import DropdownMenuTrigger from "@/components/ui/DropdownMenuTrigger.vue";
 import DropdownMenuContent from "@/components/ui/DropdownMenuContent.vue";
 import DropdownMenuItem from "@/components/ui/DropdownMenuItem.vue";
 import Input from "@/components/ui/Input.vue";
 import Textarea from "@/components/ui/Textarea.vue";
-import Form from "@/components/Form.vue";
 import FormField from "@/components/FormField.vue";
 import NodeCreateDialog from "./dialogs/NodeCreateDialog.vue";
 import NodeEditDialog from "./dialogs/NodeEditDialog.vue";
 import NodeProvisionDialog from "./dialogs/NodeProvisionDialog.vue";
+import NodeRotateDialog from "./dialogs/NodeRotateDialog.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -129,21 +125,16 @@ const editingForEdit = ref<Node | null>(null);
 const provisioning = ref<Node | null>(null);
 const provisionOpen = ref(false);
 
-// v0.8.4: rotate-panel-key dialog. The "rotating"
-// node is the one whose panel key is being
-// regenerated. The dialog stays open until the
-// SSH handshake + SFTP push + remote shell
-// complete (sync call) and shows the new public
-// key line + SHA256 fingerprint on success.
-//
-// We keep the response object on `rotationResult`
-// so the success card can render the public key
-// line + fingerprint side-by-side. The card
-// stays in the dialog after the form closes so
-// the operator can copy the fingerprint.
+// v0.8.4 + v0.9.x: rotate-panel-key dialog. The
+// "rotating" node is the one whose panel key is
+// being regenerated. The dialog (extracted to
+// NodeRotateDialog in v0.9.x) owns the form, the
+// success card, and the wire-payload builder. The
+// view keeps the trigger ref + the per-row
+// pointer (mirroring the provision / edit
+// dialogs' pattern).
 const rotating = ref<Node | null>(null);
 const rotateOpen = ref(false);
-const rotationResult = ref<NodeRotatePanelKeyResponse | null>(null);
 
 // v0.8.5: stored-key dialog. The "inspecting"
 // node is the one whose stored panel SSH key
@@ -315,69 +306,39 @@ function onProvisioned(_node: Node, newState: string): void {
 
 // --- Rotate (v0.8.4) -------------------------------------------------------
 
+// v0.9.x: the rotate dialog owns its own form
+// state, the wire-payload builder, and the
+// post-submit success card (public key line +
+// SHA256 fingerprint). The view's job is to
+// (a) set the per-row `rotating` pointer and
+// (b) flip the `rotateOpen` trigger; the
+// dialog's watcher hydrates the form + clears
+// any stale `rotationResult` every time it
+// opens. The dialog emits `rotated` (with the
+// row) on success and `update:open` on close;
+// the view handles the toast (and decides
+// that no list refresh is needed).
 function startRotate(node: Node): void {
   rotating.value = node;
-  rotationResult.value = null;
-  rotateForm.resetForm({
-    values: {
-      ssh_private_key: "",
-      ssh_port: undefined,
-      ssh_user: "",
-    },
-  });
   rotateOpen.value = true;
 }
 
-const rotateForm = useZodForm({
-  schema: nodeRotatePanelKeySchema,
-  initialValues: {
-    ssh_private_key: "",
-    ssh_port: undefined,
-    ssh_user: "",
-  },
-  onSubmit: async (values) => {
-    if (!rotating.value) return;
-    try {
-      const res = await rotateNodePanelKey(rotating.value.id, {
-        ssh_private_key: values.ssh_private_key,
-        ssh_port: values.ssh_port,
-        ssh_user: values.ssh_user,
-      });
-      // Stash the response so the success card
-      // can render the public key line +
-      // fingerprint side-by-side. The dialog
-      // stays open (rotateOpen stays true) so
-      // the operator can copy the fingerprint
-      // before closing — the form is "submitted"
-      // but the success card is the closing
-      // surface.
-      rotationResult.value = res;
-      toast.add({
-        title: t("nodes.rotated", { name: rotating.value.name }),
-        variant: "success",
-      });
-      // The list does not need a refresh —
-      // the row's state machine did not
-      // change; only the row's encrypted
-      // ssh_private_key_ciphertext column
-      // changed, and the panel does not
-      // expose that field in the wire
-      // shape (Node doesn't include it).
-    } catch (error) {
-      const apiErr = toApiError(error);
-      toast.add({
-        title: t("nodes.rotateFailed"),
-        description: apiErr.message,
-        variant: "destructive",
-      });
-    }
-  },
-});
-
-function closeRotateDialog(): void {
-  rotateOpen.value = false;
-  rotating.value = null;
-  rotationResult.value = null;
+function onRotated(node: Node): void {
+  // The dialog's success card stays open
+  // (the `update:open` -> false fires only
+  // when the operator clicks Close on the
+  // success card or hits Cancel / ESC). The
+  // list does not need a refresh — the
+  // row's state machine did not change; only
+  // the row's encrypted
+  // ssh_private_key_ciphertext column changed,
+  // and the panel does not expose that field
+  // in the wire shape (Node doesn't include
+  // it).
+  toast.add({
+    title: t("nodes.rotated", { name: node.name }),
+    variant: "success",
+  });
 }
 
 // --- Refresh agent bearer (v0.8.7) -------------------------------------
@@ -709,169 +670,12 @@ const canWrite = computed(() => {
       @provisioned="onProvisioned"
     />
 
-    <!-- Rotate-panel-key dialog (v0.8.4) -->
-    <Dialog v-model:open="rotateOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.rotateTitle") }}
-          </DialogTitle>
-          <DialogDescription>
-            {{
-              t("nodes.rotateDescription")
-            }}
-          </DialogDescription>
-        </DialogHeader>
-        <p class="nodes__provision-target">
-          <strong>{{ rotating?.name }}</strong>
-          ({{ rotating?.address }}) —
-          {{ rotating ? t(`nodes.states.${rotating.state}`) : "" }}
-        </p>
-        <Form
-          v-if="!rotationResult"
-          :is-submitting="rotateForm.isSubmitting.value"
-          @submit="rotateForm.handleSubmit"
-        >
-          <FormField
-            name="ssh_user"
-            :label="t('nodes.sshUser')"
-            :hint="t('nodes.sshUserHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="root"
-                @update:model-value="
-                  (v: string) => rotateForm.setFieldValue('ssh_user', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="ssh_port"
-            :label="t('nodes.sshPort')"
-            :hint="t('nodes.sshPortHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                type="number"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="22"
-                @update:model-value="
-                  (v: string) =>
-                    rotateForm.setFieldValue(
-                      'ssh_port',
-                      v === '' ? undefined : Number(v),
-                    )
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="ssh_private_key"
-            :label="t('nodes.rotateSshPrivateKey')"
-            required
-            :hint="t('nodes.rotateSshPrivateKeyHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Textarea
-                :id="id"
-                :model-value="String(value ?? '')"
-                :rows="10"
-                :class="hasError && 'border-destructive'"
-                spellcheck="false"
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                @update:model-value="
-                  (v: string) => rotateForm.setFieldValue('ssh_private_key', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <DialogFooter>
-            <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-                :disabled="rotateForm.isSubmitting.value"
-                @click="closeRotateDialog"
-              >
-                {{ t("common.cancel") }}
-              </Button>
-            </DialogClose>
-            <Button
-              type="submit"
-              :disabled="rotateForm.isSubmitting.value"
-            >
-              <RefreshCw class="h-4 w-4" />
-              {{ t("nodes.rotateAction") }}
-            </Button>
-          </DialogFooter>
-        </Form>
-        <!-- Success card. Renders after a
-             200 response. The dialog stays
-             open so the operator can copy the
-             fingerprint before closing. The
-             form is hidden (`v-if`) so the
-             submit button is not visible
-             alongside the success card. -->
-        <div
-          v-else
-          class="nodes__rotation-result"
-        >
-          <h3 class="nodes__rotation-result-title">
-            <KeyRound class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.rotateResultTitle") }}
-          </h3>
-          <p class="nodes__rotation-result-help">
-            {{ t("nodes.rotateResultHelp") }}
-          </p>
-          <FormField
-            name="rotate-public-key"
-            :label="t('nodes.rotatePublicKeyLine')"
-          >
-            <template #default="{ id }">
-              <Textarea
-                :id="id"
-                :model-value="rotationResult.public_key_line"
-                :rows="4"
-                readonly
-                spellcheck="false"
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="rotate-fingerprint"
-            :label="t('nodes.rotateFingerprint')"
-          >
-            <template #default="{ id }">
-              <Input
-                :id="id"
-                :model-value="rotationResult.fingerprint"
-                readonly
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <DialogFooter>
-            <Button
-              type="button"
-              @click="closeRotateDialog"
-            >
-              {{ t("common.close") }}
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <!-- Rotate-panel-key dialog (v0.8.4, extracted to NodeRotateDialog in v0.9.x) -->
+    <NodeRotateDialog
+      v-model:open="rotateOpen"
+      :node="rotating"
+      @rotated="onRotated"
+    />
 
     <!-- Inspect stored key dialog (v0.8.5) -->
     <Dialog v-model:open="inspectOpen">
