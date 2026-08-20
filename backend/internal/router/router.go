@@ -121,6 +121,15 @@ func Build(
 		// chi.URLParam.
 		r.Mount("/nodes/{nodeId}/inbounds", inbounds.Router(inboundsSvc, authSvc.Middleware()))
 
+		// Panel-wide inbounds — flat list across all
+		// nodes. Used by the admin UI's create/edit
+		// dialog to preload the full inbound map in a
+		// single round-trip (instead of N per-node
+		// requests). Per-id reads stay on the per-node
+		// router above so the {nodeId} scope check
+		// keeps the URL contract honest.
+		r.Mount("/inbounds", inbounds.TopLevelRouter(inboundsSvc, authSvc.Middleware()))
+
 		// v0.8.x: inbound templates — panel-wide
 		// named `Params` defaults. Same ScopeNodes
 		// guard as the inbounds router (the
