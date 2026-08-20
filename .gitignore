@@ -11,6 +11,12 @@ Thumbs.db
 *.iml
 .DS_Store?
 
+# Git worktrees (per superpowers:using-git-worktrees workflow,
+# the mavis orchestrator creates .worktrees/<branch>/ for
+# each task; the contents are git-checked-out working trees
+# and MUST NOT be re-tracked by the main repo)
+.worktrees/
+
 # Secrets & local config
 .env
 .env.local
