@@ -494,7 +494,17 @@
     "triggers": {
       "manual": "Manual",
       "scheduled": "Scheduled"
-    }
+    },
+    "schedule": "Backup schedule",
+    "scheduleHelp": "The in-process scheduler runs `pg_dump` on this cron expression. Edit AEGIS_BACKUPS_CRON in the panel's env file and restart the panel to apply changes. A POST endpoint for hot-reload will ship in v0.9.1 if operators ask for it.",
+    "cron": "Cron expression",
+    "cronManualOnly": "(manual-only — no scheduler)",
+    "cronActive": "active",
+    "cronInactive": "inactive",
+    "retentionDays": "Retention (days)",
+    "maxCount": "Max backups",
+    "scheduleLoadFailed": "Could not load the backup schedule",
+    "cronHelp": "5-field Vixie cron (M H DoM Mo DoW). Supports *, N, N-M, N-M/S, */S, and N,M,K. Empty = manual-only mode."
   },
   "profile": {
     "title": "Profile",

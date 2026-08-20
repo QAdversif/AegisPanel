@@ -460,3 +460,98 @@ func TestPathTraversalRejected(t *testing.T) {
 		t.Fatal("expected error for path traversal on remove, got nil")
 	}
 }
+
+// TestService_ReloadCron_UpdatesScheduler locks in:
+//   - ReloadCron creates a scheduler struct on the
+//     Service if one did not exist (cold-start path;
+//     the operator boots the panel, hits the UI,
+//     and clicks "reload" before the scheduler
+//     goroutine has ever run).
+//   - The new cron expression is what the scheduler
+//     matches against (verified via the cron.matches()
+//     probe, which is the same code path the running
+//     goroutine uses).
+//   - The expression is stored on the scheduler so
+//     the admin UI can render the current string.
+//
+// Pre-PR-Task-3 this method did not exist; the
+// scheduler was local to Run() and the operator's
+// only way to change the schedule was to edit
+// AEGIS_BACKUPS_CRON in the env file and restart
+// the panel.
+func TestService_ReloadCron_UpdatesScheduler(t *testing.T) {
+	svc, _ := newTestService(t, []byte("data"))
+	// Reload to "*/15 * * * *" — fires on every
+	// 15-minute boundary (00, 15, 30, 45 of every
+	// hour, every day). Five fields, not the
+	// single-field "*/15" (which the parser would
+	// correctly reject as not-5-fields).
+	if err := svc.ReloadCron(context.Background(), "*/15 * * * *"); err != nil {
+		t.Fatalf("ReloadCron: %v", err)
+	}
+	if svc.sched == nil {
+		t.Fatal("expected scheduler to be initialized after ReloadCron")
+	}
+	if svc.sched.cron == nil {
+		t.Fatal("expected scheduler.cron to be set after ReloadCron")
+	}
+	if svc.sched.expr != "*/15 * * * *" {
+		t.Errorf("scheduler.expr = %q, want %q", svc.sched.expr, "*/15 * * * *")
+	}
+	// A 15-minute boundary must match the new cron.
+	t15 := time.Date(2026, 3, 15, 2, 15, 0, 0, time.UTC)
+	if !svc.sched.cron.matches(t15) {
+		t.Errorf("expected cron to match :15, got no match")
+	}
+	// A minute that is NOT on a 15-minute boundary
+	// must NOT match — this is what differentiates
+	// "*/15 * * * *" from the original "0 2 * * *".
+	t07 := time.Date(2026, 3, 15, 2, 7, 0, 0, time.UTC)
+	if svc.sched.cron.matches(t07) {
+		t.Errorf("cron unexpectedly matched :07 (*/15 * * * * should not fire at :07)")
+	}
+	// A subsequent ReloadCron with a different valid
+	// expression replaces the cron in place.
+	if err := svc.ReloadCron(context.Background(), "0 2 * * *"); err != nil {
+		t.Fatalf("ReloadCron (second call): %v", err)
+	}
+	if svc.sched.expr != "0 2 * * *" {
+		t.Errorf("scheduler.expr after second reload = %q, want %q", svc.sched.expr, "0 2 * * *")
+	}
+	if !svc.sched.cron.matches(time.Date(2026, 3, 15, 2, 0, 0, 0, time.UTC)) {
+		t.Error("expected 02:00 to match after reload to 0 2 * * *")
+	}
+}
+
+// TestService_ReloadCron_InvalidExpression locks in:
+//   - An invalid cron expression is rejected with a
+//     parse error (no silent swallow).
+//   - The previous cron (if any) remains in place on
+//     parse failure — the operator's running schedule
+//     is not disturbed by a typo.
+func TestService_ReloadCron_InvalidExpression(t *testing.T) {
+	svc, _ := newTestService(t, []byte("data"))
+	// Seed a valid cron first so we can prove the
+	// invalid one does NOT replace it.
+	if err := svc.ReloadCron(context.Background(), "0 2 * * *"); err != nil {
+		t.Fatalf("seed ReloadCron: %v", err)
+	}
+	originalCron := svc.sched.cron
+	err := svc.ReloadCron(context.Background(), "not a cron")
+	if err == nil {
+		t.Fatal("expected error for invalid cron expression, got nil")
+	}
+	// The original scheduler must still be in place.
+	if svc.sched == nil || svc.sched.cron == nil {
+		t.Fatal("expected original scheduler to remain after rejected reload")
+	}
+	// Pointer identity check — the parsed Cron struct
+	// must be the exact same object, not a re-parse
+	// of the bad input.
+	if svc.sched.cron != originalCron {
+		t.Error("scheduler.cron was replaced despite parse failure")
+	}
+	if svc.sched.expr != "0 2 * * *" {
+		t.Errorf("scheduler.expr = %q after rejected reload, want %q (original preserved)", svc.sched.expr, "0 2 * * *")
+	}
+}

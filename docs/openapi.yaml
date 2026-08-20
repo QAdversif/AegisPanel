@@ -2226,6 +2226,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /backups/schedule:
+    get:
+      operationId: getBackupSchedule
+      tags: [backups]
+      summary: Get the current backup schedule + retention policy
+      description: |
+        Returns the cron expression the in-process
+        scheduler fires on, the retention window in
+        days, the max number of retained backups, and
+        a boolean flag for whether the scheduler
+        goroutine is currently active (`AEGIS_BACKUPS_CRON`
+        is non-empty and `go svc.Run(ctx, expr)` was
+        wired up in main()).
+
+        The endpoint is read-only. The operator edits
+        the `AEGIS_BACKUPS_CRON` env var and restarts
+        the panel to apply changes. A POST endpoint
+        for hot-reload is deferred to v0.9.1 per the
+        Tier 1 #3 plan.
+
+        The `cron` field reflects the live scheduler
+        expression (a future hot-reload is visible
+        immediately without a restart). The retention
+        fields are read off the boot-time config; the
+        panel does not support hot-reloading retention.
+      responses:
+        '200':
+          description: Schedule + retention policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupSchedule'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /sub/{token}:
     parameters:
       - name: token
@@ -3693,6 +3732,60 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    BackupSchedule:
+      type: object
+      required: [cron, retentionDays, maxCount, scheduleActive]
+      description: |
+        The current backup schedule + retention policy.
+        v0.9.x surface for the /backups/schedule
+        endpoint. The `cron` field is the live
+        expression the in-process scheduler matches
+        against; an empty string means manual-only
+        mode (no scheduler goroutine is running).
+      properties:
+        cron:
+          type: string
+          description: |
+            5-field Vixie cron expression (M H DoM Mo DoW).
+            Empty string = manual-only mode (no scheduler).
+            Supported constructs: `*` (wildcard),
+            `N` (single value), `N-M` (range),
+            `N-M/S` (range with step), `*/S`
+            (wildcard with step), `N,M,K` (list).
+            Seconds, timezones, and @-syntax are NOT
+            supported — the parser is wall-clock only.
+          example: '0 2 * * *'
+        retentionDays:
+          type: integer
+          description: |
+            Maximum age of any retained backup, in
+            days. 0 or negative = unlimited (the
+            age check is disabled). The Cleanup
+            method on the Service removes any
+            backup older than `now - retentionDays`
+            on every Create + on the explicit
+            `Service.Cleanup` call.
+          example: 30
+        maxCount:
+          type: integer
+          description: |
+            Maximum number of backups to keep. 0 or
+            negative = unlimited (only retentionDays
+            applies). The Cleanup method trims to
+            the most-recent N if there are more.
+          example: 0
+        scheduleActive:
+          type: boolean
+          description: |
+            True when the scheduler goroutine is
+            running (`AEGIS_BACKUPS_CRON` was non-empty
+            at boot AND `go svc.Run(ctx, expr)` was
+            wired up in main()). False in manual-only
+            mode (no scheduler). A hot-reload via
+            `Service.ReloadCron` does NOT start the
+            goroutine; it only updates the cron
+            expression on the existing scheduler.
 
     PanelPathRotateRequest:
       type: object

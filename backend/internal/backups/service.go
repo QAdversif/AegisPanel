@@ -97,6 +97,21 @@ type Config struct {
 	// recent N if there are more. Zero or negative
 	// disables the count check.
 	MaxCount int
+
+	// BackupsCron is the initial 5-field Vixie
+	// cron expression the in-process scheduler
+	// fires on. Empty = manual-only mode (the
+	// scheduler goroutine is NOT started). The
+	// ReloadCron method can replace the running
+	// scheduler's cron at runtime; this field is
+	// the boot-time value, used by Run() and the
+	// manual-only fallback in ReloadCron.
+	//
+	// v0.9.x: added as part of the
+	// "hot-reload + admin UI surface for the
+	// schedule" task. The handler /backups/schedule
+	// surfaces this value to the admin UI.
+	BackupsCron string
 }
 
 // Service is the public surface for the package.
@@ -108,6 +123,34 @@ type Service struct {
 	clock    func() time.Time
 	webhooks *webhooks.Service // v0.7.x: outbound event surface. May be nil (see WithWebhooks).
 	audits   *audits.Service   // v0.7.x deferred call-site.
+
+	// sched is the scheduler struct, created by
+	// Run() (when the operator sets AEGIS_BACKUPS_CRON
+	// to a non-empty value and the main() wires up
+	// `go svc.Run(ctx, cron)`) OR by ReloadCron (when
+	// the operator changes the schedule at runtime).
+	// nil = the scheduler has never been initialised;
+	// handleGetSchedule surfaces this as
+	// `scheduleActive: false`.
+	//
+	// v0.9.x: promoted from a local var in Run() to a
+	// struct field so ReloadCron can swap the cron
+	// expression in place under a mutex without
+	// touching the goroutine. The goroutine itself
+	// still reads s.sched.cron via the locked pointer
+	// (see scheduler.maybeFire) — the swap is atomic
+	// from the goroutine's perspective.
+	sched *scheduler
+
+	// configMu guards cfg.BackupsCron against
+	// concurrent writes from ReloadCron (which
+	// updates the field when no scheduler is
+	// running) and reads from the HTTP handler
+	// (handleGetSchedule). The sched field has its
+	// own mu for the cron swap path.
+	//
+	// v0.9.x: added together with the sched field.
+	configMu sync.RWMutex
 
 	// dumper and restorer are the producer-side
 	// interfaces the Service delegates to. The
@@ -218,6 +261,26 @@ func (s *Service) SetClock(now func() time.Time) { s.clock = now }
 // handler does not need this; it is exposed for the
 // future CLI binary.
 func (s *Service) Store() Store { return s.store }
+
+// Cfg returns the Service's configuration by value.
+// The handler reads RetentionDays / MaxCount from
+// this snapshot when rendering /backups/schedule.
+// The caller MUST NOT mutate the returned value —
+// the fields are passed by value for read-only
+// access; the only legitimate mutator is
+// ReloadCron, which acquires s.configMu and writes
+// s.cfg.BackupsCron (a field not surfaced through
+// Cfg here because the handler reads the live cron
+// from Schedule() instead).
+//
+// v0.9.x: added so the /backups/schedule handler
+// can surface the retention policy without
+// reaching into the Service's unexported field.
+func (s *Service) Cfg() Config {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.cfg
+}
 
 // Create runs a fresh backup. The full lifecycle:
 //  1. Allocate an ID.
@@ -503,6 +566,99 @@ func (s *Service) Restore(ctx context.Context, id string) error {
 	// taint does not apply here.
 	dumpPath := filepath.Join(s.cfg.BackupsDir, row.Path)
 	return s.restorer.Restore(ctx, s.cfg.PostgresDSN, dumpPath)
+}
+
+// ReloadCron replaces the running scheduler's cron
+// expression at runtime. A valid 5-field Vixie
+// expression is parsed and the new Cron is swapped
+// in under s.sched.mu; the running goroutine reads
+// s.sched.cron through the same lock and picks up
+// the change on its next tick.
+//
+// An invalid expression is rejected with the parser
+// error, and the previous expression remains in
+// effect (no swap, no scheduler re-init). The
+// hot-reload is idempotent — calling with the same
+// expression is a no-op (the cron is re-parsed and
+// re-installed, semantically identical).
+//
+// If the scheduler has never been initialised (the
+// operator booted the panel with an empty
+// AEGIS_BACKUPS_CRON and has not called Run() yet),
+// ReloadCron creates a fresh scheduler struct in
+// place. The goroutine is NOT started — the operator
+// still has to wire up `go svc.Run(ctx, expr)` from
+// main(), which will see the existing scheduler and
+// the new cron. The cron swap is a no-op for a fresh
+// Service until the goroutine starts, but the
+// handler can now read the expression off the
+// scheduler struct.
+//
+// v0.9.x: the POST endpoint for hot-reload is
+// deferred to v0.9.1 per the Tier 1 #3 plan. For
+// now, ReloadCron is exposed as a Service method
+// for the future `aegis admin backup schedule
+// reload` CLI and for any in-process callers; the
+// operator's path remains "edit AEGIS_BACKUPS_CRON
+// in the env file and restart the panel".
+func (s *Service) ReloadCron(ctx context.Context, expr string) error {
+	c, err := ParseCron(expr)
+	if err != nil {
+		return err
+	}
+	if s.sched == nil {
+		// Cold-start path. The operator changed
+		// the schedule before the scheduler
+		// goroutine was ever started. Install a
+		// fresh scheduler struct so the handler
+		// (handleGetSchedule) can surface the
+		// expression. Run() will replace the
+		// cron field when the goroutine starts
+		// (or honour it if the operator does
+		// `go svc.Run(ctx, s.cfg.BackupsCron)`
+		// without re-typing the expression).
+		s.sched = &scheduler{svc: s, expr: expr, cron: c}
+		s.configMu.Lock()
+		s.cfg.BackupsCron = expr
+		s.configMu.Unlock()
+		log.Info().Str("cron", expr).Msg("backups: scheduler initialised from ReloadCron (no goroutine yet)")
+		return nil
+	}
+	s.sched.mu.Lock()
+	s.sched.cron = c
+	s.sched.expr = expr
+	s.sched.mu.Unlock()
+	// Mirror the new expression into cfg so a
+	// subsequent panel restart picks it up via
+	// the standard AEGIS_BACKUPS_CRON path.
+	s.configMu.Lock()
+	s.cfg.BackupsCron = expr
+	s.configMu.Unlock()
+	log.Info().Str("cron", expr).Msg("backups: scheduler cron reloaded at runtime")
+	return nil
+}
+
+// Schedule returns a snapshot of the current
+// scheduler's expression and parsed Cron. The
+// pointer is nil when no scheduler has been
+// initialised (cold-start, manual-only mode).
+// The Cron pointer is the same object the
+// scheduler goroutine matches against; treat it
+// as read-only.
+//
+// v0.9.x: read-side helper for the
+// /backups/schedule handler. Returns the live
+// values, NOT cfg.BackupsCron, so a hot-reload
+// is visible immediately without a restart.
+func (s *Service) Schedule() (expr string, cron *Cron, active bool) {
+	if s.sched == nil {
+		s.configMu.RLock()
+		defer s.configMu.RUnlock()
+		return s.cfg.BackupsCron, nil, false
+	}
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	return s.sched.expr, s.sched.cron, true
 }
 
 // Cleanup applies RetentionDays and MaxCount.

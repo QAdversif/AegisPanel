@@ -236,10 +236,20 @@ func (c *Cron) matches(t time.Time) bool {
 // scheduler holds no locks; it calls Service.Create
 // (which is single-flight on its own) and
 // Service.Cleanup (idempotent).
+//
+// v0.9.x: `expr` is the original 5-field Vixie
+// expression the operator set (or the new one from
+// ReloadCron). It is kept on the struct so the
+// admin UI can render the current string without
+// re-parsing the Cron. The mu field guards BOTH
+// `last` (the per-minute idempotency marker) AND
+// the cron swap (ReloadCron takes the lock, writes
+// the new *Cron, releases).
 type scheduler struct {
 	svc  *Service
+	expr string // the original 5-field expression (admin UI surface)
 	cron *Cron
-	mu   sync.Mutex // guards lastFired so the same minute isn't fired twice on loop restart
+	mu   sync.Mutex // guards last AND cron (see ReloadCron)
 	last time.Time
 }
 
@@ -250,12 +260,41 @@ type scheduler struct {
 // The loop ticks at 1-minute granularity. A typical
 // `0 2 * * *` schedule fires once per day at 02:00
 // local time.
+//
+// v0.9.x: the scheduler struct is now stored on
+// the Service (s.sched) rather than as a local
+// variable, so ReloadCron can swap the cron
+// expression at runtime. If a scheduler already
+// exists (the operator hot-reloaded before the
+// goroutine started, or the panel is being
+// re-entered after a previous Run), the existing
+// struct is reused and the new cron replaces the
+// old one.
 func (s *Service) Run(ctx context.Context, expr string) error {
 	c, err := ParseCron(expr)
 	if err != nil {
 		return err
 	}
-	sched := &scheduler{svc: s, cron: c}
+	if s.sched == nil {
+		s.sched = &scheduler{svc: s, expr: expr, cron: c}
+	} else {
+		// ReloadCron path: the operator already
+		// pushed a cron swap through the Service
+		// method before main() wired up the
+		// goroutine. Adopt the existing scheduler
+		// and refresh both fields so the running
+		// loop sees the operator's chosen
+		// expression (the value they passed to
+		// Run() may differ from the hot-reloaded
+		// one — operator-friendly default: the
+		// Run() argument wins, but the struct
+		// fields are kept consistent with what
+		// the goroutine will use).
+		s.sched.mu.Lock()
+		s.sched.expr = expr
+		s.sched.cron = c
+		s.sched.mu.Unlock()
+	}
 	log.Info().Str("cron", expr).Msg("backups: scheduler started")
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -265,7 +304,7 @@ func (s *Service) Run(ctx context.Context, expr string) error {
 			log.Info().Msg("backups: scheduler stopped")
 			return nil
 		case now := <-ticker.C:
-			sched.maybeFire(ctx, now)
+			s.sched.maybeFire(ctx, now)
 		}
 	}
 }

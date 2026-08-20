@@ -75,6 +75,13 @@ func (h *Handler) Mount() http.Handler {
 
 	r.Post("/", h.handleCreate())
 	r.Get("/", h.handleList())
+	// /schedule is mounted BEFORE the /{id} route so
+	// chi's path matcher does not try to bind
+	// "schedule" as a backup id. (The order matters
+	// in chi: a `r.Get("/{id}", ...)` registered
+	// before `r.Get("/schedule", ...)` would
+	// greedily match /schedule.)
+	r.Get("/schedule", h.handleGetSchedule())
 	r.Route("/{id}", func(r chi.Router) {
 		r.Get("/", h.handleGet())
 		r.Get("/download", h.handleDownload())
@@ -208,6 +215,40 @@ func (h *Handler) handleRestore() http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// handleGetSchedule returns the current backup
+// schedule + retention policy. The endpoint is
+// read-only — the operator edits the env var
+// (`AEGIS_BACKUPS_CRON`) and restarts the panel to
+// apply changes. A POST endpoint for hot-reload
+// is deferred to v0.9.1 per the Tier 1 #3 plan.
+//
+// Response shape (v0.9.x):
+//
+//	{
+//	  "cron":           "0 2 * * *",  // 5-field Vixie expression; "" = manual-only
+//	  "retentionDays":  30,            // 0 = unlimited
+//	  "maxCount":       0,             // 0 = unlimited
+//	  "scheduleActive": true           // false when no scheduler is running
+//	}
+//
+// The cron field reflects the live scheduler
+// expression (a hot-reload is visible immediately
+// without a restart), not the boot-time config
+// value. retentionDays + maxCount are read off
+// cfg at request time (the panel does not support
+// hot-reloading retention).
+func (h *Handler) handleGetSchedule() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expr, _, active := h.svc.Schedule()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"cron":           expr,
+			"retentionDays":  h.svc.Cfg().RetentionDays,
+			"maxCount":       h.svc.Cfg().MaxCount,
+			"scheduleActive": active,
+		})
 	}
 }
 

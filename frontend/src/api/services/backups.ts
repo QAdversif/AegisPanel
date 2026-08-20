@@ -27,7 +27,7 @@
 // `size_bytes` -> `sizeBytes`, …).
 
 import { api } from './../client'
-import type { Backup, BackupTrigger } from '@/types'
+import type { Backup, BackupSchedule, BackupTrigger } from '@/types'
 
 /** List every backup row, newest first.
  *
@@ -134,4 +134,21 @@ export async function downloadBackup(id: string, filename: string): Promise<void
     // can pick the download up off the URL.
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
+}
+
+/** Fetch the current backup schedule + retention
+ *  policy. Read-only surface (v0.9.x) for the
+ *  Schedule section in BackupsView. The operator
+ *  edits the env var + restarts the panel to
+ *  apply changes; a POST endpoint for hot-reload
+ *  is deferred to v0.9.1 per the Tier 1 #3 plan.
+ *
+ *  `scheduleActive: false` is the manual-only
+ *  state (no scheduler goroutine). The view
+ *  shows the retention fields regardless of the
+ *  active flag (they apply to manual backups
+ *  too, via the post-Create cleanup pass). */
+export async function getBackupSchedule(): Promise<BackupSchedule> {
+  const { data } = await api.get<BackupSchedule>('/api/v1/backups/schedule')
+  return data
 }
