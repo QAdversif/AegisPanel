@@ -32,11 +32,13 @@
   re-enable).
 
   v0.9.x: the create + edit + provision +
-  rotate dialogs were extracted into
-  ./dialogs/NodeCreateDialog.vue,
+  rotate + refresh + inspect dialogs were
+  extracted into ./dialogs/NodeCreateDialog.vue,
   ./dialogs/NodeEditDialog.vue,
-  ./dialogs/NodeProvisionDialog.vue, and
-  ./dialogs/NodeRotateDialog.vue. The view
+  ./dialogs/NodeProvisionDialog.vue,
+  ./dialogs/NodeRotateDialog.vue,
+  ./dialogs/NodeRefreshDialog.vue, and
+  ./dialogs/NodeInspectDialog.vue. The view
   keeps the per-row DropdownMenu actions
   (Provision / Rotate / Refresh / Inspect /
   Delete) and the list state. The `editing`
@@ -49,47 +51,28 @@
 import { computed, h, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { MoreHorizontal, Plus } from "lucide-vue-next";
-import { KeyRound, RefreshCw, Eye } from "lucide-vue-next";
 import type { ColumnDef } from "@tanstack/vue-table";
 
 import { useAuthStore } from "@/stores/auth";
 import { useToastStore } from "@/stores/toast";
 import { toApiError } from "@/api/client";
-import {
-  deleteNode,
-  getStoredNodeKey,
-  listNodes,
-  refreshNodeAgentBearer,
-} from "@/api/services";
-import type {
-  Node,
-  NodeRefreshAgentBearerResponse,
-  NodeState,
-  NodeStoredKey,
-  UUID,
-} from "@/types";
+import { deleteNode, listNodes } from "@/api/services";
+import type { Node, NodeState } from "@/types";
 
 import DataTable from "@/components/DataTable.vue";
 import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import ConfirmDialog from "@/components/ConfirmDialog.vue";
-import Dialog from "@/components/ui/Dialog.vue";
-import DialogContent from "@/components/ui/DialogContent.vue";
-import DialogHeader from "@/components/ui/DialogHeader.vue";
-import DialogTitle from "@/components/ui/DialogTitle.vue";
-import DialogDescription from "@/components/ui/DialogDescription.vue";
-import DialogFooter from "@/components/ui/DialogFooter.vue";
 import DropdownMenu from "@/components/ui/DropdownMenu.vue";
 import DropdownMenuTrigger from "@/components/ui/DropdownMenuTrigger.vue";
 import DropdownMenuContent from "@/components/ui/DropdownMenuContent.vue";
 import DropdownMenuItem from "@/components/ui/DropdownMenuItem.vue";
-import Input from "@/components/ui/Input.vue";
-import Textarea from "@/components/ui/Textarea.vue";
-import FormField from "@/components/FormField.vue";
 import NodeCreateDialog from "./dialogs/NodeCreateDialog.vue";
 import NodeEditDialog from "./dialogs/NodeEditDialog.vue";
 import NodeProvisionDialog from "./dialogs/NodeProvisionDialog.vue";
 import NodeRotateDialog from "./dialogs/NodeRotateDialog.vue";
+import NodeRefreshDialog from "./dialogs/NodeRefreshDialog.vue";
+import NodeInspectDialog from "./dialogs/NodeInspectDialog.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -136,45 +119,20 @@ const provisionOpen = ref(false);
 const rotating = ref<Node | null>(null);
 const rotateOpen = ref(false);
 
-// v0.8.5: stored-key dialog. The "inspecting"
-// node is the one whose stored panel SSH key
-// the operator wants to verify. The dialog
-// stays open until the user closes it; the
-// `inspection` ref holds the loaded
-// `NodeStoredKey` surface (or `null` while
-// loading / on error). The `inspectionLoading`
-// ref drives the dialog's spinner; the
-// `inspectionError` ref drives the error
-// toast. The shape mirrors the rotate-panel-key
-// dialog's lifecycle for visual consistency
-// (both dialogs surface a read-only public-key
-// surface to the operator).
+// v0.8.5 + v0.8.7 + v0.9.x: inspect + refresh
+// dialogs. The "inspecting" / "refreshing"
+// nodes are the ones the operator wants to
+// audit / rotate the bearer for. The dialogs
+// (extracted to NodeInspectDialog +
+// NodeRefreshDialog in v0.9.x) own the
+// loading/empty/error/result state and the
+// wire calls. The view keeps the trigger refs
+// + the per-row pointers (matching the
+// rotate / provision / edit pattern).
 const inspecting = ref<Node | null>(null);
 const inspectOpen = ref(false);
-const inspection = ref<NodeStoredKey | null>(null);
-const inspectionLoading = ref(false);
-const inspectionError = ref<string | null>(null);
-
-// v0.8.7: refresh-agent-bearer dialog. The
-// "refreshing" node is the one whose agent
-// bearer the panel will re-fetch from the
-// node. The dialog is a confirm-only flow
-// (no per-call body fields are required;
-// the ssh_port / ssh_user overrides are
-// optional and the panel uses the node's
-// stored Address + the service-wide
-// AgentSSHUser when the body is empty).
-// The success card carries the new bearer
-// + the SHA-256 fingerprint of the stored
-// panel key, so the operator can verify
-// the refresh used the key they expect
-// (same verification pattern as the
-// v0.8.4 rotate-panel-key success card).
 const refreshing = ref<Node | null>(null);
 const refreshOpen = ref(false);
-const refreshResult = ref<NodeRefreshAgentBearerResponse | null>(null);
-const refreshError = ref<string | null>(null);
-const refreshLoading = ref(false);
 
 // Only `new` and `offline` are provisionable per
 // ARCHITECTURE §8.3. The dropdown hides the entry
@@ -341,115 +299,80 @@ function onRotated(node: Node): void {
   });
 }
 
-// --- Refresh agent bearer (v0.8.7) -------------------------------------
+// --- Refresh agent bearer (v0.8.7, extracted to NodeRefreshDialog in v0.9.x) -
 
-// v0.8.7: the refresh-agent-bearer flow is
-// confirm-only (no per-call body fields are
-// required). The dialog opens with a
-// "this will SSH into the node and read
-// /etc/aegis/agent.env" description; the
-// operator clicks the confirm button and
-// the panel does the rest. The success
-// card carries the new bearer + the
-// stored-key fingerprint for at-a-glance
-// verification.
-//
-// The body the panel sends is empty by
-// default (the panel uses the node's
-// stored Address + the service-wide
-// AgentSSHUser). A future PR can add
-// per-call ssh_port / ssh_user override
-// fields to the dialog; the schema is
-// already in place (`nodeRefreshAgentBearerSchema`).
+// v0.9.x: the refresh dialog owns its own
+// loading/result/error state and the
+// fire-and-forget wire call. The view's
+// job is to (a) set the per-row `refreshing`
+// pointer and (b) flip the `refreshOpen`
+// trigger; the dialog's watcher hydrates
+// the loading state and fires the POST
+// every time it opens. The dialog emits
+// `refreshed` (with the row) on success
+// and `failed` (with the row + error) on
+// failure; the view handles the toasts
+// (and decides that no list refresh is
+// needed).
 function startRefresh(node: Node): void {
   refreshing.value = node;
-  refreshResult.value = null;
-  refreshError.value = null;
   refreshOpen.value = true;
-  refreshLoading.value = true;
-  // Fire-and-forget. The dialog shows a
-  // spinner while the SSH + cat runs;
-  // the success card lands when the
-  // Service returns. The catch path
-  // surfaces a toast and keeps the
-  // dialog open with the error
-  // message so the operator can
-  // diagnose (502 with a specific
-  // "SSH connect" / "read agent.env" /
-  // "parse agent.env" message is the
-  // most common failure mode).
-  refreshNodeAgentBearer(node.id, {})
-    .then((res) => {
-      refreshResult.value = res;
-      refreshLoading.value = false;
-      toast.add({
-        title: t("nodes.refreshed", { name: node.name }),
-        variant: "success",
-      });
-    })
-    .catch((error: unknown) => {
-      const apiErr = toApiError(error);
-      refreshError.value = apiErr.message;
-      refreshLoading.value = false;
-      toast.add({
-        title: t("nodes.refreshFailed"),
-        description: apiErr.message,
-        variant: "destructive",
-      });
-    });
 }
 
-function closeRefreshDialog(): void {
-  refreshOpen.value = false;
-  refreshing.value = null;
-  refreshResult.value = null;
-  refreshError.value = null;
-  refreshLoading.value = false;
+function onRefreshed(node: Node): void {
+  // The dialog's success card stays open
+  // (the `update:open` -> false fires only
+  // when the operator clicks Close on the
+  // success card or hits Cancel / ESC).
+  // The list does not need a refresh —
+  // the row's state machine did not
+  // change; only the agent bearer
+  // (nodes.agent_bearer) changed, and
+  // the panel does not expose that
+  // field in the wire shape (Node
+  // doesn't include it).
+  toast.add({
+    title: t("nodes.refreshed", { name: node.name }),
+    variant: "success",
+  });
 }
 
-// --- Inspect stored key (v0.8.5) ----------------------------------------
+function onRefreshFailed(_node: Node, error: string): void {
+  toast.add({
+    title: t("nodes.refreshFailed"),
+    description: error,
+    variant: "destructive",
+  });
+}
 
+// --- Inspect stored key (v0.8.5, extracted to NodeInspectDialog in v0.9.x) ---
+
+// v0.9.x: the inspect dialog owns its own
+// loading/empty/error/result state and the
+// fire-and-forget wire call. The view's
+// job is to (a) set the per-row `inspecting`
+// pointer and (b) flip the `inspectOpen`
+// trigger; the dialog's watcher hydrates
+// the loading state and fires the GET
+// every time it opens. The dialog emits
+// `failed` (with the row + error) on
+// failure; the view handles the toast
+// (no `inspected` emit — the success
+// card is the only post-inspect surface
+// and the list is not refreshed because
+// the inspect endpoint is a read, not a
+// write).
 function startInspect(node: Node): void {
   inspecting.value = node;
-  inspection.value = null;
-  inspectionError.value = null;
-  inspectionLoading.value = true;
   inspectOpen.value = true;
-  // Fire-and-forget the GET. The dialog's
-  // spinner is driven by `inspectionLoading`;
-  // the result (or error) lands in the
-  // `inspection` / `inspectionError` refs.
-  // The pattern matches `getCredentialsByUser`
-  // in CredentialsView.vue — a one-shot fetch
-  // on dialog open, no polling, no
-  // refetch-on-error (the operator can close
-  // and re-open to retry).
-  void loadStoredKey(node.id);
 }
 
-async function loadStoredKey(id: UUID): Promise<void> {
-  try {
-    const sk = await getStoredNodeKey(id);
-    inspection.value = sk;
-  } catch (error) {
-    const apiErr = toApiError(error);
-    inspectionError.value = apiErr.message;
-    toast.add({
-      title: t("nodes.inspectFailed"),
-      description: apiErr.message,
-      variant: "destructive",
-    });
-  } finally {
-    inspectionLoading.value = false;
-  }
-}
-
-function closeInspectDialog(): void {
-  inspectOpen.value = false;
-  inspecting.value = null;
-  inspection.value = null;
-  inspectionError.value = null;
-  inspectionLoading.value = false;
+function onInspectFailed(_node: Node, error: string): void {
+  toast.add({
+    title: t("nodes.inspectFailed"),
+    description: error,
+    variant: "destructive",
+  });
 }
 
 // --- Delete -----------------------------------------------------------------
@@ -677,248 +600,20 @@ const canWrite = computed(() => {
       @rotated="onRotated"
     />
 
-    <!-- Inspect stored key dialog (v0.8.5) -->
-    <Dialog v-model:open="inspectOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            <Eye class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.inspectTitle") }}
-          </DialogTitle>
-          <DialogDescription>{{ t("nodes.inspectDescription") }}</DialogDescription>
-        </DialogHeader>
-        <p class="nodes__provision-target">
-          <strong>{{ inspecting?.name }}</strong>
-          ({{ inspecting?.address }})
-          — {{ inspecting ? t(`nodes.states.${inspecting.state}`) : "" }}
-        </p>
-        <!-- Loading state. The dialog opens
-             immediately (so the user can see
-             the target node); the GET fires
-             on open. The spinner is the
-             only content until the response
-             lands. -->
-        <div
-          v-if="inspectionLoading"
-          class="nodes__inspection-loading"
-        >
-          {{ t("nodes.inspectLoading") }}
-        </div>
-        <!-- "No stored key" state. The row
-             exists but the ciphertext column
-             is empty (`new` nodes, or legacy
-             v0.3.0..v0.7.x nodes that have not
-             been back-filled with the v0.8.3
-             CLI). The dialog shows a hint about
-             how to populate the column. -->
-        <div
-          v-else-if="inspection && !inspection.has_stored_key"
-          class="nodes__inspection-empty"
-        >
-          <p>{{ t("nodes.inspectNoKey") }}</p>
-          <p class="nodes__inspection-empty-hint">
-            {{ t("nodes.inspectNoKeyHint") }}
-          </p>
-        </div>
-        <!-- Error state. The toast was
-             already shown by the handler; the
-             dialog shows a brief inline
-             error so the user knows the
-             dialog content is in a failed
-             state. -->
-        <div
-          v-else-if="inspectionError"
-          class="nodes__inspection-error"
-        >
-          {{ inspectionError }}
-        </div>
-        <!-- Success state. The dialog surfaces
-             the public-key line + fingerprint
-             so the operator can copy the
-             fingerprint (compare against
-             `ssh-add -L` on the operator's
-             local box after the re-provision's
-             first contact). -->
-        <div
-          v-else-if="inspection && inspection.has_stored_key"
-          class="nodes__rotation-result"
-        >
-          <h3 class="nodes__rotation-result-title">
-            <KeyRound class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.inspectSurfaceTitle") }}
-          </h3>
-          <p class="nodes__rotation-result-help">
-            {{ t("nodes.inspectSurfaceHelp") }}
-          </p>
-          <FormField
-            name="inspect-public-key"
-            :label="t('nodes.rotatePublicKeyLine')"
-          >
-            <template #default="{ id }">
-              <Textarea
-                :id="id"
-                :model-value="inspection.public_key_line ?? ''"
-                :rows="4"
-                readonly
-                spellcheck="false"
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="inspect-fingerprint"
-            :label="t('nodes.rotateFingerprint')"
-          >
-            <template #default="{ id }">
-              <Input
-                :id="id"
-                :model-value="inspection.fingerprint ?? ''"
-                readonly
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <FormField
-            v-if="inspection.key_updated_at"
-            name="inspect-key-updated-at"
-            :label="t('nodes.inspectKeyUpdatedAt')"
-          >
-            <template #default="{ id }">
-              <Input
-                :id="id"
-                :model-value="inspection.key_updated_at"
-                readonly
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            @click="closeInspectDialog"
-          >
-            {{ t("common.close") }}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <!-- Inspect stored key dialog (v0.8.5, extracted to NodeInspectDialog in v0.9.x) -->
+    <NodeInspectDialog
+      v-model:open="inspectOpen"
+      :node="inspecting"
+      @failed="onInspectFailed"
+    />
 
-    <!-- Refresh agent bearer dialog (v0.8.7) -->
-    <Dialog v-model:open="refreshOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.refreshTitle") }}
-          </DialogTitle>
-          <DialogDescription>
-            {{
-              t("nodes.refreshDescription")
-            }}
-          </DialogDescription>
-        </DialogHeader>
-        <p class="nodes__provision-target">
-          <strong>{{ refreshing?.name }}</strong>
-          ({{ refreshing?.address }})
-          — {{ refreshing ? t(`nodes.states.${refreshing.state}`) : "" }}
-        </p>
-        <!-- Loading state. The dialog
-             opens immediately (so the
-             user can see the target
-             node); the POST fires on
-             open. The spinner is the
-             only content until the
-             response lands. The shape
-             mirrors the inspect dialog's
-             loading surface for visual
-             consistency. -->
-        <div
-          v-if="refreshLoading && !refreshResult && !refreshError"
-          class="nodes__refresh-loading"
-        >
-          {{ t("nodes.refreshLoading") }}
-        </div>
-        <!-- Error state. The 409
-             "no stored key" case carries
-             a "rotate-panel-key first"
-             hint from the panel; the
-             operator sees the full error
-             message verbatim. The 502
-             cases (SSH connect / run /
-             agent.env parse) carry a
-             specific stage name (the
-             panel's error message starts
-             with the failing stage). -->
-        <div
-          v-else-if="refreshError"
-          class="nodes__refresh-error"
-        >
-          {{ refreshError }}
-        </div>
-        <!-- Success card. Renders
-             after a 200 response. The
-             dialog stays open so the
-             operator can copy the
-             new bearer before closing.
-             The new bearer is the
-             AEGIS_AGENT_BEARER value
-             from /etc/aegis/agent.env
-             on the node; the
-             fingerprint is the
-             SHA-256 of the stored
-             panel key (proves "the
-             refresh used the key I
-             expect"). -->
-        <div
-          v-else
-          class="nodes__refresh-result"
-        >
-          <h3 class="nodes__refresh-result-title">
-            <RefreshCw class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.refreshResultTitle") }}
-          </h3>
-          <p class="nodes__refresh-result-help">
-            {{ t("nodes.refreshResultHelp") }}
-          </p>
-          <FormField
-            name="refresh-bearer"
-            :label="t('nodes.refreshBearer')"
-          >
-            <template #default="{ id }">
-              <Input
-                :id="id"
-                :model-value="refreshResult?.bearer ?? ''"
-                readonly
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="refresh-fingerprint"
-            :label="t('nodes.refreshFingerprint')"
-          >
-            <template #default="{ id }">
-              <Input
-                :id="id"
-                :model-value="refreshResult?.key_fingerprint ?? ''"
-                readonly
-                @update:model-value="() => {}"
-              />
-            </template>
-          </FormField>
-          <DialogFooter>
-            <Button
-              type="button"
-              @click="closeRefreshDialog"
-            >
-              {{ t("common.close") }}
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <!-- Refresh agent bearer dialog (v0.8.7, extracted to NodeRefreshDialog in v0.9.x) -->
+    <NodeRefreshDialog
+      v-model:open="refreshOpen"
+      :node="refreshing"
+      @refreshed="onRefreshed"
+      @failed="onRefreshFailed"
+    />
 
     <ConfirmDialog
       v-model:open="deleteConfirmOpen"
@@ -990,44 +685,17 @@ const canWrite = computed(() => {
   margin: 0;
 }
 
-/* v0.8.5: inspect-stored-key dialog states.
-   The dialog has four states: loading,
-   no-stored-key, error, success. The
-   loading + error states are inline
-   paragraphs; the no-stored-key state is
-   a paragraph + a hint paragraph; the
-   success state reuses the rotation-result
-   styles above. */
-.nodes__inspection-loading,
-.nodes__inspection-empty,
-.nodes__inspection-error {
-  padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
-  font-size: 0.9rem;
-  margin: 0.5rem 0;
-}
-
-.nodes__inspection-loading {
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-  text-align: center;
-}
-
-.nodes__inspection-empty {
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-}
-
-.nodes__inspection-empty-hint {
-  font-size: 0.8rem;
-  margin: 0.5rem 0 0;
-  opacity: 0.8;
-}
-
-.nodes__inspection-error {
-  background: hsl(var(--destructive) / 0.1);
-  color: hsl(var(--destructive));
-  font-family: monospace;
-  font-size: 0.8rem;
-}
+/* v0.9.x: the inspect-stored-key dialog
+   states (loading / empty / error / success)
+   moved into NodeInspectDialog (extracted
+   from this view). The `.nodes__refresh-*`
+   style block lived here conceptually in
+   v0.8.7 but was never defined (pre-existing
+   oversight); the new rules live in
+   NodeRefreshDialog and are not duplicated
+   in this view. The `.nodes__provision-target`
+   + `.nodes__rotation-result*` rules below
+   are SHARED with the dialogs (each dialog
+   duplicates them for self-containment); a
+   follow-up PR may drop the duplicates here. */
 </style>
