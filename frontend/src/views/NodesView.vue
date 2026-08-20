@@ -5,8 +5,8 @@
   against /api/v1/nodes:
 
     * list (DataTable)
-    * create (Dialog + Form with the nodeCreateSchema)
-    * edit   (Dialog + Form with nodeUpdateSchema)
+    * create (NodeCreateDialog)
+    * edit   (NodeEditDialog)
     * delete (DropdownMenu confirm)
 
   v0.3.0 lands: BYO Node provision — a third
@@ -30,6 +30,17 @@
   `disabled` (the operator may still want to
   rotate a key on a node they later intend to
   re-enable).
+
+  v0.9.x: the create + edit dialogs were
+  extracted into ./dialogs/NodeCreateDialog.vue
+  and ./dialogs/NodeEditDialog.vue. The view
+  keeps the per-row DropdownMenu actions
+  (Provision / Rotate / Refresh / Inspect /
+  Delete) and the list state. The `editing`
+  ref is renamed to `editingForEdit` so the
+  Provision / Rotate / Refresh / Inspect flows
+  can keep their own per-row refs without
+  sharing the same slot.
 -->
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from "vue";
@@ -42,14 +53,12 @@ import { useAuthStore } from "@/stores/auth";
 import { useToastStore } from "@/stores/toast";
 import { toApiError } from "@/api/client";
 import {
-  createNode,
   deleteNode,
   getStoredNodeKey,
   listNodes,
   provisionNode,
   refreshNodeAgentBearer,
   rotateNodePanelKey,
-  updateNode,
 } from "@/api/services";
 import type {
   Node,
@@ -60,11 +69,8 @@ import type {
   UUID,
 } from "@/types";
 import {
-  nodeAddSchema,
   nodeProvisionSchema,
   nodeRotatePanelKeySchema,
-  nodeUpdateSchema,
-  type NodeCreateInput,
 } from "@/schemas";
 import { useZodForm } from "@/composables/useZodForm";
 
@@ -89,6 +95,8 @@ import RadioGroup from "@/components/ui/RadioGroup.vue";
 import RadioGroupItem from "@/components/ui/RadioGroupItem.vue";
 import Form from "@/components/Form.vue";
 import FormField from "@/components/FormField.vue";
+import NodeCreateDialog from "./dialogs/NodeCreateDialog.vue";
+import NodeEditDialog from "./dialogs/NodeEditDialog.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -96,27 +104,19 @@ const toast = useToastStore();
 
 const nodes = ref<Node[]>([]);
 const loading = ref(false);
-const editing = ref<Node | null>(null);
+// v0.9.x: the create + edit dialogs each own
+// their own form state. The view keeps the
+// trigger refs (`createOpen` / `editOpen`)
+// and the `editingForEdit` row pointer for
+// the edit dialog. Provision / Rotate /
+// Refresh / Inspect keep their own
+// per-action refs (`provisioning`, `rotating`,
+// `refreshing`, `inspecting`) so they can
+// each render a per-row context card without
+// sharing a single slot.
 const createOpen = ref(false);
 const editOpen = ref(false);
-
-// v0.8.12: the "Provision this node after
-// registering" checkbox on the Add dialog
-// drives whether the submit handler calls
-// just `createNode` (one round-trip) or
-// `createNode` followed by `provisionNode`
-// (two round-trips). Default: true. The
-// checkbox is rendered above the auth-method
-// radio; toggling it on/off shows/hides the
-// provision field section. Mirrored to
-// `createForm.values.provisionNow` so the Zod
-// validation rules in `nodeAddSchema` see
-// the same value as the template's `v-if`.
-const provisionAfterCreate = ref(true);
-function setProvisionAfterCreate(on: boolean): void {
-  provisionAfterCreate.value = on;
-  createForm.setFieldValue("provisionNow", on);
-}
+const editingForEdit = ref<Node | null>(null);
 
 // v0.3.0: provision dialog. The "provisioning" node
 // is the one currently being installed; the dialog
@@ -245,172 +245,34 @@ onMounted(() => {
   void refresh();
 });
 
-// --- Create (v0.8.12: merged "Add node + provision") ---------------------
+// --- Create (extracted to NodeCreateDialog in v0.9.x) ---------------------
 
-// v0.8.12: the create form uses `nodeAddSchema`
-// (the merged schema with an optional provision
-// section). When the operator checks "Provision
-// this node after registering" (default on), the
-// submit handler calls `createNode` then
-// `provisionNode` in sequence. When unchecked,
-// only `createNode` is called (the v0.8.11
-// behaviour). The per-row "Provision" dropdown
-// entry still exists for re-provisioning offline
-// nodes.
-const createForm = useZodForm({
-  schema: nodeAddSchema,
-  initialValues: {
-    name: "",
-    region: "",
-    capacityHint: "",
-    address: "",
-    provisionNow: true,
-    authMethod: "key" as const,
-    ssh_user: "",
-    ssh_private_key: "",
-    ssh_password: "",
-    ssh_port: undefined,
-    tofu_policy: "reject" as const,
-    expected_fingerprint: "",
-  },
-  onSubmit: async (values) => {
-    try {
-      // Always do the create first.
-      const createPayload: NodeCreateInput = {
-        name: values.name,
-        region: values.region,
-        capacityHint: values.capacityHint || undefined,
-        address: values.address,
-        tags: values.tags,
-      };
-      const created = await createNode(createPayload);
-      // v0.8.12: when `provisionNow` is on, the
-      // second round-trip. The auth-method radio
-      // values map to the wire payload the same
-      // way the existing `provisionForm` does
-      // (see `startProvision`'s onSubmit below).
-      if (!values.provisionNow) {
-        toast.add({ title: t("nodes.created"), variant: "success" });
-      } else {
-        const wirePayload: {
-          ssh_private_key?: string;
-          ssh_password?: string;
-          ssh_port?: number;
-          ssh_user?: string;
-          tofu_policy?: "reject" | "accept-and-append";
-          expected_fingerprint?: string;
-        } = {
-          ssh_port: values.ssh_port,
-          ssh_user: values.ssh_user,
-          tofu_policy: values.tofu_policy,
-          expected_fingerprint: values.expected_fingerprint,
-        };
-        if (values.authMethod === "key") {
-          wirePayload.ssh_private_key = values.ssh_private_key;
-        } else if (values.authMethod === "password") {
-          wirePayload.ssh_password = values.ssh_password;
-        }
-        try {
-          const res = await provisionNode(
-            created.id,
-            wirePayload as Parameters<typeof provisionNode>[1],
-          );
-          toast.add({
-            title: t("nodes.createdAndProvisioned", {
-              state: res.new_state,
-            }),
-            variant: res.new_state === "online" ? "success" : "destructive",
-          });
-        } catch (provisionError) {
-          // v0.8.12: partial success. The node
-          // IS registered (the first round-trip
-          // succeeded); only the second failed.
-          // Surface a non-fatal toast that names
-          // the failure and tells the operator
-          // how to retry. The form closes either
-          // way (the operator can re-provision
-          // from the row's Provision entry).
-          toast.add({
-            title: t("nodes.createdProvisionFailed"),
-            description: toApiError(provisionError).message,
-            variant: "destructive",
-          });
-        }
-      }
-      createOpen.value = false;
-      await refresh();
-    } catch (error) {
-      toast.add({
-        title: t("nodes.createFailed"),
-        description: toApiError(error).message,
-        variant: "destructive",
-      });
-    }
-  },
-});
+function startCreate(): void {
+  // The dialog owns its own form state and
+  // resets the form every time it opens, so the
+  // view just flips the trigger.
+  createOpen.value = true;
+}
 
-// --- Edit -------------------------------------------------------------------
+function onNodeCreated(_node: Node): void {
+  createOpen.value = false;
+  void refresh();
+}
 
-const editForm = useZodForm({
-  schema: nodeUpdateSchema,
-  initialValues: editing.value
-    ? {
-        name: editing.value.name,
-        region: editing.value.region,
-        address: editing.value.address,
-        capacityHint: editing.value.capacityHint ?? "",
-      }
-    : { name: "", region: "", address: "" },
-  onSubmit: async (values) => {
-    if (!editing.value) return;
-    try {
-      await updateNode(editing.value.id, values);
-      editOpen.value = false;
-      editing.value = null;
-      toast.add({ title: t("nodes.updated"), variant: "success" });
-      await refresh();
-    } catch (error) {
-      toast.add({
-        title: t("nodes.updateFailed"),
-        description: toApiError(error).message,
-        variant: "destructive",
-      });
-    }
-  },
-});
+// --- Edit (extracted to NodeEditDialog in v0.9.x) --------------------------
 
 function startEdit(node: Node): void {
-  editing.value = node;
-  editForm.resetForm({
-    values: {
-      name: node.name,
-      region: node.region,
-      address: node.address,
-      capacityHint: node.capacityHint ?? "",
-    },
-  });
+  // The dialog hydrates its form from the
+  // `node` prop via a watcher, so the view just
+  // sets the row pointer and opens.
+  editingForEdit.value = node;
   editOpen.value = true;
 }
 
-function startCreate(): void {
-  createForm.resetForm({
-    values: {
-      name: "",
-      region: "",
-      capacityHint: "",
-      address: "",
-      provisionNow: true,
-      authMethod: "key" as const,
-      ssh_user: "",
-      ssh_private_key: "",
-      ssh_password: "",
-      ssh_port: undefined,
-      tofu_policy: "reject" as const,
-      expected_fingerprint: "",
-    },
-  });
-  provisionAfterCreate.value = true;
-  createOpen.value = true;
+function onNodeUpdated(_node: Node): void {
+  editOpen.value = false;
+  editingForEdit.value = null;
+  void refresh();
 }
 
 // --- Provision (v0.3.0) ----------------------------------------------------
@@ -882,421 +744,19 @@ const canWrite = computed(() => {
       :empty-key="'nodes.empty'"
     />
 
-    <!-- Create dialog -->
-    <Dialog v-model:open="createOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{{ t("nodes.createTitle") }}</DialogTitle>
-          <DialogDescription>
-            {{
-              t("nodes.createDescription")
-            }}
-          </DialogDescription>
-        </DialogHeader>
-        <Form
-          :is-submitting="createForm.isSubmitting.value"
-          @submit="createForm.handleSubmit"
-        >
-          <FormField
-            name="name"
-            :label="t('nodes.name')"
-            required
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => createForm.setFieldValue('name', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="region"
-            :label="t('nodes.region')"
-            required
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => createForm.setFieldValue('region', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="address"
-            :label="t('nodes.address')"
-            required
-            :hint="t('nodes.addressHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="node1.example.com:22"
-                @update:model-value="
-                  (v: string) => createForm.setFieldValue('address', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="capacityHint"
-            :label="t('nodes.capacityHint')"
-            :hint="t('nodes.capacityHintHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="1 Gbps"
-                @update:model-value="
-                  (v: string) => createForm.setFieldValue('capacityHint', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <!-- v0.8.12: "Provision after create" toggle.
-               When on (the default), the form reveals
-               the auth-method radio + key / password /
-               ssh_user / ssh_port / tofu_policy /
-               fingerprint fields below. When off, the
-               submit handler only calls createNode
-               (the v0.8.11 behaviour). The "stored"
-               option is omitted here (a brand-new
-               node has no panel-stored key yet); the
-               re-provision dialog on existing rows
-               keeps the three-way radio. -->
-          <div class="nodes__provision-toggle">
-            <label class="nodes__provision-toggle-label">
-              <input
-                type="checkbox"
-                :checked="provisionAfterCreate"
-                @change="
-                  (event: Event) =>
-                    setProvisionAfterCreate((event.target as HTMLInputElement).checked)
-                "
-              >
-              <span class="ml-2 font-medium">
-                {{ t("nodes.provisionAfterCreate") }}
-              </span>
-            </label>
-            <p class="nodes__provision-toggle-hint">
-              {{ t("nodes.provisionAfterCreateHint") }}
-            </p>
-          </div>
-          <template v-if="provisionAfterCreate">
-            <FormField
-              name="ssh_user"
-              :label="t('nodes.sshUser')"
-              :hint="t('nodes.sshUserHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <Input
-                  :id="id"
-                  :model-value="String(value ?? '')"
-                  :class="hasError && 'border-destructive'"
-                  placeholder="root"
-                  @update:model-value="
-                    (v: string) => createForm.setFieldValue('ssh_user', v)
-                  "
-                  @blur="onBlur"
-                />
-              </template>
-            </FormField>
-            <FormField
-              name="ssh_port"
-              :label="t('nodes.sshPort')"
-              :hint="t('nodes.sshPortHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <Input
-                  :id="id"
-                  type="number"
-                  :model-value="value === undefined || value === null ? '' : String(value)"
-                  :class="hasError && 'border-destructive'"
-                  placeholder="22"
-                  @update:model-value="
-                    (v: string) =>
-                      createForm.setFieldValue(
-                        'ssh_port',
-                        v === '' ? undefined : Number(v),
-                      )
-                  "
-                  @blur="onBlur"
-                />
-              </template>
-            </FormField>
-            <FormField
-              name="authMethod"
-              :label="t('nodes.authMethod')"
-              required
-              :hint="t('nodes.authMethodHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <RadioGroup
-                  :id="id"
-                  :model-value="(value as string) ?? 'key'"
-                  :aria-label="t('nodes.authMethod')"
-                  :class="hasError && 'rounded-md border border-destructive p-1'"
-                  @update:model-value="
-                    (v: string) => {
-                      createForm.setFieldValue(
-                        'authMethod',
-                        v as 'key' | 'password' | 'stored',
-                      );
-                      createForm.setFieldValue('ssh_private_key', '');
-                      createForm.setFieldValue('ssh_password', '');
-                      onBlur();
-                    }
-                  "
-                >
-                  <RadioGroupItem value="key">
-                    <KeySquare class="h-4 w-4" />
-                    <span>{{ t("nodes.authMethodKey") }}</span>
-                  </RadioGroupItem>
-                  <RadioGroupItem value="password">
-                    <Lock class="h-4 w-4" />
-                    <span>{{ t("nodes.authMethodPassword") }}</span>
-                  </RadioGroupItem>
-                </RadioGroup>
-              </template>
-            </FormField>
-            <FormField
-              v-if="createForm.values.authMethod === 'key'"
-              name="ssh_private_key"
-              :label="t('nodes.sshPrivateKey')"
-              required
-              :hint="t('nodes.sshPrivateKeyHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <Textarea
-                  :id="id"
-                  :model-value="String(value ?? '')"
-                  :rows="8"
-                  :class="hasError && 'border-destructive'"
-                  spellcheck="false"
-                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                  @update:model-value="
-                    (v: string) =>
-                      createForm.setFieldValue('ssh_private_key', v)
-                  "
-                  @blur="onBlur"
-                />
-              </template>
-            </FormField>
-            <FormField
-              v-if="createForm.values.authMethod === 'password'"
-              name="ssh_password"
-              :label="t('nodes.sshPassword')"
-              required
-              :hint="t('nodes.sshPasswordHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <Input
-                  :id="id"
-                  type="password"
-                  autocomplete="off"
-                  :model-value="String(value ?? '')"
-                  :class="hasError && 'border-destructive'"
-                  spellcheck="false"
-                  @update:model-value="
-                    (v: string) => createForm.setFieldValue('ssh_password', v)
-                  "
-                  @blur="onBlur"
-                />
-              </template>
-            </FormField>
-            <FormField
-              name="tofu_policy"
-              :label="t('nodes.tofuPolicy')"
-              :hint="t('nodes.tofuPolicyHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <select
-                  :id="id"
-                  :value="value"
-                  :class="['nodes__select', hasError && 'border-destructive']"
-                  @change="
-                    (event: Event) => {
-                      const v = (event.target as HTMLSelectElement).value;
-                      createForm.setFieldValue(
-                        'tofu_policy',
-                        v === ''
-                          ? undefined
-                          : (v as 'reject' | 'accept-and-append'),
-                      );
-                      onBlur();
-                    }
-                  "
-                >
-                  <option value="reject">
-                    {{ t("nodes.tofuReject") }}
-                  </option>
-                  <option value="accept-and-append">
-                    {{ t("nodes.tofuAcceptAndAppend") }}
-                  </option>
-                </select>
-              </template>
-            </FormField>
-            <FormField
-              name="expected_fingerprint"
-              :label="t('nodes.expectedFingerprint')"
-              :hint="t('nodes.expectedFingerprintHint')"
-            >
-              <template #default="{ id, value, onBlur, hasError }">
-                <Input
-                  :id="id"
-                  :model-value="String(value ?? '')"
-                  :class="hasError && 'border-destructive'"
-                  placeholder="SHA256:abc123..."
-                  @update:model-value="
-                    (v: string) =>
-                      createForm.setFieldValue('expected_fingerprint', v)
-                  "
-                  @blur="onBlur"
-                />
-              </template>
-            </FormField>
-          </template>
-          <DialogFooter>
-            <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-              >
-                {{ t("common.cancel") }}
-              </Button>
-            </DialogClose>
-            <Button
-              type="submit"
-              :disabled="createForm.isSubmitting.value"
-            >
-              {{
-                provisionAfterCreate
-                  ? t("nodes.registerAndProvision")
-                  : t("nodes.registerOnly")
-              }}
-            </Button>
-          </DialogFooter>
-        </Form>
-      </DialogContent>
-    </Dialog>
+    <!-- Create dialog (extracted to NodeCreateDialog in v0.9.x) -->
+    <NodeCreateDialog
+      v-model:open="createOpen"
+      @created="onNodeCreated"
+    />
 
     <!-- Edit dialog -->
-    <Dialog v-model:open="editOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{{ t("nodes.editTitle") }}</DialogTitle>
-          <DialogDescription>
-            {{
-              t("nodes.editDescription")
-            }}
-          </DialogDescription>
-        </DialogHeader>
-        <Form
-          :is-submitting="editForm.isSubmitting.value"
-          @submit="editForm.handleSubmit"
-        >
-          <FormField
-            name="name"
-            :label="t('nodes.name')"
-            required
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => editForm.setFieldValue('name', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="region"
-            :label="t('nodes.region')"
-            required
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => editForm.setFieldValue('region', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="address"
-            :label="t('nodes.address')"
-            required
-            :hint="t('nodes.addressHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => editForm.setFieldValue('address', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="capacityHint"
-            :label="t('nodes.capacityHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                @update:model-value="
-                  (v: string) => editForm.setFieldValue('capacityHint', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <DialogFooter>
-            <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-              >
-                {{ t("common.cancel") }}
-              </Button>
-            </DialogClose>
-            <Button
-              type="submit"
-              :disabled="editForm.isSubmitting.value"
-            >
-              {{ t("common.save") }}
-            </Button>
-          </DialogFooter>
-        </Form>
-      </DialogContent>
-    </Dialog>
+    <!-- Edit dialog (extracted to NodeEditDialog in v0.9.x) -->
+    <NodeEditDialog
+      v-model:open="editOpen"
+      :node="editingForEdit"
+      @updated="onNodeUpdated"
+    />
 
     <!-- Provision dialog (v0.3.0) -->
     <Dialog v-model:open="provisionOpen">
