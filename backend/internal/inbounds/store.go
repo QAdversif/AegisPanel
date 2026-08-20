@@ -48,6 +48,14 @@ type Store interface {
 	// NodeID then ListenPort ascending. Used by the
 	// admin UI's "show me all VLESS inbounds" view.
 	ListByProtocol(ctx context.Context, p Protocol) ([]*Inbound, error)
+	// ListAll returns every inbound across every node,
+	// sorted by NodeID then ListenPort ascending. Used
+	// by the panel-wide GET /api/v1/inbounds endpoint
+	// so the admin UI can preload the full inbound
+	// map in a single round-trip (instead of N
+	// per-node requests). The slice is freshly
+	// allocated; callers may mutate it.
+	ListAll(ctx context.Context) ([]*Inbound, error)
 	// Update replaces the stored copy of i.ID. Returns
 	// ErrNotFound if no such inbound exists; ErrDuplicate
 	// if the rename or port change would collide with
@@ -243,6 +251,31 @@ func (s *MemoryStore) ListByProtocol(_ context.Context, p Protocol) ([]*Inbound,
 		if i.Protocol != p {
 			continue
 		}
+		out = append(out, cloneInbound(i))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].NodeID != out[j].NodeID {
+			return out[i].NodeID.String() < out[j].NodeID.String()
+		}
+		if out[i].ListenPort != out[j].ListenPort {
+			return out[i].ListenPort < out[j].ListenPort
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// ListAll returns every inbound across every node,
+// sorted by NodeID then ListenPort then Name
+// ascending. Same comparator as ListByProtocol, minus
+// the protocol filter, so the panel-wide endpoint and
+// the per-protocol endpoint can be reasoned about
+// together.
+func (s *MemoryStore) ListAll(_ context.Context) ([]*Inbound, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Inbound, 0, len(s.byID))
+	for _, i := range s.byID {
 		out = append(out, cloneInbound(i))
 	}
 	sort.Slice(out, func(i, j int) bool {

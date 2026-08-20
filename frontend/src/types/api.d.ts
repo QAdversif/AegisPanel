@@ -1154,6 +1154,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/inbounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all inbounds across all nodes
+         * @description Returns every inbound in the panel, regardless of
+         *     node. Each record carries its `nodeId` so the UI
+         *     can group without an extra round-trip. The list
+         *     is sorted by `nodeId` then `listenPort` then
+         *     `name` for stable diffs. v0.8.x does not paginate.
+         */
+        get: operations["listInbounds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nodes/{nodeId}/inbounds": {
         parameters: {
             query?: never;
@@ -5146,4 +5170,34 @@ export interface components {
     pathItems: never;
 }
 export type $defs = Record<string, never>;
-export type operations = Record<string, never>;
+export interface operations {
+    listInbounds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All inbounds, sorted for stable diffs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboundListResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+}

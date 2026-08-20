@@ -43,6 +43,27 @@ func Router(svc *Service, authMiddleware func(http.Handler) http.Handler) http.H
 	return r
 }
 
+// TopLevelRouter returns a chi subrouter for the
+// panel-wide inbounds collection (not scoped to a
+// single node). The URL prefix is set by the caller:
+//
+//	r.Mount("/inbounds", inbounds.TopLevelRouter(svc, authMW))
+//
+// Same ScopeNodes guard as Router — the panel-wide
+// list reveals the same data a per-node list would
+// reveal across N calls, so the auth surface stays
+// consistent. Today only GET / is exposed; per-id
+// reads stay on the per-node router so the
+// {nodeId} scope check keeps the URL contract honest.
+func TopLevelRouter(svc *Service, authMiddleware func(http.Handler) http.Handler) http.Handler {
+	r := chi.NewRouter()
+	r.Use(authMiddleware)
+	r.Use(auth.RequireScope(auth.ScopeNodes))
+
+	r.Get("/", svc.handleListAll())
+	return r
+}
+
 // --- request / response shapes -----------------------------------------
 
 // createRequest mirrors CreateInput but is JSON-only —
@@ -122,6 +143,26 @@ func (s *Service) handleList() http.HandlerFunc {
 			return
 		}
 		items, err := s.ListByNode(r.Context(), nodeID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		// Always return a JSON array, never null, so
+		// the frontend can iterate without a guard.
+		if items == nil {
+			items = []*Inbound{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"inbounds": items})
+	}
+}
+
+// handleListAll serves GET /api/v1/inbounds. Returns
+// every inbound in the panel as a flat array with
+// NodeID on each record so the UI can group without
+// an extra round-trip. See TopLevelRouter.
+func (s *Service) handleListAll() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := s.ListAll(r.Context())
 		if err != nil {
 			writeStoreError(w, err)
 			return

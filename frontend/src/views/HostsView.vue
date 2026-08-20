@@ -28,6 +28,7 @@ import {
   deleteHost,
   getHost,
   listHosts,
+  listInbounds,
   listInboundsForNode,
   listNodes,
   updateHost,
@@ -146,11 +147,23 @@ async function loadInboundsForNode(nodeId: string): Promise<Inbound[]> {
 }
 
 // Pre-load inbounds for every known node the first
-// time a dialog opens. v0.2 panels are small enough
-// that an N+1 fetch is fine; the v0.3 work adds a
-// single /api/v1/inbounds endpoint.
+// time a dialog opens. v0.8.x: replaced the
+// N-parallel per-node fetches with one batch call
+// to GET /api/v1/inbounds. Each record carries its
+// `nodeId` so we can group client-side in a single
+// reduce. Signature is unchanged (Promise<void>,
+// no args) so startCreate / startEdit callers stay
+// untouched. Single-node refetches after a write
+// still go through loadInboundsForNode so the
+// affected node is refreshed without re-fetching
+// the whole panel.
 async function preloadInbounds(): Promise<void> {
-  await Promise.all(nodes.value.map((n) => loadInboundsForNode(n.id)))
+  const all = await listInbounds()
+  inboundsByNode.value = all.reduce<Record<string, Inbound[]>>((acc, i) => {
+    const list = (acc[i.nodeId] ??= [])
+    list.push(i)
+    return acc
+  }, {})
 }
 
 function inboundsForNode(nodeId: string): Inbound[] {

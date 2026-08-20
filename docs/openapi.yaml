@@ -11,6 +11,7 @@ info:
       - /auth/*  (login, refresh, me, change-password)
       - /nodes/*  (CRUD — admin)
       - /nodes/{nodeId}/inbounds/*  (CRUD — admin)
+      - /inbounds/*  (panel-wide list — admin; v0.8.x)
       - /hosts/*  (CRUD — admin)
       - /plans/*  (CRUD — admin; v0.6.0)
       - /users/*  (CRUD + rotate-token — admin)
@@ -754,6 +755,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /inbounds:
+    get:
+      operationId: listInbounds
+      tags: [inbounds]
+      summary: List all inbounds across all nodes
+      description: |
+        Returns every inbound in the panel, regardless of
+        node. Each record carries its `nodeId` so the UI
+        can group without an extra round-trip. The list
+        is sorted by `nodeId` then `listenPort` then
+        `name` for stable diffs. v0.8.x does not paginate.
+      responses:
+        '200':
+          description: All inbounds, sorted for stable diffs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundListResponse'
         '401':
           description: Missing or invalid bearer token
           content:

@@ -139,6 +139,20 @@ func (s *PgStore) ListByProtocol(ctx context.Context, p Protocol) ([]*Inbound, e
 	return scanInbounds(rows)
 }
 
+// ListAll returns every inbound across every node, sorted by
+// NodeID then ListenPort then Name ascending. Powers the
+// panel-wide GET /api/v1/inbounds endpoint.
+func (s *PgStore) ListAll(ctx context.Context) ([]*Inbound, error) {
+	const q = baseSelect + `
+		ORDER BY node_id, listen_port, name`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("query inbounds: %w", err)
+	}
+	defer rows.Close()
+	return scanInbounds(rows)
+}
+
 // Update replaces the stored copy of i.ID. ErrNotFound if the
 // id is unknown; ErrDuplicate on a name or port change that
 // would collide with an existing row.

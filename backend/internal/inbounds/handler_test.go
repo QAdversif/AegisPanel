@@ -42,6 +42,9 @@ func buildMux(t *testing.T, nodeSvc *nodes.Service) (*Service, http.Handler, uui
 	// sets the {nodeId} URL param; the inbounds
 	// router reads it via chi.URLParam.
 	mux.Mount("/api/v1/nodes/{nodeId}/inbounds", inner)
+	// Mirror the main.go mount for the panel-wide
+	// /api/v1/inbounds collection endpoint.
+	mux.Mount("/api/v1/inbounds", TopLevelRouter(inbSvc, withScope))
 	// Seed a node so the test bodies can reference it.
 	nodeID, err := seedNodeSvcWith(nodeSvc)
 	if err != nil {
@@ -308,5 +311,159 @@ func TestHandler_Delete_NotFoundReturns404(t *testing.T) {
 	w := do(t, h, "DELETE", base(nodeID)+"/"+uuid.NewString(), nil)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("code = %d, want 404", w.Code)
+	}
+}
+
+// --- list-all (panel-wide) ----------------------------------------------
+
+// TestHandler_ListAll_NoAuthReturns401 confirms the
+// top-level /api/v1/inbounds endpoint enforces auth
+// the same way the per-node router does: no token
+// means 401. The auth middleware used here is the
+// real auth.Service.Middleware so the test exercises
+// the same path the production router does.
+func TestHandler_ListAll_NoAuthReturns401(t *testing.T) {
+	inbSvc := NewService(NewMemoryStore(), nil)
+	signer := auth.NewSigner("test-secret-very-long-and-very-secret-32+")
+	authSvc := auth.NewService(signer, auth.NewMemoryStore())
+	r := TopLevelRouter(inbSvc, authSvc.Middleware())
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandler_ListAll_ReturnsInboundsAcrossNodes
+// confirms the panel-wide endpoint returns a flat
+// array carrying nodeId on each record. Seed two
+// nodes, create one inbound per node, GET the
+// top-level endpoint, and verify:
+//
+//   - the response shape is { inbounds: [...] } with
+//     a non-nil array (matches the per-node endpoint);
+//   - the array contains every inbound;
+//   - each record's NodeID matches one of the two
+//     seeded nodes (the contract the UI relies on
+//     to group without a second round-trip).
+func TestHandler_ListAll_ReturnsInboundsAcrossNodes(t *testing.T) {
+	nodesSvc, _ := seedNodeSvc(t)
+	inbSvc, h, node1 := buildMux(t, nodesSvc)
+	ctx := context.Background()
+	// Add a second node + an inbound on it.
+	node2, err := seedNodeSvcWith(nodesSvc)
+	if err != nil {
+		t.Fatalf("seed node2: %v", err)
+	}
+	in1, err := inbSvc.Create(ctx, validCreateInput(node1))
+	if err != nil {
+		t.Fatalf("seed node1 inbound: %v", err)
+	}
+	in2, err := inbSvc.Create(ctx, validCreateInput(node2))
+	if err != nil {
+		t.Fatalf("seed node2 inbound: %v", err)
+	}
+	w := do(t, h, "GET", "/api/v1/inbounds/", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Inbounds []*Inbound `json:"inbounds"`
+	}
+	decode(t, w, &resp)
+	if resp.Inbounds == nil {
+		t.Fatal("inbounds should be [] not null")
+	}
+	if len(resp.Inbounds) != 2 {
+		t.Fatalf("got %d inbounds, want 2", len(resp.Inbounds))
+	}
+	// Both records must carry their NodeID so the
+	// UI can group without re-fetching. The two
+	// inbounds share the same Name / Port (they come
+	// from validCreateInput), so we look up by ID
+	// rather than by position.
+	byID := map[uuid.UUID]uuid.UUID{
+		in1.ID: uuid.Nil,
+		in2.ID: uuid.Nil,
+	}
+	for _, got := range resp.Inbounds {
+		expectedNode, ok := byID[got.ID]
+		if !ok {
+			t.Errorf("unexpected inbound id %s in response", got.ID)
+			continue
+		}
+		switch got.ID {
+		case in1.ID:
+			expectedNode = node1
+		case in2.ID:
+			expectedNode = node2
+		}
+		if got.NodeID != expectedNode {
+			t.Errorf("inbound %s: NodeID = %s, want %s", got.ID, got.NodeID, expectedNode)
+		}
+	}
+}
+
+// TestHandler_ListAll_SortedForStableDiffs confirms
+// the response is sorted (NodeID then ListenPort)
+// so the UI's diffing / keying logic stays stable
+// across requests. Seeded inbounds share the same
+// port and the same name, so the secondary sort key
+// (Name) is not exercised here — that's covered by
+// the MemoryStore test.
+func TestHandler_ListAll_SortedForStableDiffs(t *testing.T) {
+	nodesSvc, _ := seedNodeSvc(t)
+	inbSvc, h, node1 := buildMux(t, nodesSvc)
+	ctx := context.Background()
+	node2, err := seedNodeSvcWith(nodesSvc)
+	if err != nil {
+		t.Fatalf("seed node2: %v", err)
+	}
+	if _, err := inbSvc.Create(ctx, validCreateInput(node1)); err != nil {
+		t.Fatalf("seed node1: %v", err)
+	}
+	if _, err := inbSvc.Create(ctx, validCreateInput(node2)); err != nil {
+		t.Fatalf("seed node2: %v", err)
+	}
+	w := do(t, h, "GET", "/api/v1/inbounds/", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp struct {
+		Inbounds []*Inbound `json:"inbounds"`
+	}
+	decode(t, w, &resp)
+	if len(resp.Inbounds) < 2 {
+		t.Fatalf("need >=2 inbounds, got %d", len(resp.Inbounds))
+	}
+	for i := 1; i < len(resp.Inbounds); i++ {
+		prev, cur := resp.Inbounds[i-1], resp.Inbounds[i]
+		if prev.NodeID.String() > cur.NodeID.String() {
+			t.Errorf("position %d: NodeID %s > %s (not sorted)", i, prev.NodeID, cur.NodeID)
+		}
+	}
+}
+
+// TestHandler_ListAll_EmptyReturnsArrayNotNull mirrors
+// the per-node /api/v1/nodes/{id}/inbounds test: an
+// empty store must serialize as an array, not JSON
+// `null`, so the frontend can iterate without a guard.
+func TestHandler_ListAll_EmptyReturnsArrayNotNull(t *testing.T) {
+	nodesSvc, _ := seedNodeSvc(t)
+	_, h, _ := buildMux(t, nodesSvc)
+	w := do(t, h, "GET", "/api/v1/inbounds/", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var resp struct {
+		Inbounds []*Inbound `json:"inbounds"`
+	}
+	decode(t, w, &resp)
+	if resp.Inbounds == nil {
+		t.Fatal("inbounds should be [] not null")
+	}
+	if len(resp.Inbounds) != 0 {
+		t.Errorf("expected empty list, got %d", len(resp.Inbounds))
 	}
 }

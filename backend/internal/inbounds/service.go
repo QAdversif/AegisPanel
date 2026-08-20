@@ -188,6 +188,16 @@ func (s *Service) ListByProtocol(ctx context.Context, p Protocol) ([]*Inbound, e
 	return s.store.ListByProtocol(ctx, p)
 }
 
+// ListAll returns every inbound across every node,
+// sorted for stable diffs in the panel UI. Used by
+// the panel-wide GET /api/v1/inbounds endpoint so the
+// admin UI can preload the full inbound map in a
+// single round-trip (instead of N per-node requests
+// to /api/v1/nodes/{nodeId}/inbounds).
+func (s *Service) ListAll(ctx context.Context) ([]*Inbound, error) {
+	return s.store.ListAll(ctx)
+}
+
 // CreateInput is the payload the HTTP handler passes
 // in. The caller can leave ID zero and let the service
 // assign one, or pre-assign if they have a
