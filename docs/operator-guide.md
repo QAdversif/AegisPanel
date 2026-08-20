@@ -314,6 +314,82 @@ The second line keeps a rolling 30-day window: every morning at
 30 most recent. The `head -n -30 | xargs` pattern is the standard
 "keep N most recent" idiom.
 
+### Backup schedule + retention (v0.9.x hardening)
+
+The panel runs an in-process scheduler (the `backups.Service.Run`
+goroutine) that fires `pg_dump` on a configurable 5-field Vixie
+cron expression. The schedule is set via `AEGIS_BACKUPS_CRON`
+(default empty = manual-only mode, no goroutine). The retention
+policy is controlled by two env vars: `AEGIS_BACKUPS_RETENTION_DAYS`
+(default 30) and `AEGIS_BACKUPS_MAX_COUNT` (default 0 = unlimited).
+
+#### Cron expression syntax
+
+The parser supports the following Vixie cron constructs
+(`backend/internal/backups/schedule.go:parseCronField`):
+
+- `*` (wildcard) — every value in the field's range
+- `N` — a specific value
+- `N-M` — a range (inclusive)
+- `N-M/S` — a range with step
+- `*/S` — every S-th value in the field's range
+- `N,M,K` — a list of values (sorted, deduplicated)
+
+Common examples:
+
+- `0 2 * * *` — every day at 02:00
+- `*/15 * * * *` — every 15 minutes
+- `0 9-17 * * *` — every hour from 09:00 to 17:00
+- `0 0 * * 1-5` — every weekday at midnight
+- `1,15 * * * *` — twice an hour (at :01 and :15)
+
+Empty string = manual-only mode. Backups are still created via the
+admin UI or the `aegis-pg-backup` CLI, just not on a schedule.
+
+Seconds, timezones, and `@`-syntax (`@hourly`, `@daily`, …) are
+**not** supported — the parser is wall-clock only. The tick
+granularity is 1 minute; sub-minute schedules are silently rounded
+up. Five fields are required; four or six returns a parse error.
+
+#### Hot-reload (v0.9.x)
+
+The panel exposes the current schedule as a read-only
+`GET /api/v1/backups/schedule` endpoint (admin-scoped, requires
+the `backups` scope). The response is:
+
+```json
+{
+  "cron": "0 2 * * *",
+  "retentionDays": 30,
+  "maxCount": 0,
+  "scheduleActive": true
+}
+```
+
+The `Backups` view in the admin UI (`Backups → Schedule` section,
+under the backup list) renders this. `scheduleActive: true` means
+the scheduler goroutine is running; `false` is the manual-only
+state.
+
+Editing the schedule at runtime requires updating
+`AEGIS_BACKUPS_CRON` in the panel's env file and restarting the
+panel. A POST endpoint for hot-reload is planned for v0.9.1 if
+operators ask for it — the in-process `Service.ReloadCron(ctx, expr)`
+method is already in place; the UI surface is what is missing.
+
+#### Retention cleanup
+
+After every backup (manual or scheduled), the
+`backups.Service.Cleanup` method removes backups that are:
+
+- older than `AEGIS_BACKUPS_RETENTION_DAYS` (if > 0), AND
+- beyond the most-recent `AEGIS_BACKUPS_MAX_COUNT` (if > 0)
+
+Cleanup errors are non-fatal — the backup row stays in the
+database, only the on-disk file is left orphaned. A weekly cron
+to sweep those is not yet implemented; see the Tier 1 #3
+follow-up in `CHANGELOG.md`.
+
 ### Restores — `aegis-pg-restore`
 
 `aegis-pg-restore` is a **separate binary** from

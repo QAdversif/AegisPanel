@@ -28,11 +28,12 @@ import {
   createBackup,
   deleteBackup,
   downloadBackup,
+  getBackupSchedule,
   listBackups,
 } from '@/api/services'
 import { toApiError } from '@/api/client'
 import { useToastStore } from '@/stores/toast'
-import type { Backup, BackupStatus, BackupTrigger } from '@/types'
+import type { Backup, BackupSchedule, BackupStatus, BackupTrigger } from '@/types'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -47,6 +48,14 @@ const loading = ref(false)
 const creating = ref(false)
 const deletingId = ref<string | null>(null)
 const downloadingId = ref<string | null>(null)
+
+// Schedule is the v0.9.x surface for the
+// /backups/schedule endpoint. Loaded in
+// parallel with the backup list so the
+// page renders both at once (no waterfall).
+// `null` = not loaded yet; the section hides
+// itself until the first load completes.
+const schedule = ref<BackupSchedule | null>(null)
 
 // Polling. The single-flight `Create` returns a row
 // in `running` status; we poll the list endpoint
@@ -317,8 +326,26 @@ const columns: ColumnDef<Backup, unknown>[] = [
 ]
 
 onMounted(() => {
-  void refresh()
+  void Promise.all([refresh(), loadSchedule()])
 })
+
+// loadSchedule fetches the /backups/schedule
+// endpoint and stores the response. A failure
+// surfaces a destructive toast (the operator
+// needs to know the schedule surface is broken)
+// but does NOT block the rest of the view — the
+// backup list is the primary surface.
+async function loadSchedule(): Promise<void> {
+  try {
+    schedule.value = await getBackupSchedule()
+  } catch (error) {
+    toast.add({
+      title: t('backups.scheduleLoadFailed'),
+      description: toApiError(error).message,
+      variant: 'destructive',
+    })
+  }
+}
 </script>
 
 <template>
@@ -359,6 +386,63 @@ onMounted(() => {
       :search-key="'backups.search'"
       :empty-key="'backups.empty'"
     />
+
+    <!-- v0.9.x: schedule + retention section.
+         Read-only display of the live config.
+         The operator edits AEGIS_BACKUPS_CRON in
+         the env file and restarts the panel to
+         apply changes. The POST endpoint for
+         hot-reload ships in v0.9.1. -->
+    <section
+      v-if="schedule"
+      class="backups__schedule"
+      :aria-label="t('backups.schedule')"
+    >
+      <h2 class="backups__schedule-title">
+        {{ t('backups.schedule') }}
+      </h2>
+      <p class="backups__schedule-help">
+        {{ t('backups.scheduleHelp') }}
+      </p>
+      <dl class="backups__schedule-grid">
+        <div class="backups__schedule-row">
+          <dt>
+            {{ t('backups.cron') }}
+            <span class="backups__schedule-hint">({{ t('backups.cronHelp') }})</span>
+          </dt>
+          <dd class="backups__schedule-cron">
+            <code class="backups__mono">{{ schedule.cron || t('backups.cronManualOnly') }}</code>
+            <Badge
+              v-if="schedule.scheduleActive"
+              variant="success"
+            >
+              {{ t('backups.cronActive') }}
+            </Badge>
+            <Badge
+              v-else
+              variant="secondary"
+            >
+              {{ t('backups.cronInactive') }}
+            </Badge>
+          </dd>
+        </div>
+        <div class="backups__schedule-row">
+          <dt>{{ t('backups.retentionDays') }}</dt>
+          <dd>
+            <code class="backups__mono">{{ schedule.retentionDays }}</code>
+          </dd>
+        </div>
+        <div
+          v-if="schedule.maxCount > 0"
+          class="backups__schedule-row"
+        >
+          <dt>{{ t('backups.maxCount') }}</dt>
+          <dd>
+            <code class="backups__mono">{{ schedule.maxCount }}</code>
+          </dd>
+        </div>
+      </dl>
+    </section>
 
     <ConfirmDialog
       v-model:open="deleteConfirmOpen"
@@ -416,5 +500,64 @@ onMounted(() => {
   display: flex;
   gap: 0.25rem;
   justify-content: flex-end;
+}
+
+.backups__schedule {
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  background: hsl(var(--card));
+}
+
+.backups__schedule-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.backups__schedule-help {
+  margin: 0 0 0.75rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.backups__schedule-grid {
+  display: grid;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+
+.backups__schedule-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.backups__schedule-row dt {
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.875rem;
+}
+
+.backups__schedule-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.backups__schedule-cron {
+  font-size: 0.9375rem;
+}
+
+.backups__schedule-hint {
+  display: block;
+  font-weight: 400;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  margin-top: 0.125rem;
 }
 </style>

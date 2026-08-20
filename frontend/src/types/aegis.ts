@@ -600,3 +600,25 @@ export interface Backup {
    *  the download filename. Empty for in-flight rows. */
   path?: string;
 }
+
+/**
+ * v0.9.x surface for the /backups/schedule
+ * endpoint. Read-only; the operator edits the
+ * env var + restarts the panel to apply changes
+ * (a POST endpoint for hot-reload is deferred to
+ * v0.9.1 per the Tier 1 #3 plan).
+ *
+ * `cron` is the live 5-field Vixie expression the
+ * scheduler matches against (empty string =
+ * manual-only mode). `retentionDays` and `maxCount`
+ * are the retention policy applied after every
+ * Create (and on explicit `Service.Cleanup` calls);
+ * 0 on either means "unlimited". `scheduleActive`
+ * is true when the scheduler goroutine is running.
+ */
+export interface BackupSchedule {
+  cron: string;
+  retentionDays: number;
+  maxCount: number;
+  scheduleActive: boolean;
+}

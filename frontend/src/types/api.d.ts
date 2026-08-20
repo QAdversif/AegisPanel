@@ -3703,6 +3703,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/backups/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the current backup schedule + retention policy
+         * @description Returns the cron expression the in-process
+         *     scheduler fires on, the retention window in
+         *     days, the max number of retained backups, and
+         *     a boolean flag for whether the scheduler
+         *     goroutine is currently active (`AEGIS_BACKUPS_CRON`
+         *     is non-empty and `go svc.Run(ctx, expr)` was
+         *     wired up in main()).
+         *
+         *     The endpoint is read-only. The operator edits
+         *     the `AEGIS_BACKUPS_CRON` env var and restarts
+         *     the panel to apply changes. A POST endpoint
+         *     for hot-reload is deferred to v0.9.1 per the
+         *     Tier 1 #3 plan.
+         *
+         *     The `cron` field reflects the live scheduler
+         *     expression (a future hot-reload is visible
+         *     immediately without a restart). The retention
+         *     fields are read off the boot-time config; the
+         *     panel does not support hot-reloading retention.
+         */
+        get: operations["getBackupSchedule"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sub/{token}": {
         parameters: {
             query?: never;
@@ -4822,6 +4860,58 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
+        /**
+         * @description The current backup schedule + retention policy.
+         *     v0.9.x surface for the /backups/schedule
+         *     endpoint. The `cron` field is the live
+         *     expression the in-process scheduler matches
+         *     against; an empty string means manual-only
+         *     mode (no scheduler goroutine is running).
+         */
+        BackupSchedule: {
+            /**
+             * @description 5-field Vixie cron expression (M H DoM Mo DoW).
+             *     Empty string = manual-only mode (no scheduler).
+             *     Supported constructs: `*` (wildcard),
+             *     `N` (single value), `N-M` (range),
+             *     `N-M/S` (range with step), `*\/S`
+             *     (wildcard with step), `N,M,K` (list).
+             *     Seconds, timezones, and @-syntax are NOT
+             *     supported — the parser is wall-clock only.
+             * @example 0 2 * * *
+             */
+            cron: string;
+            /**
+             * @description Maximum age of any retained backup, in
+             *     days. 0 or negative = unlimited (the
+             *     age check is disabled). The Cleanup
+             *     method on the Service removes any
+             *     backup older than `now - retentionDays`
+             *     on every Create + on the explicit
+             *     `Service.Cleanup` call.
+             * @example 30
+             */
+            retentionDays: number;
+            /**
+             * @description Maximum number of backups to keep. 0 or
+             *     negative = unlimited (only retentionDays
+             *     applies). The Cleanup method trims to
+             *     the most-recent N if there are more.
+             * @example 0
+             */
+            maxCount: number;
+            /**
+             * @description True when the scheduler goroutine is
+             *     running (`AEGIS_BACKUPS_CRON` was non-empty
+             *     at boot AND `go svc.Run(ctx, expr)` was
+             *     wired up in main()). False in manual-only
+             *     mode (no scheduler). A hot-reload via
+             *     `Service.ReloadCron` does NOT start the
+             *     goroutine; it only updates the cron
+             *     expression on the existing scheduler.
+             */
+            scheduleActive: boolean;
+        };
         PanelPathRotateRequest: {
             /**
              * @description Grace window during which the OLD sub_path is
@@ -5187,6 +5277,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InboundListResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBackupSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule + retention policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupSchedule"];
                 };
             };
             /** @description Missing or invalid bearer token */
