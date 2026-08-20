@@ -162,6 +162,19 @@ ops@aibeg\.click
 /root/\.ssh/aegis-deploy
 ~/\.ssh/aegis-deploy
 ~/\.ssh/aegis\.age\.key
+
+# GitHub Personal Access Token (classic `ghp_`/fine-grained
+# `github_pat_`/OAuth `gho_`/`ghu_`/`ghs_`/`ghr_`).
+# 2026-08-20 incident: 3 untracked .ps1 helper scripts
+# with hardcoded `ghp_...` on line 1 (the literal value
+# was rotated; the regex form below is the new banned
+# pattern).
+ghp_[A-Za-z0-9]{36,}
+gho_[A-Za-z0-9]{36,}
+ghu_[A-Za-z0-9]{36,}
+ghs_[A-Za-z0-9]{36,}
+ghr_[A-Za-z0-9]{36,}
+github_pat_[A-Za-z0-9_]{82,}
 ```
 
 The script scans the canonical extensions under the working
