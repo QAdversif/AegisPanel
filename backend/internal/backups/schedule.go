@@ -9,11 +9,18 @@
 // operator will write is "0 2 * * *" (every day at
 // 02:00). The Go stdlib cron parser is overkill and
 // pulls in a dependency for one line of code.
+//
+// v0.9.x: the parser was extended to support Vixie
+// step syntax (*/N), ranges (N-M, N-M/S), and lists
+// (N,M,K). The five-field wall-clock-only model is
+// preserved — no seconds, no timezones, no @-syntax.
 
 package backups
 
 import (
 	"context"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,35 +29,117 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// cronField represents one of the five cron fields
-// (minute, hour, day-of-month, month, day-of-week).
-// It can be either a specific value ("5") or a
-// wildcard ("*").
-type cronField struct {
-	wildcard bool
-	value    int // 0..59 for minute, 1..31 for dom, 1..12 for month, 0..6 for dow (0=Sun)
+// parseCronField parses a single cron field and
+// returns the sorted, deduplicated set of valid
+// minute / hour / dom / month / dow values that
+// the field matches. Supported forms:
+//
+//   - "*"           → [lo, lo+1, ..., hi]
+//   - "N"           → [N]                (single value, in range)
+//   - "N-M"         → [N, N+1, ..., M]   (inclusive range)
+//   - "N-M/S"       → [N, N+S, ..., ≤M]  (range with step)
+//   - "*/S"         → [lo, lo+S, ..., ≤hi] (wildcard with step)
+//   - "N,M,K,..."   → [N, M, K, ...]     (sorted, deduplicated list)
+//
+// An empty string, out-of-range values, malformed
+// ranges (e.g. "1-5-9"), or non-positive steps
+// return a *cronParseError.
+func parseCronField(s string, lo, hi int) ([]int, error) {
+	if s == "" {
+		return nil, &cronParseError{Field: s, Msg: "field is empty"}
+	}
+	if s == "*" {
+		result := make([]int, 0, hi-lo+1)
+		for i := lo; i <= hi; i++ {
+			result = append(result, i)
+		}
+		return result, nil
+	}
+	// Step syntax: "*/S" or "N-M/S". Handle before
+	// the range branch so the "/" is not confused
+	// with a list separator.
+	if idx := strings.Index(s, "/"); idx != -1 {
+		step, err := strconv.Atoi(s[idx+1:])
+		if err != nil || step <= 0 {
+			return nil, &cronParseError{Field: s, Msg: "step must be positive integer"}
+		}
+		start, end := lo, hi
+		if s[:idx] != "*" {
+			var rerr error
+			start, end, rerr = parseRange(s[:idx], lo, hi)
+			if rerr != nil {
+				return nil, &cronParseError{Field: s, Msg: rerr.Error()}
+			}
+		}
+		result := make([]int, 0, (end-start)/step+1)
+		for i := start; i <= end; i += step {
+			result = append(result, i)
+		}
+		return result, nil
+	}
+	// Range syntax: "N-M" (but NOT a negative
+	// number like "-5", which would be a list of
+	// one element that we want to reject via
+	// strconv.Atoi below).
+	if idx := strings.Index(s, "-"); idx > 0 {
+		start, end, err := parseRange(s, lo, hi)
+		if err != nil {
+			return nil, &cronParseError{Field: s, Msg: err.Error()}
+		}
+		result := make([]int, 0, end-start+1)
+		for i := start; i <= end; i++ {
+			result = append(result, i)
+		}
+		return result, nil
+	}
+	// List syntax: "N,M,K" (or a single value "N").
+	parts := strings.Split(s, ",")
+	result := make([]int, 0, len(parts))
+	seen := make(map[int]bool, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, &cronParseError{Field: s, Msg: "list element must be integer"}
+		}
+		if n < lo || n > hi {
+			return nil, &cronParseError{Field: s, Msg: "value out of range"}
+		}
+		if !seen[n] {
+			seen[n] = true
+			result = append(result, n)
+		}
+	}
+	sort.Ints(result) // deterministic order for callers / tests
+	return result, nil
 }
 
-// parseCronField parses a single cron field. Returns
-// (wildcardField, specificValue) where at most one is
-// set. An empty string or "*" is a wildcard. "0", "5",
-// "12", "23" are specific values. A range like "1-5"
-// and a step like "*/2" are NOT supported in v0.5.0;
-// if you need them, the parser rejects the
-// expression at boot and the operator sees a clear
-// error in the panel log.
-func parseCronField(s string, lo, hi int) (cronField, error) {
-	if s == "" || s == "*" {
-		return cronField{wildcard: true}, nil
+// parseRange parses "N-M" and returns (start, end)
+// validated against [lo, hi]. The "S" suffix on
+// "N-M/S" is stripped by the caller before reaching
+// here.
+func parseRange(s string, lo, hi int) (start, end int, err error) {
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, &cronParseError{Field: s, Msg: "range must be N-M"}
 	}
-	n, err := strconv.Atoi(s)
+	start, err = strconv.Atoi(parts[0])
 	if err != nil {
-		return cronField{}, &cronParseError{Field: s, Msg: "must be integer or *"}
+		return 0, 0, &cronParseError{Field: s, Msg: "range start must be integer"}
 	}
-	if n < lo || n > hi {
-		return cronField{}, &cronParseError{Field: s, Msg: "out of range"}
+	end, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, &cronParseError{Field: s, Msg: "range end must be integer"}
 	}
-	return cronField{value: n}, nil
+	if start < lo || start > hi {
+		return 0, 0, &cronParseError{Field: s, Msg: "range start out of range"}
+	}
+	if end < lo || end > hi {
+		return 0, 0, &cronParseError{Field: s, Msg: "range end out of range"}
+	}
+	if start > end {
+		return 0, 0, &cronParseError{Field: s, Msg: "range start must be <= end"}
+	}
+	return start, end, nil
 }
 
 // cronParseError is returned by parseCron when an
@@ -65,17 +154,21 @@ func (e *cronParseError) Error() string {
 }
 
 // Cron is the parsed form of a 5-field cron
-// expression. Each field is a cronField; the
-// matches() method tests a single minute's
-// wall-clock.
+// expression. Each field is the sorted, deduplicated
+// set of wall-clock values that match the field
+// expression. The matches() method tests a single
+// minute's wall-clock against these sets.
 type Cron struct {
-	minute, hour, dom, month, dow cronField
+	minute, hour, dom, month, dow []int
 }
 
-// ParseCron parses "M H DoM Mo DoW" with the same
-// semantics as Vixie cron, minus the *slash-N step
-// syntax (use a single value for now; the v0.5.x
-// follow-up adds step support if anyone asks for it).
+// ParseCron parses "M H DoM Mo DoW" with Vixie-cron
+// semantics: wildcards ("*"), single values ("5"),
+// ranges ("1-5"), steps ("*/15"), range-with-step
+// ("1-31/2"), and lists ("0,15,30,45") are all
+// supported. Seconds, timezones, and @-syntax are
+// intentionally rejected — the panel's scheduler
+// runs at 1-minute wall-clock granularity only.
 func ParseCron(expr string) (*Cron, error) {
 	parts := strings.Fields(expr)
 	if len(parts) != 5 {
@@ -104,25 +197,34 @@ func ParseCron(expr string) (*Cron, error) {
 // matches reports whether `t` falls on a minute
 // the cron expression fires on. Wall-clock time only
 // (the panel's local TZ).
+//
+// For dom/dow, Vixie cron ORs the two when BOTH are
+// restricted (the operator typed a value in both
+// fields on purpose). When at least one is a
+// wildcard, both must match.
 func (c *Cron) matches(t time.Time) bool {
-	if !c.minute.wildcard && c.minute.value != t.Minute() {
+	if !slices.Contains(c.minute, t.Minute()) {
 		return false
 	}
-	if !c.hour.wildcard && c.hour.value != t.Hour() {
+	if !slices.Contains(c.hour, t.Hour()) {
 		return false
 	}
-	if !c.month.wildcard && c.month.value != int(t.Month()) {
+	if !slices.Contains(c.month, int(t.Month())) {
 		return false
 	}
-	domMatch := c.dom.wildcard || c.dom.value == t.Day()
-	dowMatch := c.dow.wildcard || c.dow.value == int(t.Weekday())
-	// Vixie cron: if both dom and dow are restricted,
-	// OR them (the trigger fires on EITHER match).
-	// The Service only ever sets one of them
-	// (operators write "0 2 * * *"), so this
-	// branching is a correctness check rather than
-	// a feature.
-	if !c.dom.wildcard && !c.dow.wildcard {
+	domMatch := slices.Contains(c.dom, t.Day())
+	dowMatch := slices.Contains(c.dow, int(t.Weekday()))
+	// "Wildcard" is now represented as a fully
+	// populated set (e.g. c.dom == [1..31]). When
+	// both dom and dow are wildcard, both matches
+	// are trivially true. When one is wildcard
+	// (fully populated) and the other is restricted,
+	// the restricted one dictates the result. The
+	// "both restricted" branch is the only one
+	// where OR semantics apply.
+	domWildcard := len(c.dom) == 31
+	dowWildcard := len(c.dow) == 7
+	if !domWildcard && !dowWildcard {
 		return domMatch || dowMatch
 	}
 	return domMatch && dowMatch
