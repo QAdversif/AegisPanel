@@ -5,6 +5,47 @@ All notable changes to Aegis are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.28] - 2026-08-20
+
+Tier 3 dialog extraction closeout + Tier 2 dependency
+batch + tests. The 17-PR batch (#254-#270) lands on
+`main` after the v0.8.27 cut. v0.8.28 is the next
+release tag; this section enumerates the per-PR
+contributions. Dialogs split: HostsView and NodesView
+each shed their per-action dialogs into 8 self-
+contained Vue components under
+`frontend/src/views/dialogs/`; the view files keep
+only the trigger refs + per-row pointers, the
+dialogs own the form state + wire-payload builder +
+success card surface.
+
+### Changed
+
+- refactor(frontend): dedup ChangePasswordRequest type (#254)
+- refactor(frontend): replace `window.confirm` with `ConfirmDialog` component (HostsView + InboundsView) (#256)
+- refactor(frontend): replace `as never` with typed `as Parameters<...>` casts in HostsView + NodesView (#263)
+- refactor(frontend): extract HostCreateDialog + HostEditDialog from HostsView (#265)
+- refactor(frontend): extract NodeCreateDialog + NodeEditDialog from NodesView (#266)
+- refactor(frontend): extract NodeProvisionDialog from NodesView (#267)
+- refactor(frontend): extract NodeRotateDialog from NodesView (#268)
+- refactor(frontend): extract NodeRefreshDialog + NodeInspectDialog from NodesView (#269)
+
+### Performance
+
+- perf(frontend): memoize `camelizeKeys` for large response bodies (#255)
+- perf(frontend): batch inbounds preload via new `GET /api/v1/inbounds` endpoint (one round-trip replaces the per-row `GetByNode` fan-out) (#264)
+
+### Tests
+
+- test(frontend): add vitest coverage for 8 extracted dialogs (52 new tests, 39 existing → 91 total) (#270)
+
+### Chore
+
+- chore(ci): bump node 20 → 24.19.0 (jsdom30/undici8 engines requirement) (#257)
+- chore(deps): bump the minor-and-patch group in `/frontend` with 6 updates (#259)
+- chore(deps): bump `golang.org/x/mod` 0.37.0 → 0.40.0 (CVE-2026-56864, CVE-2026-56865) (#261)
+- chore(deps): bump the minor-and-patch group across 1 directory with 2 updates (`/backend`) (#262)
+
 ## [0.8.27] - 2026-08-16
 
 ### Added
@@ -165,4 +206,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - chore(ops): secrets via sops+age (#119) (#119)
 - chore(repo): gitignore operator deploy scripts under tools/scripts/ (#118)
 
+[0.8.28]: c58a1b4
 [0.8.27]: 6b48879

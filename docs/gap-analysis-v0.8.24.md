@@ -1,5 +1,17 @@
 # AegisPanel — gap analysis (v0.8.24, post-anti-leak era)
 
+> **Refreshed 2026-08-20** (post-`docs/docs-sync-20260820`).
+> Status of the Tier 1 / Tier 2 / Tier 3 lists brought in
+> line with what the `main` HEAD (`c58a1b4`, PR #270
+> merge, 2026-08-20) actually ships; the
+> `v0.8.27` anti-leak infra + smoke gate batch and the
+> in-progress `v0.8.28` Tier 3 dialog extraction closeout
+> are reflected. The per-PR mapping below mirrors
+> `CHANGELOG.md` and `docs/ROADMAP.md` exactly; nothing
+> in this refresh changes the **GA claim** (that still
+> requires the Tier 1 restore-drill + backup cron + 24h
+> soak to close).
+>
 > Recreated 2026-08-14. The original file (referenced from
 > `README.md:39`, `KNOWN_LIMITATIONS.md:23` and `:1093`,
 > `docs/ROADMAP.md:55`) was lost during the
@@ -49,7 +61,7 @@ on 2026-08-14. Status of every row tracks
   (#185); "Show stored key" debug surface (#186). Audit
   log call-site wiring into every mutating service (#166).
   No open items.
-- **Phase 2 (live hardening, `v0.8.6..v0.8.26`)** — shipped.
+- **Phase 2 (live hardening, `v0.8.6..v0.8.27`)** — shipped.
   `Config.validate()` guard for the JSON-logs-in-prod
   silent-misconfig (#187); `RefreshAgentBearer` recovery
   loop (#188); BatchedApplier 401→auto-refresh (#189);
@@ -63,16 +75,26 @@ on 2026-08-14. Status of every row tracks
   body-field shim closure (#217); the v0.8.15..v0.8.25
   **9-bug silent-production chain** (#222/#224/#226/#228/
   #229/#230/#231/#232/#233/#234/#235 — all closed);
-  v0.8.26 UX polish (session-expired toast, Toaster
-  position, `DropdownMenuTrigger` `size="icon"` leak,
-  `SelectItem` empty-string sentinel, `.trivyignore`
-  CVE-2026-46600). The remaining
-  `KNOWN_LIMITATIONS.md` §"v0.8.25 — currently open"
-  items (stale-session toast was closed in v0.8.26;
+  v0.8.27 anti-leak infrastructure + `release.yml` smoke
+  gate + oncall runbook + recreate gap-analysis batch
+  (#241 / #246 / #247 / #249 / #250 / #251 / #252).
+  The remaining `KNOWN_LIMITATIONS.md` §"v0.8.25 — currently
+  open" items (stale-session toast was closed in v0.8.27;
   `known_hosts` temp-file creation workaround is a
   v0.9.0 candidate; state-machine "invalid state
   transition" warning is a v0.9.0 cosmetic fix) feed
-  Tier 1 / Tier 2 below.
+  Tier 1 / Tier 2 below. The **v0.8.28 (Tier 3 closeout)**
+  lives below as a sub-bullet of Phase 2 — it is in
+  progress on `main` HEAD (`c58a1b4`) at the time of
+  this refresh: 5 dialog-extraction PRs (#265-#269) split
+  HostsView and NodesView into 8 self-contained dialog
+  components under `frontend/src/views/dialogs/`;
+  `ChangePasswordRequest` dedup (#254), `window.confirm` →
+  `ConfirmDialog` (#256), typed `as Parameters<...>`
+  casts replacing `as never` (#263); `camelizeKeys`
+  memoization (#255); new `GET /api/v1/inbounds` batch
+  endpoint (#264); 52 new vitest tests across 8 dialog
+  test files, project total 39 → 91 (#270).
 - **v0.9.0 (pre-GA hardening)** — ⏳ open. The single
   active row in `docs/ROADMAP.md` §"Status (2026-08-12)".
   This is the **only** milestone row in the active
@@ -106,29 +128,37 @@ than a leap of faith. Per `KNOWN_LIMITATIONS.md` §"v0.9.0
 — Restore-drill on fresh VM (the GA blocker)" + the
 audit-3.1 fix chain rationale + the historical
 `docs/gap-analysis-v0.8.24-2026-08-14.md` §6/§8.
+**Refreshed 2026-08-20** (post-`docs/docs-sync-20260820`):
+the ✅/⏳ markers below reflect the current `main` HEAD
+(`c58a1b4`); the v0.8.27 anti-leak infra + smoke gate
+batch closed two of the six items; the dialog extraction
+batch closed a separate `frontend tech-debt plan` Tier 3
+(see §1 Phase 2 sub-bullet above). Tier 1 still has
+**3 of 6 open**; those three are the v0.9.0 → v1.0.0
+GA-blockers.
 
-- **`release.yml` hard-gate smoke test** — would have
-  caught the entire v0.8.15..v0.8.25 chain
-  (`KNOWN_LIMITATIONS.md` §"v0.8.16..v0.8.25 — the
-  silent-bug chain (closed)"). The fix is a CI job that
+- ✅ **`release.yml` hard-gate smoke test** — **SHIPPED**
+  (PR #247, v0.8.27). The fix is a CI job that
   builds the panel image, then runs
   `docker run --rm $image /usr/bin/pg_dump --version` +
-  a tiny `POST /backups/` against a test panel. The
-  v0.8.15 `ENOENT` (no dynamic linker), the v0.8.16
-  shell-symlink `pg_wrapper`, the v0.8.19 pg_dump-15-vs-
-  postgres-16 mismatch — all three would have been caught
-  before publish. The audit's P0 finding #2. ~0.5 day.
-- **Restore-drill on a fresh VM** — `KNOWN_LIMITATIONS.md`
-  §"v0.9.0 — Restore-drill on fresh VM" + `ROADMAP.md:55`.
-  Terraform + ansible + boot-log artifact in CI. Validates:
-  download backup → fresh VM → restore → first-boot →
-  panel reachable. The **single most-important v0.9.0
-  deliverable**; without it the GA tag is not a
-  defensible claim. The pre-existing
-  `tools/scripts/restore.sh` covers the operator side; a
-  CI job that runs it against a fresh-provisioned VM is
-  the missing piece. ~1–2 days.
-- **Backup cron + retention policy** —
+  a tiny `POST /backups/` against a test panel, before
+  the cosign re-sign step. The v0.8.15 `ENOENT` (no
+  dynamic linker), the v0.8.16 shell-symlink
+  `pg_wrapper`, the v0.8.19 pg_dump-15-vs-postgres-16
+  mismatch — all three would have been caught before
+  publish. The audit's P0 finding #2 — closed.
+- ⏳ **Restore-drill on a fresh VM** — OPEN.
+  `KNOWN_LIMITATIONS.md` §"v0.9.0 — Restore-drill on
+  fresh VM" + `ROADMAP.md` v0.9.0 row. Terraform + ansible
+  plus boot-log artifact in CI. Validates: download
+  backup → fresh VM → restore → first-boot → panel
+  reachable. The **single most-important v0.9.0
+  deliverable**; without
+  it the GA tag is not a defensible claim. The
+  pre-existing `tools/scripts/restore.sh` covers the
+  operator side; a CI job that runs it against a
+  fresh-provisioned VM is the missing piece. ~1–2 days.
+- ⏳ **Backup cron + retention policy** — OPEN.
   `AEGIS_BACKUP_SCHEDULE` + `AEGIS_BACKUP_RETENTION_DAYS`
   env vars, a `BackupScheduler` goroutine in
   `internal/backups/`, an audit-log entry on each cycle
@@ -138,29 +168,31 @@ audit-3.1 fix chain rationale + the historical
   backup last week" and "the system has a backup from
   every cycle for the last 30 days, then enforces
   retention". ~1 day.
-- **24-hour soak** — 1 panel + 1 node + 10 synthetic
-  users for 24h, capture memory / CPU / reload-rate /
-  lost-sessions / failed-applies. Roadmap §21 MVP-1.0
-  DoD. Cannot be validated until the restore-drill
-  lands (the soak is run on the freshly-restored
-  panel). ~1 day, mostly waiting.
-- **`tools/scripts/branch-start.sh` + `release.sh`
-  dry-run** — the current `tools/scripts/pre-pr.sh` is
-  the local pre-commit gate; the operator-side
-  `branch-start.sh` (cut a release branch from `main`
-  with the right version bump) + `release.sh` (build +
-  push + tag + cosign re-sign + verify) dry-runs are
-  the missing scripts. ~1 day. Without these, every
-  future release is manual (bounce script + smoke test,
-  and git tag) and the 9 silent bugs from the v0.8.17 →
-  v0.8.24 chain will recur.
-- **Operational runbook `docs/RUNBOOKS/oncall.md`** —
-  the 3 most-likely incidents (panel boot loop on sops
-  env, `pg_dump` empty-dump signature, BatchedApplier
-  401-storm) and the recovery path. Reference
-  `docs/RUNBOOKS/deploy.md` for the deploy-side
-  procedures; `oncall.md` is the live-incident
-  counterpart. ~0.5 day.
+- ⏳ **24-hour soak** — OPEN. 1 panel + 1 node + 10
+  synthetic users for 24h, capture memory / CPU /
+  reload-rate / lost-sessions / failed-applies. Roadmap
+  §21 MVP-1.0 DoD. Cannot be validated until the
+  restore-drill lands (the soak is run on the
+  freshly-restored panel). ~1 day, mostly waiting.
+- 🟡 **`tools/scripts/branch-start.sh` + `release.sh`
+  dry-run** — PARTIAL. PR #250 (v0.8.27) added `--dry-run`
+  to `branch-start.sh` and hardened `release.sh`'s
+  `--snapshot` mode. The full **end-to-end dry-run of the
+  cut-branch-from-`main` + `release.sh` build + push +
+  tag + cosign re-sign + verify sequence** is still a
+  v0.9.0 candidate — the script pieces are in place, the
+  sequenced dry-run is not. ~0.5 day to wire the
+  sequence. Without it, the manual bounce-script +
+  smoke-test + git-tag path is still the release shape
+  and the v0.8.15..v0.8.25 silent-bug chain could recur.
+- ✅ **Operational runbook `docs/RUNBOOKS/oncall.md`** —
+  **SHIPPED** (PR #251, v0.8.27). The 3 most-likely
+  incidents (panel boot loop on sops env, `pg_dump`
+  empty-dump signature, BatchedApplier 401-storm) and the
+  recovery path. Reference `docs/RUNBOOKS/deploy.md` for
+  the deploy-side procedures; `oncall.md` is the
+  live-incident counterpart. The audit's P0 finding
+  closed.
 
 **Total: 5–6 days** of solo work, dominated by the
 restore-drill. When all six items close, the
@@ -172,6 +204,15 @@ These ship in the same window as Tier 1 but their
 absence does not block the GA tag. None change the
 operational confidence claim; all improve the
 operator-side ergonomics or the engineering hygiene.
+**Refreshed 2026-08-20** (post-`docs/docs-sync-20260820`):
+the `RUNBOOKS/deploy.md` reference refresh is now PARTIAL
+(PR #252 closed the v0.8.27 sync); the other five items
+are still open. Tier 2 deps (`chore(ci)` / `chore(deps)`
+PRs #257 / #259 / #261 / #262 — Go mod bump to
+`golang.org/x/mod` 0.40.0, Node 20 → 24.19.0, npm
+frontend-deps minor+patch batch, backend minor+patch
+batch) shipped in v0.8.27 and are out of scope for this
+list.
 
 - **11-bug-chain retrospective** — a
   `docs/POSTMORTEMS/v0.8.x-silent-bug-chain.md` with
@@ -202,15 +243,15 @@ operator-side ergonomics or the engineering hygiene.
   single source of truth (the OpenAPI version is
   derived from the panel's release tag, not hand-pinned
   in three places). ~0.5 day.
-- **`docs/RUNBOOKS/deploy.md` reference refresh** — the
-  v0.8.9-era runbook still names "v0.8.9" as the
-  current version in §"v0.8.X.Y → v0.8.X.Z upgrade".
-  Update to v0.8.25 (or v0.8.26 if the post-UX fix is
-  what operators are running). The fix is a search +
-  replace across the version-pinned runbook sections;
-  the substantive content (sops+age, distroless UID
-  ownership, decoy sub-path rotation) is unchanged
-  from the v0.8.6+ closeout. ~0.5 day.
+- 🟡 **`docs/RUNBOOKS/deploy.md` reference refresh** —
+  PARTIAL. PR #252 (v0.8.27) synced §3.3 / §5 to the
+  production state. The remaining items in the
+  v0.8.9-era runbook that still name the old version
+  in §"v0.8.X.Y → v0.8.X.Z upgrade" are a v0.9.0
+  search-and-replace pass; the substantive content
+  (sops+age, distroless UID ownership, decoy sub-path
+  rotation) is unchanged from the v0.8.6+ closeout.
+  ~0.5 day.
 - **Stale `v0.7.x multi-user TODO` comments in
   `backend/internal/cores/builder/builder.go`** — lines
   `86`, `139`, `268` reference the v0.7.x TODO that
@@ -233,7 +274,15 @@ operator-side ergonomics or the engineering hygiene.
 ## 4. Tier 3 — nice-to-have
 
 Defer past v0.9.0 unless an operator-reported
-incident forces one forward.
+incident forces one forward. **Refreshed 2026-08-20**
+(post-`docs/docs-sync-20260820`): none of the items
+below moved in the v0.8.27 → v0.8.28 batch; the
+"dialog extraction" that closed in the same window
+is a separate `frontend tech-debt plan` Tier 3 (Task
+10), not this list. The 9-step drift-audit pass
+described in the first item below is the contract that
+drove this refresh; the next `docs/drift-reports/`
+date-templated report is the v0.9.0 cadence step.
 
 - **Doc-drift weekly cadence** — the `aegis-docs-keeper`
   agent's 9-step drift-audit pass (read AGENTS.md +

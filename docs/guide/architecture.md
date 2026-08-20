@@ -10,6 +10,45 @@ should be edited in lockstep with the code.
 
 ## Current version
 
+**v9.6 (2026-08-20) — post-v0.8.27 + v0.8.28 sync.**
+Two milestone rows land since v9.5: `v0.8.27` (the
+anti-leak infrastructure + `release.yml` smoke gate
+plus oncall runbook + recreated gap-analysis batch —
+PRs #241 / #246 / #247 / #249 / #250 / #251 / #252)
+and `v0.8.28` (in progress on `main` HEAD `c58a1b4`;
+the Tier 3 dialog extraction closeout — PRs
+PR #254 through PR #270). The Tier 3 closeout is
+a structural change to the two heaviest Vue views:
+HostsView and NodesView each shed their per-action
+dialogs
+into 8 self-contained dialog components under
+`frontend/src/views/dialogs/`. HostCreateDialog +
+HostEditDialog (#265), NodeCreateDialog +
+NodeEditDialog (#266), NodeProvisionDialog
+(#267), NodeRotateDialog (#268), NodeRefreshDialog
+plus NodeInspectDialog (#269). The view files keep
+only the trigger refs + per-row pointers; the
+dialogs own the form state, the wire-payload
+builder, and the success card surface. Adjacent
+refactors: `ChangePasswordRequest` dedup (#254),
+`window.confirm` → `ConfirmDialog` migration
+(#256), typed `as Parameters<...>` casts replacing
+`as never` (#263). Two perf wins: `camelizeKeys`
+memoization for large response bodies (#255) and
+a new `GET /api/v1/inbounds` batch endpoint that
+replaces the per-row `GetByNode` fan-out during
+HostsView + NodesView open (#264). 52 new vitest
+tests across 8 dialog test files; the project
+total goes from 39 → 91 (#270). v9.6 is a status
+sync: the §21 unified roadmap status table is
+brought in line with the v0.8.27 + v0.8.28
+shipped + in-progress state, and the v0.8.27
+release tag (at `6b48879`) is documented. See the
+`v9.6` entry in `ARCHITECTURE.md` §25 for the
+per-PR detail. The doc body itself is unchanged
+from v9.5; the §21 / §25 status tables and this
+"Current version" note are the only diffs.
+
 **v9.5 (2026-08-02) — post-v0.8.0 sync.** One
 milestone tag landed since v9.4: `v0.8.0` (the
 **Phase 2 multi-user sing-box render milestone

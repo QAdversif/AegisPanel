@@ -1,4 +1,4 @@
-# Known Limitations — AegisPanel v0.8.25
+# Known Limitations — AegisPanel v0.8.27
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
@@ -6,9 +6,15 @@ Every open entry points to the milestone that closes it.
 **Closed** items are kept for context — the PR that closed each
 one is named so future readers can find the diff.
 
-The current state of the project is **v0.8.25** (the
-`UploadAndSwap` fix for ETXTBSY-safe re-provision of a
-running agent). v0.8.25 closes the **9-bug silent-production
+The current state of the project is **v0.8.27** (the
+anti-leak infrastructure + `release.yml` hard-gate smoke +
+`docs/RUNBOOKS/oncall.md` + recreated `docs/gap-analysis-
+v0.8.24.md` batch; PRs #241 / #246 / #247 / #249 / #250 /
+PR #251 / PR #252; release cut at `6b48879`). v0.8.27 is
+the first release where the anti-leak infrastructure
+gates a merge end-to-end (pre-commit + CI + the agent's
+banned-
+list). v0.8.25 still closes the **9-bug silent-production
 chain** that started in v0.8.15 (pg_dump missing in image)
 and ran through v0.8.16..v0.8.24 (symlink wrapper,
 DSN-stripped dump call, postgres 15 vs 16 mismatch,
@@ -17,9 +23,17 @@ ed25519 HostKeyAlgorithms pin, `SHA256:` prefix-strip,
 state-write `UpdateInput{}` empty struct, ETXTBSY on
 direct binary overwrite). All nine bugs were caught by
 post-deploy live smoke tests, never by the
-`release.yml` workflow — a v0.9.0 candidate is the
-`release.yml` hard-gate smoke test. PR #235 (squash merge
-`0ce05992`). The full gap-vs-roadmap analysis is in
+`release.yml` workflow — the v0.9.0 `release.yml`
+hard-gate smoke test (PR #247) is the first release
+where the smoke is a CI gate, not a manual post-deploy
+check. **v0.8.28 (Tier 3 closeout) is on `main` HEAD**
+and is the next release tag; it ships the dialog
+extraction (PRs #265-#269), the typed-casts refactor
+(#263), the `window.confirm` → `ConfirmDialog` migration
+(#256), the `camelizeKeys` memoization (#255), the new
+`GET /api/v1/inbounds` batch endpoint (#264), and 52 new
+vitest tests (39 → 91 total, #270). The full gap-vs-
+roadmap analysis is in
 [`docs/gap-analysis-v0.8.24.md`](./docs/gap-analysis-v0.8.24.md);
 the TL;DR is: the v0.8.x code is **richer** than the
 v9.5 roadmap expected at this point (per-user credentials,

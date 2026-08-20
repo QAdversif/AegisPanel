@@ -8,6 +8,74 @@ The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
 in the repo root.
 
+**v0.8.27** adds `GET /api/v1/inbounds`, the
+top-level batch endpoint for the inbound
+catalog. The response is `InboundListResponse`
+with an `inbounds[]` array where every entry
+carries the owning `nodeId`; the per-row
+`GET /api/v1/nodes/{nodeId}/inbounds/{id}` shape
+is unchanged. The endpoint replaces the per-row
+`GetByNode` fan-out that the v0.8.x frontend
+(HostsView, NodesView) had to make on each view
+open — under heavy node counts the fan-out was
+the dominant open-view latency contributor. The
+OpenAPI spec was bumped to `0.8.27` and the
+generated `frontend/src/types/api.d.ts`
+regenerated without manual mirror work (the
+hand-mirrored `frontend/src/api/services/
+inbounds.ts` is also updated). PR #264
+(perf-only — no auth / scope / schema change
+beyond the new `nodeId` field on the response
+entry).
+
+**v0.8.8** wires the v0.8.7 `RefreshAgentBearer`
+recovery loop into the sing-box `Apply` path so a
+401 from `POST /v1/apply` triggers a refresh +
+retry without operator intervention. The
+`singbox.NodeResolver` interface gains
+`RefreshBearer(ctx, id) (string, error)`; the
+`main.go` `singboxNodeResolver` adapter
+implements it via `nodes.Service.RefreshAgentBearer`.
+One retry only — no loop. 500/404 do NOT
+trigger refresh (server-side, not stale-bearer).
+The audit row's `ActorID` is empty for the
+auto-refresh path (no `auth.Claims` in the
+BatchedApplier context) vs non-empty for the
+v0.8.7 operator-initiated path — distinguishes
+"the panel did this" from "the operator did
+this" in the audit UI. Race is benign (two
+goroutines refreshing the same node both read the
+same `agent.env` value, DB write is idempotent).
+6 new Apply-level tests + updated
+`flushfn_smoke_test` `stubResolver`. PR #189
+(backend-only — no OpenAPI shape change).
+
+**v0.8.7** adds the refresh-agent-bearer recovery
+path. `nodes.Service.RefreshAgentBearer` decrypts
+the stored panel SSH key, SSHes into the node via
+`bootstrap.NewClient` (TofuPolicy=`Reject`), reads
+`/etc/aegis/agent.env`, parses
+`AEGIS_AGENT_BEARER`, and updates
+`nodes.agent_bearer` — the recovery path for
+"agent regenerated its bearer out-of-band".
+Exposed as `POST
+/api/v1/nodes/{id}/refresh-agent-bearer` (200
+with the new bearer; 4xx with the SSH-fail /
+parse-fail / no-stored-key error mapping). The
+NodesView gets a "Refresh agent bearer" dropdown
+entry (visible for `online` / `offline` /
+`draining` / `disabled`; hidden for `new`). The
+action is recorded in the audit log as
+`node.agent-bearer.refresh`. New
+`backend/internal/nodes/refresh_bearer.go`
+(Service) + `handler_refresh_bearer.go` (HTTP) plus
+30 + 11 unit tests. `App.go` wires
+`WithSSHClientFactory(bootstrap.NewClient)
+.WithKnownHosts(cfg.AgentKnownHosts)
+.WithSSHUser(cfg.AgentSSHUser)`. The
+BatchedApplier integration (401 → auto-refresh)
+is the v0.8.8 follow-up. PR #188.
+
 **v0.8.5** adds `GET /api/v1/nodes/{id}/stored-key`,
 the read-side mirror of the v0.8.1 persistent panel SSH
 key feature. The panel decrypts
@@ -113,8 +181,8 @@ layer / docs changes). The headline groups:
 | Group         | Endpoints                                                                                                   |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
 | `auth`        | `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`, `POST /auth/change-password`                    |
-| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) + `GET /nodes/{id}/stored-key` (v0.8.5; the read-side debug surface for the v0.8.1 persistent key — panel decrypts the stored ciphertext via the age envelope and returns the public-key line + SHA-256 fingerprint) |
-| `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}`                                                                     |
+| `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) + `GET /nodes/{id}/stored-key` (v0.8.5; the read-side debug surface for the v0.8.1 persistent key — panel decrypts the stored ciphertext via the age envelope and returns the public-key line + SHA-256 fingerprint) + `POST /nodes/{id}/refresh-agent-bearer` (v0.8.7; the recovery path for "agent regenerated its bearer out-of-band" — panel SSHes in via the stored panel key, reads `/etc/aegis/agent.env`, updates `nodes.agent_bearer`; BatchedApplier wires the 401→auto-refresh loop in v0.8.8) |
+| `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}` + `GET /inbounds` (v0.8.27; top-level batch endpoint for the inbound catalog — returns `InboundListResponse` with `inbounds[]` each carrying `nodeId`; replaces the per-row `GetByNode` fan-out that the v0.8.x frontend had to make on each view open) |
 | `hosts`       | CRUD on `/hosts/{id}`                                                                                       |
 | `plans`       | CRUD on `/plans/{id}` (v0.6.0) вЂ” the operator-facing tariff catalog                                          |
 | `users`       | CRUD on `/users/{id}` + `POST /users/{id}/rotate-token`                                                     |
