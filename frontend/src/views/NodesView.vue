@@ -31,9 +31,11 @@
   rotate a key on a node they later intend to
   re-enable).
 
-  v0.9.x: the create + edit dialogs were
-  extracted into ./dialogs/NodeCreateDialog.vue
-  and ./dialogs/NodeEditDialog.vue. The view
+  v0.9.x: the create + edit + provision
+  dialogs were extracted into
+  ./dialogs/NodeCreateDialog.vue,
+  ./dialogs/NodeEditDialog.vue, and
+  ./dialogs/NodeProvisionDialog.vue. The view
   keeps the per-row DropdownMenu actions
   (Provision / Rotate / Refresh / Inspect /
   Delete) and the list state. The `editing`
@@ -45,8 +47,8 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { MoreHorizontal, Plus, Server } from "lucide-vue-next";
-import { KeyRound, KeySquare, Lock, RefreshCw, Eye } from "lucide-vue-next";
+import { MoreHorizontal, Plus } from "lucide-vue-next";
+import { KeyRound, RefreshCw, Eye } from "lucide-vue-next";
 import type { ColumnDef } from "@tanstack/vue-table";
 
 import { useAuthStore } from "@/stores/auth";
@@ -56,7 +58,6 @@ import {
   deleteNode,
   getStoredNodeKey,
   listNodes,
-  provisionNode,
   refreshNodeAgentBearer,
   rotateNodePanelKey,
 } from "@/api/services";
@@ -68,10 +69,7 @@ import type {
   NodeStoredKey,
   UUID,
 } from "@/types";
-import {
-  nodeProvisionSchema,
-  nodeRotatePanelKeySchema,
-} from "@/schemas";
+import { nodeRotatePanelKeySchema } from "@/schemas";
 import { useZodForm } from "@/composables/useZodForm";
 
 import DataTable from "@/components/DataTable.vue";
@@ -91,12 +89,11 @@ import DropdownMenuContent from "@/components/ui/DropdownMenuContent.vue";
 import DropdownMenuItem from "@/components/ui/DropdownMenuItem.vue";
 import Input from "@/components/ui/Input.vue";
 import Textarea from "@/components/ui/Textarea.vue";
-import RadioGroup from "@/components/ui/RadioGroup.vue";
-import RadioGroupItem from "@/components/ui/RadioGroupItem.vue";
 import Form from "@/components/Form.vue";
 import FormField from "@/components/FormField.vue";
 import NodeCreateDialog from "./dialogs/NodeCreateDialog.vue";
 import NodeEditDialog from "./dialogs/NodeEditDialog.vue";
+import NodeProvisionDialog from "./dialogs/NodeProvisionDialog.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -104,24 +101,31 @@ const toast = useToastStore();
 
 const nodes = ref<Node[]>([]);
 const loading = ref(false);
-// v0.9.x: the create + edit dialogs each own
-// their own form state. The view keeps the
-// trigger refs (`createOpen` / `editOpen`)
-// and the `editingForEdit` row pointer for
-// the edit dialog. Provision / Rotate /
+// v0.9.x: the create + edit + provision
+// dialogs each own their own form state.
+// The view keeps the trigger refs
+// (`createOpen` / `editOpen` /
+// `provisionOpen`) and the per-row pointers
+// (`editingForEdit` / `provisioning`) for
+// the edit + provision dialogs. Rotate /
 // Refresh / Inspect keep their own
-// per-action refs (`provisioning`, `rotating`,
-// `refreshing`, `inspecting`) so they can
-// each render a per-row context card without
-// sharing a single slot.
+// per-action refs (`rotating`, `refreshing`,
+// `inspecting`) so they can each render a
+// per-row context card without sharing a
+// single slot.
 const createOpen = ref(false);
 const editOpen = ref(false);
 const editingForEdit = ref<Node | null>(null);
 
-// v0.3.0: provision dialog. The "provisioning" node
-// is the one currently being installed; the dialog
-// stays open until the install completes (sync
-// call) and shows the new state on success.
+// v0.3.0 + v0.9.x: provision dialog. The
+// "provisioning" node is the one currently
+// being installed; the dialog stays open
+// until the install completes (sync call)
+// and shows the new state on success. The
+// view keeps the trigger refs — the dialog
+// itself owns the form + wire-payload
+// builder and hydrates from `props.node`
+// every time it opens.
 const provisioning = ref<Node | null>(null);
 const provisionOpen = ref(false);
 
@@ -277,97 +281,37 @@ function onNodeUpdated(_node: Node): void {
 
 // --- Provision (v0.3.0) ----------------------------------------------------
 
+// v0.9.x: the provision dialog owns its own
+// form state and the wire-payload builder.
+// The view's job is to (a) set the per-row
+// `provisioning` pointer and (b) flip the
+// `provisionOpen` trigger; the dialog's
+// watcher hydrates the form from `props.node`
+// every time it opens (state 'offline' ->
+// default 'stored' auth, anything else ->
+// default 'key'). The dialog emits
+// `provisioned` (with the row + the new
+// state) on success and `update:open` on
+// close; the view handles the toast + the
+// list refresh.
 function startProvision(node: Node): void {
   provisioning.value = node;
-  // v0.8.x: the auth-method radio default.
-  // First-time installs (state 'new') default
-  // to 'key' (the operator pastes a private
-  // key OR a password; the form switches to
-  // 'password' on the radio). Re-provisions
-  // (state 'offline', a previously-provisioned
-  // node) default to 'stored' — the panel
-  // re-uses its own key, the operator clicks
-  // submit with no input.
-  const defaultAuth = node.state === "offline" ? "stored" : "key";
-  provisionForm.resetForm({
-    values: {
-      authMethod: defaultAuth,
-      ssh_port: undefined,
-      ssh_user: "",
-      ssh_private_key: "",
-      ssh_password: "",
-      tofu_policy: "reject",
-      expected_fingerprint: "",
-    },
-  });
   provisionOpen.value = true;
 }
 
-const provisionForm = useZodForm({
-  schema: nodeProvisionSchema,
-  initialValues: {
-    authMethod: "key" as const,
-    ssh_port: undefined,
-    ssh_user: "",
-    ssh_private_key: "",
-    ssh_password: "",
-    tofu_policy: "reject" as const,
-    expected_fingerprint: "",
-  },
-  onSubmit: async (values) => {
-    if (!provisioning.value) return;
-    // v0.8.x: the UI's authMethod radio is a
-    // local form state; the Go API's wire
-    // format is the two-field XOR
-    // `ssh_private_key` / `ssh_password`. Build
-    // the wire payload from the auth method:
-    // - 'key'      -> { ssh_private_key }
-    // - 'password' -> { ssh_password }
-    // - 'stored'   -> {} (empty auth; the
-    //   Go provisioner falls back to the
-    //   encrypted panel key it stored on the
-    //   first install).
-    const wirePayload: {
-      ssh_private_key?: string;
-      ssh_password?: string;
-      ssh_port?: number;
-      ssh_user?: string;
-      tofu_policy?: "reject" | "accept-and-append";
-      expected_fingerprint?: string;
-    } = {
-      ssh_port: values.ssh_port,
-      ssh_user: values.ssh_user,
-      tofu_policy: values.tofu_policy,
-      expected_fingerprint: values.expected_fingerprint,
-    };
-    if (values.authMethod === "key") {
-      wirePayload.ssh_private_key = values.ssh_private_key;
-    } else if (values.authMethod === "password") {
-      wirePayload.ssh_password = values.ssh_password;
-    }
-    // 'stored' path: no auth fields. The Go side
-    // falls back to the encrypted panel key.
-    try {
-      const res = await provisionNode(
-        provisioning.value.id,
-        wirePayload as Parameters<typeof provisionNode>[1],
-      );
-      provisionOpen.value = false;
-      provisioning.value = null;
-      toast.add({
-        title: t("nodes.provisioned", { state: res.new_state }),
-        variant: res.new_state === "online" ? "success" : "destructive",
-      });
-      await refresh();
-    } catch (error) {
-      toast.add({
-        title: t("nodes.provisionFailed"),
-        description: toApiError(error).message,
-        variant: "destructive",
-      });
-    }
-  },
-});
+function onProvisioned(_node: Node, newState: string): void {
+  // The dialog already emitted `update:open`
+  // -> false, so the v-model flipped
+  // `provisionOpen` back. We just need to
+  // surface the state transition to the
+  // operator and re-fetch the list so the
+  // new row state shows up in the table.
+  toast.add({
+    title: t("nodes.provisioned", { state: newState }),
+    variant: newState === "online" ? "success" : "destructive",
+  });
+  void refresh();
+}
 
 // --- Rotate (v0.8.4) -------------------------------------------------------
 
@@ -758,244 +702,12 @@ const canWrite = computed(() => {
       @updated="onNodeUpdated"
     />
 
-    <!-- Provision dialog (v0.3.0) -->
-    <Dialog v-model:open="provisionOpen">
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            <Server class="h-4 w-4 inline-block mr-2 align-text-bottom" />
-            {{ t("nodes.provisionTitle") }}
-          </DialogTitle>
-          <DialogDescription>
-            {{
-              t("nodes.provisionDescription")
-            }}
-          </DialogDescription>
-        </DialogHeader>
-        <Form
-          :is-submitting="provisionForm.isSubmitting.value"
-          @submit="provisionForm.handleSubmit"
-        >
-          <p class="nodes__provision-target">
-            <strong>{{ provisioning?.name }}</strong>
-            ({{ provisioning?.address }}) —
-            {{ provisioning ? t(`nodes.states.${provisioning.state}`) : "" }}
-          </p>
-          <FormField
-            name="ssh_user"
-            :label="t('nodes.sshUser')"
-            :hint="t('nodes.sshUserHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="root"
-                @update:model-value="
-                  (v: string) => provisionForm.setFieldValue('ssh_user', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="ssh_port"
-            :label="t('nodes.sshPort')"
-            :hint="t('nodes.sshPortHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                type="number"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="22"
-                @update:model-value="
-                  (v: string) =>
-                    provisionForm.setFieldValue(
-                      'ssh_port',
-                      v === '' ? undefined : Number(v),
-                    )
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <!-- v0.8.x: auth-method radio. The three-way
-               picker drives the conditional rendering
-               of the key / password fields below, and
-               the wire payload built in the onSubmit
-               handler. The "stored" option is only
-               available for re-provisions (state
-               'offline'); for first-time installs (state
-               'new') the radio is disabled because the
-               panel has no key to re-use yet. -->
-          <FormField
-            name="authMethod"
-            :label="t('nodes.authMethod')"
-            required
-            :hint="t('nodes.authMethodHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <RadioGroup
-                :id="id"
-                :model-value="(value as string) ?? 'key'"
-                :aria-label="t('nodes.authMethod')"
-                :class="hasError && 'rounded-md border border-destructive p-1'"
-                @update:model-value="
-                  (v: string) => {
-                    provisionForm.setFieldValue(
-                      'authMethod',
-                      v as 'key' | 'password' | 'stored',
-                    );
-                    provisionForm.setFieldValue('ssh_private_key', '');
-                    provisionForm.setFieldValue('ssh_password', '');
-                    onBlur();
-                  }
-                "
-              >
-                <RadioGroupItem value="key">
-                  <KeySquare class="h-4 w-4" />
-                  <span>{{ t("nodes.authMethodKey") }}</span>
-                </RadioGroupItem>
-                <RadioGroupItem value="password">
-                  <Lock class="h-4 w-4" />
-                  <span>{{ t("nodes.authMethodPassword") }}</span>
-                </RadioGroupItem>
-                <RadioGroupItem
-                  value="stored"
-                  :disabled="provisioning?.state !== 'offline'"
-                  :title="
-                    provisioning?.state !== 'offline'
-                      ? t('nodes.authMethodStoredDisabledTitle')
-                      : ''
-                  "
-                >
-                  <KeyRound class="h-4 w-4" />
-                  <span>{{ t("nodes.authMethodStored") }}</span>
-                </RadioGroupItem>
-              </RadioGroup>
-            </template>
-          </FormField>
-          <FormField
-            v-if="provisionForm.values.authMethod === 'key'"
-            name="ssh_private_key"
-            :label="t('nodes.sshPrivateKey')"
-            required
-            :hint="t('nodes.sshPrivateKeyHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Textarea
-                :id="id"
-                :model-value="String(value ?? '')"
-                :rows="8"
-                :class="hasError && 'border-destructive'"
-                spellcheck="false"
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                @update:model-value="
-                  (v: string) =>
-                    provisionForm.setFieldValue('ssh_private_key', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            v-if="provisionForm.values.authMethod === 'password'"
-            name="ssh_password"
-            :label="t('nodes.sshPassword')"
-            required
-            :hint="t('nodes.sshPasswordHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                type="password"
-                autocomplete="off"
-                :model-value="String(value ?? '')"
-                :class="hasError && 'border-destructive'"
-                spellcheck="false"
-                @update:model-value="
-                  (v: string) => provisionForm.setFieldValue('ssh_password', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <FormField
-            name="tofu_policy"
-            :label="t('nodes.tofuPolicy')"
-            :hint="t('nodes.tofuPolicyHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <select
-                :id="id"
-                :value="value"
-                :class="['nodes__select', hasError && 'border-destructive']"
-                @change="
-                  (event: Event) => {
-                    const v = (event.target as HTMLSelectElement).value;
-                    provisionForm.setFieldValue(
-                      'tofu_policy',
-                      v === ''
-                        ? undefined
-                        : (v as 'reject' | 'accept-and-append'),
-                    );
-                    onBlur();
-                  }
-                "
-              >
-                <option value="reject">
-                  {{ t("nodes.tofuReject") }}
-                </option>
-                <option value="accept-and-append">
-                  {{ t("nodes.tofuAcceptAndAppend") }}
-                </option>
-              </select>
-            </template>
-          </FormField>
-          <FormField
-            name="expected_fingerprint"
-            :label="t('nodes.expectedFingerprint')"
-            :hint="t('nodes.expectedFingerprintHint')"
-          >
-            <template #default="{ id, value, onBlur, hasError }">
-              <Input
-                :id="id"
-                :model-value="value"
-                :class="hasError && 'border-destructive'"
-                placeholder="SHA256:abc123..."
-                @update:model-value="
-                  (v: string) =>
-                    provisionForm.setFieldValue('expected_fingerprint', v)
-                "
-                @blur="onBlur"
-              />
-            </template>
-          </FormField>
-          <DialogFooter>
-            <DialogClose>
-              <Button
-                type="button"
-                variant="outline"
-                :disabled="provisionForm.isSubmitting.value"
-                @click="provisioning = null"
-              >
-                {{ t("common.cancel") }}
-              </Button>
-            </DialogClose>
-            <Button
-              type="submit"
-              :disabled="provisionForm.isSubmitting.value"
-            >
-              <Server class="h-4 w-4 mr-2" />
-              {{ t("nodes.provision") }}
-            </Button>
-          </DialogFooter>
-        </Form>
-      </DialogContent>
-    </Dialog>
+    <!-- Provision dialog (v0.3.0, extracted to NodeProvisionDialog in v0.9.x) -->
+    <NodeProvisionDialog
+      v-model:open="provisionOpen"
+      :node="provisioning"
+      @provisioned="onProvisioned"
+    />
 
     <!-- Rotate-panel-key dialog (v0.8.4) -->
     <Dialog v-model:open="rotateOpen">
@@ -1446,22 +1158,6 @@ const canWrite = computed(() => {
   border-radius: 0.375rem;
   background: hsl(var(--muted));
   font-size: 0.875rem;
-}
-
-.nodes__select {
-  display: block;
-  width: 100%;
-  border: 1px solid hsl(var(--input));
-  border-radius: 0.375rem;
-  background: transparent;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-}
-
-.nodes__select:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px hsl(var(--ring));
-  border-color: hsl(var(--ring));
 }
 
 /* v0.8.4: rotate-panel-key success card. The
