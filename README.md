@@ -1,32 +1,25 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.25** (latest tagged release, 2026-08-12) closes
-> the last silent production bug in the v0.8.17 → v0.8.24 live-smoke
-> chain: re-provisioning an already-running node failed with
-> `sftp: "Failure" (SSH_FX_FAILURE)` at the `upload-agent` stage.
-> Root cause is Linux `ETXTBSY` — the kernel refuses to let one
-> process unlink or truncate a binary currently mmap'd for
-> execution by another process. Fix is a new
-> `bootstrap.Client.UploadAndSwap` interface method (PR #235) that
-> SFTP-writes the new agent binary to a `.aegis-agent.swap.<8-hex>`
-> temp file in the same directory, then atomically renames it
-> over the target via `mv -f` (POSIX rename(2), which is always
-> permitted even when the target is being executed — the
-> running process keeps the unlinked inode alive until it exits,
-> and a new process or the systemd `Restart=always` loop picks
-> up the new binary at the same path). `Installer.uploadAgent`
-> switched to the new method. End-to-end verified: v0.8.25
-> deployed, Demo-нода re-provisioned without the `systemctl stop`
-> workaround that v0.8.24 needed. Closes the **9-bug
-> silent-production chain** that started in v0.8.15 (pg_dump
-> missing in image) and ran through v0.8.16..v0.8.24 (symlink
-> wrapper, DSN-stripped dump call, postgres 15 vs 16 mismatch,
-> known_hosts TOFU unreachable, wire-vs-line fingerprint, ed25519
-> HostKeyAlgorithms pin, `SHA256:` prefix-strip, state-write
-> `UpdateInput{}` empty struct). No OpenAPI / env / migration
-> changes. v0.8.25 is a **drop-in replacement for v0.8.24** on
-> the server side.
+> services. **v0.8.27** (latest tagged release, 2026-08-16) lands
+> the anti-leak infrastructure (AGENTS.md plus
+> `check-sensitive.sh` plus pre-commit plus CI gate; PR #241),
+> the `release.yml` smoke-test hard-gate before cosign re-sign
+> (PR #247), the `docs/RUNBOOKS/oncall.md` incident-response
+> playbook (PR #251), the `docs/RUNBOOKS/deploy.md`
+> production-state sync (PR #252), and the recreated
+> `docs/gap-analysis-v0.8.24.md` (PR #246, closing 3 broken
+> cross-links). The `v0.8.26` interim cut (PR #240) carried the
+> 9-bug chain closeout into the docs tag with the v0.8.25
+> `UploadAndSwap` fix intact. **v0.8.28 (in progress on
+> `main`)** is the Tier 3 dialog-extraction closeout: PRs
+> #254-#270 split HostsView and NodesView into 8 self-contained
+> dialog components under `frontend/src/views/dialogs/`,
+> replaces the per-row `window.confirm` with a typed
+> `ConfirmDialog`, adds the `GET /api/v1/inbounds` batch
+> endpoint, and ships 52 new vitest tests (39 → 91 total). The
+> v0.8.28 tag will follow the same `chore(release)` CHANGELOG
+> surgery pattern as v0.8.25..v0.8.27.
 >
 > **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend
 > (Vite + shadcn-vue), PostgreSQL, Caddy, fail2ban, sops+age
@@ -42,6 +35,51 @@
 > Tier 1 / 2 / 3 / 4 plan to get there.
 
 ## Status
+
+**v0.8.28 (in progress on `main`, target tag after the
+Tier 3 closeout QA) — Tier 3 dialog extraction.** HostsView
+and NodesView each shed their per-action dialogs into 8
+self-contained Vue components under
+`frontend/src/views/dialogs/`: HostCreateDialog +
+HostEditDialog (#265), NodeCreateDialog + NodeEditDialog
+(#266), NodeProvisionDialog (#267), NodeRotateDialog
+(#268), NodeRefreshDialog + NodeInspectDialog (#269). The
+view files keep only the trigger refs + per-row pointers;
+the dialogs own the form state, the wire-payload builder,
+and the success card surface. Adjacent refactors:
+`ChangePasswordRequest` dedup (#254), `window.confirm` →
+`ConfirmDialog` migration (#256), typed
+`as Parameters<...>` casts replacing `as never` (#263).
+Two perf wins: `camelizeKeys` memoization for large
+response bodies (#255) and a new `GET /api/v1/inbounds`
+batch endpoint that replaces the per-row `GetByNode`
+fan-out during HostsView + NodesView open (#264). 52 new
+vitest tests across 8 dialog test files; the project
+total goes from 39 → 91 (#270). The v0.8.28 release
+will follow the same `chore(release): 0.8.NN` CHANGELOG
+surgery pattern as v0.8.25..v0.8.27.
+
+**v0.8.27 — anti-leak infra + `release.yml` smoke gate
+plus oncall runbook + recreate gap-analysis — shipped.**
+The big-ticket items: anti-leak infrastructure
+(AGENTS.md + `tools/scripts/check-sensitive.sh` scanner +
+pre-commit hook + CI gate, PR #241); `release.yml`
+hard-gate smoke test that runs before cosign re-sign
+(PR #247); recreated `docs/gap-analysis-v0.8.24.md`
+closing 3 broken cross-links (PR #246); the
+`docs/RUNBOOKS/oncall.md` incident-response playbook
+(PR #251); the `docs/RUNBOOKS/deploy.md` production-
+state sync (PR #252); the gitignore
+`.local/` directory (PR #249); the Go 1.26.5 → 1.26.6
+govulncheck bump (PR #248); the
+`tools/scripts/branch-start.sh` / `release.sh`
+`--dry-run` / `--snapshot` hardening (PR #250).
+v0.8.27 is the first release where the anti-leak
+infrastructure gates a merge end-to-end (pre-commit +
+CI + the agent's banned-list). PR #240 was the
+interim `chore(release): 0.8.26` cut that carried
+v0.8.25's `UploadAndSwap` closure into the docs
+tag.
 
 **v0.8.25 — `UploadAndSwap` for ETXTBSY-safe re-provision — shipped.**
 Closes the last silent production bug in the v0.8.17 → v0.8.24
@@ -178,7 +216,10 @@ The release ladder:
 | `v0.8.23` | **shipped** | `stripFingerprintPrefix(fp)` + `fingerprintEqual(a, b)` (PR #233). Pre-PR the compare was literal: `pCnGi…` ≠ `SHA256:pCnGi…` (the actual key matched the un-prefixed side, the operator's pin had the `SHA256:` prefix). v0.8.23 strips `SHA256:` / `MD5:` (case-insensitive) from both sides. 5 table-driven cases: case-insensitive, different base64, mixed prefix, MD5 prefix, unknown prefix (passes through → surfaces as real mismatch). No OpenAPI / migration / UI changes. |
 | `v0.8.24` | **shipped** | `BootstrapNodeProvider.Update` propagates `State` (PR #234). Pre-PR the method mutated `current.State` locally then called `a.Svc.Update(ctx, current.ID, UpdateInput{})` with an empty struct; `UpdateInput` is pointer-field, all-nil = "leave alone" = no SQL UPDATE. v0.8.24 passes the new state via `UpdateInput{State: &newState}`. One real-line change + a comment block. No OpenAPI / migration / UI changes. |
 | `v0.8.25` | **shipped** | `Client.UploadAndSwap(ctx, src, dst, mode)` for ETXTBSY-safe binary replacement (PR #235). Pre-PR the SFTP step did direct overwrite of `/usr/local/bin/aegis-agent`, which Linux refused with `ETXTBSY` (text-file-busy) on a re-provision of a running node — the agent's mmap'd text region can't be unlinked by another process. v0.8.25 splits the upload into SFTP-to-temp (`.basename.swap.<8-hex>`) + `mv -f` over the target via SSH; `rename(2)` is always permitted, the running process keeps the unlinked inode alive until it exits, the systemd `Restart=always` loop picks up the new binary. Mock seam in `installer_test.go` records `uploadSwapPaths` separately from `uploadPaths`; `TestInstaller_SuccessPath` asserts the agent binary path uses `UploadAndSwap` (regression guard). No OpenAPI / migration / UI changes. |
-| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222), v0.8.16..v0.8.25 silent-bug chain (PRs #222/#224/#226/#228/#229/#230/#231/#232/#233/#234/#235). |
+| `v0.8.26` | **shipped** | CHANGELOG-only release cut (PR #240) that re-anchors the v0.8.25 `UploadAndSwap` fix in the docs tag. No application code change. |
+| `v0.8.27` | **shipped** | Anti-leak infrastructure (PR #241: AGENTS.md + `tools/scripts/check-sensitive.sh` scanner + pre-commit + CI gate); `release.yml` hard-gate smoke test (PR #247); recreated `docs/gap-analysis-v0.8.24.md` (PR #246); `docs/RUNBOOKS/oncall.md` (PR #251); `docs/RUNBOOKS/deploy.md` production-state sync (PR #252); gitignore `.local/` (PR #249); Go 1.26.5 → 1.26.6 govulncheck bump (PR #248); `branch-start.sh` / `release.sh` `--dry-run` / `--snapshot` hardening (PR #250). First release where the anti-leak infrastructure gates a merge end-to-end. |
+| `v0.8.28` | **in progress** | Tier 3 dialog extraction closeout (PRs #254-#270): 5 dialog-extraction PRs (#265-#269) split HostsView and NodesView into 8 self-contained dialog components under `frontend/src/views/dialogs/`; adjacent refactors `ChangePasswordRequest` dedup (#254), `window.confirm` → `ConfirmDialog` (#256), typed `as Parameters<...>` casts (#263); two perf wins (`camelizeKeys` memoization #255, new `GET /api/v1/inbounds` batch endpoint #264); 52 new vitest tests across the 8 dialog test files (39 → 91 total, PR #270). The release cut will follow the same `chore(release): 0.8.NN` CHANGELOG surgery pattern as v0.8.25..v0.8.27. |
+| `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222), v0.8.16..v0.8.25 silent-bug chain (PRs #222/#224/#226/#228/#229/#230/#231/#232/#233/#234/#235), anti-leak infra + smoke gate + oncall + recreate gap-analysis (PRs #241/#246/#247/#249/#250/#251/#252, v0.8.27+), Tier 3 dialog extraction + perf + tests (PRs #254-#270, in v0.8.28). |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) + restore-drill on a clean VM (download backup → restore → first-boot → panel reachable) + `release.yml` hard-gate smoke (the single most-important infra change to prevent future silent bugs). The missing pieces for the v1.0.0-mvp-soft-launch tag. |
 | `v1.0.0-mvp-soft-launch` | planned | GA tag — minimum surface for the public release. v0.8.15 unblocks the code path; v0.9.0 unblocks the operational confidence. |
 
