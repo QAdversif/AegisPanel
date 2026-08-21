@@ -234,5 +234,5 @@ so the operator can audit at a glance.
 - chore(ops): secrets via sops+age (#119) (#119)
 - chore(repo): gitignore operator deploy scripts under tools/scripts/ (#118)
 
-[0.8.28]: 4a3c31a
-[0.8.27]: 6b48879
+[0.8.28]: https://github.com/QAdversif/AegisPanel/releases/tag/v0.8.28
+[0.8.27]: https://github.com/QAdversif/AegisPanel/releases/tag/v0.8.27
