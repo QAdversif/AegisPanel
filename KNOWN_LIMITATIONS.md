@@ -1184,6 +1184,103 @@ and admin-UI surface.
 | --- | --- |
 | `BANNED_PATTERNS` in `tools/scripts/check-sensitive.sh` (and the AGENTS.md mirror) extended with a `ghp_[A-Za-z0-9]{36,}` / `gho_[A-Za-z0-9]{36,}` / `ghu_[A-Za-z0-9]{36,}` / `ghs_[A-Za-z0-9]{36,}` / `ghr_[A-Za-z0-9]{36,}` / `github_pat_[A-Za-z0-9_]{82,}` regex set. Catches classic `ghp_` / fine-grained `github_pat_` / OAuth `gho_` / `ghu_` / `ghs_` / `ghr_` tokens. Closes the 2026-08-20 3-PAT incident loop (the three leaked tokens have all been rotated by the operator; the regex form is the durable preventive). Pre-commit + CI gate + agent banned-list now all three catch a `ghp_` leak end-to-end | PR #272 |
 
+## v0.8.28 — deployed to prod at 2026-08-21 MSK
+
+The v0.8.28 release was deployed to the prod
+panel (the live server, the `<sub-path>` decoy
+prefix) at 2026-08-21 11:18 MSK by the orchestrator
+(Mavis) via plink + sops-decrypt-on-operator
+workflow. The deploy was a clean drop-in
+replacement for the v0.8.27 prod (4 days old):
+no schema changes, no OpenAPI breaking changes,
+no new env vars. The PR #275 `GET
+/api/v1/backups/schedule` endpoint is the only
+new surface. v0.8.27 containers are preserved
+as `aegis-panel-prev3` / `aegis-ui-prev3` for
+rollback.
+
+- panel image: `ghcr.io/qadversif/aegispanel:0.8.28`
+  (sha256:`6a2627d5...c8ee85`)
+- ui image: `ghcr.io/qadversif/aegispanel-ui:v0.8.28`
+  (sha256:`8d3166fc...5b045db7b`)
+- migrations: 20 applied (unchanged from v0.8.27)
+- pre-deploy backup: not taken (v0.8.28 is a
+  drop-in replacement; the v0.9.0 restore-drill
+  will validate the backup -> restore path against
+  a fresh VM, not the prod upgrade path)
+- smoke: health=200, public `GET /inbounds`=401
+  with `missing bearer token` (correct auth gate
+  on the v0.8.28 batch endpoint), public UI
+  shell=200 (Caddy -> decoy sub-path -> UI:8081)
+- post-deploy logs: 11/11 backends on `PgStore`
+  (auth, hosts, nodes, inbounds, subscription,
+  users, plans, panelcfg, audits, webhooks,
+  credentials) — see the "stale env" lesson below
+  for the inbound_templates addition
+- rollback tested: no (the previous `aegis-*-prev3`
+  containers can be re-started if needed;
+  the documented rollback is `docker rename
+  aegis-panel aegis-panel-broken && docker
+  rename aegis-panel-prev3 aegis-panel && docker
+  start aegis-panel`)
+
+### Lesson: stale env file (v0.8.9-era) — AEGIS_INBOUND_TEMPLATES_BACKEND was missing for 5+ releases
+
+The `aegis-env.enc.env` shipped to the prod panel
+on 2026-08-09 (the v0.8.9 fresh-install deploy)
+had 11 `AEGIS_*_BACKEND=pg` env vars: auth, hosts,
+nodes, inbounds, subscription, users, plans,
+panelcfg, audits, webhooks, credentials. PR #205
+(v0.8.13) added the 12th backend
+`AEGIS_INBOUND_TEMPLATES_BACKEND` (inbound
+templates — the per-tenant `Params` defaults
+feature), but the prod env was never updated to
+include it. The panel default for a missing
+backend is `memory`, so from v0.8.13 (PR #205)
+through v0.8.27, every inbound template created
+in the prod UI was stored in-memory and lost on
+every container restart (any panel bounce, any
+deploy, any OOM-kill).
+
+The v0.8.28 deploy caught this: the new
+`backups.Service` boot log explicitly enumerates
+every store, and the missing
+`inbound_templates` line was visible in the
+v0.8.27 logs as absent (compared to the v0.8.28
+logs which show
+`"store":"inbound_templates","message":"using pgx-backed store (PgStore)"`).
+Added `AEGIS_INBOUND_TEMPLATES_BACKEND=pg` to the
+deploy-time env, re-ran the v0.8.28 panel, all 12
+backends now on `PgStore`. No data was migrated
+from the memory backend (it was already gone).
+
+**Action items** (for v0.9.0 or earlier):
+
+1. **Add a v0.9.0 / v0.9.1 follow-up**: a
+   `aegis admin` subcommand (or
+   `tools/scripts/audit-env.sh` script) that
+   reads the running panel's `AEGIS_*_BACKEND`
+   set via the public API and diffs it against
+   the canonical 12-backend set
+   (11 + inbound_templates). Catches the
+   "stale env from a prior deploy" class of
+   silent misconfig.
+2. **Document the canonical env template** at
+   `docs/operator-guide.md` §"Environment
+   variables" — a copy-paste-ready env file
+   with all 12 backends pre-set to `pg` + the
+   sops+age envelope vars + the non-secret
+   canonical shape. The current runbook
+   (§6.3) lists the vars but the operator has
+   to assemble them by hand. A canonical
+   template is the durable fix.
+3. **The v0.8.13 inbound_templates data
+   created on the prod between 2026-08-13
+   and 2026-08-21 is gone** (memory backend,
+   no persistence). This is the "operational
+   cost" of the silent misconfig — captured
+   here so future readers can find it.
+
 ## v0.9.1 — currently open (7 Tier 1 #3 follow-up items)
 
 v0.8.28 closed the Tier 1 #3 batch but parked 7
