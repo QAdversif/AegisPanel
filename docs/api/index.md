@@ -8,7 +8,41 @@ The canonical API contract is the OpenAPI spec at
 [`docs/openapi.yaml`](https://github.com/QAdversif/AegisPanel/blob/main/docs/openapi.yaml)
 in the repo root.
 
-**v0.8.27** adds `GET /api/v1/inbounds`, the
+**v0.8.28** adds `GET /api/v1/backups/schedule`, the
+read-only schedule surface for the admin UI. The
+endpoint returns the current `AEGIS_BACKUPS_CRON`
+expression, the `AEGIS_BACKUPS_RETENTION_DAYS` +
+`AEGIS_BACKUPS_MAX_COUNT` retention knobs, and a
+`scheduleActive` boolean (`true` if the scheduler
+goroutine is running, `false` for manual-only mode
+— i.e. `AEGIS_BACKUPS_CRON` is empty or the
+expression failed to parse at boot). The response
+shape is:
+
+```json
+{
+  "cron": "0 2 * * *",
+  "retentionDays": 30,
+  "maxCount": 0,
+  "scheduleActive": true
+}
+```
+
+The endpoint is admin-scoped (requires the
+`backups` scope) and is paired with the new
+`Backups → Schedule` section in `BackupsView.vue`
+so the operator can audit the active cron +
+retention at a glance. The `Service.ReloadCron(ctx, expr)`
+method is also in place (in-process hot-reload);
+a matching `POST /api/v1/backups/schedule`
+endpoint is planned for v0.9.1. PR #275. The
+OpenAPI spec was bumped to `0.8.28` and the
+generated `frontend/src/types/api.d.ts`
+regenerated. The hand-mirrored
+`frontend/src/api/services/backups.ts` is also
+updated.
+
+**v0.8.28** also adds `GET /api/v1/inbounds`, the
 top-level batch endpoint for the inbound
 catalog. The response is `InboundListResponse`
 with an `inbounds[]` array where every entry
@@ -19,7 +53,7 @@ is unchanged. The endpoint replaces the per-row
 (HostsView, NodesView) had to make on each view
 open — under heavy node counts the fan-out was
 the dominant open-view latency contributor. The
-OpenAPI spec was bumped to `0.8.27` and the
+OpenAPI spec was bumped to `0.8.28` and the
 generated `frontend/src/types/api.d.ts`
 regenerated without manual mirror work (the
 hand-mirrored `frontend/src/api/services/
@@ -182,14 +216,14 @@ layer / docs changes). The headline groups:
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
 | `auth`        | `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me`, `POST /auth/change-password`                    |
 | `nodes`       | CRUD on `/nodes/{id}` + `POST /nodes/{id}/provision` (the BYO install flow) + `POST /nodes/{id}/rotate-panel-key` (v0.8.4; the panel-key rotation surface, UI mirror of the v0.8.3 CLI) + `GET /nodes/{id}/stored-key` (v0.8.5; the read-side debug surface for the v0.8.1 persistent key — panel decrypts the stored ciphertext via the age envelope and returns the public-key line + SHA-256 fingerprint) + `POST /nodes/{id}/refresh-agent-bearer` (v0.8.7; the recovery path for "agent regenerated its bearer out-of-band" — panel SSHes in via the stored panel key, reads `/etc/aegis/agent.env`, updates `nodes.agent_bearer`; BatchedApplier wires the 401→auto-refresh loop in v0.8.8) |
-| `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}` + `GET /inbounds` (v0.8.27; top-level batch endpoint for the inbound catalog — returns `InboundListResponse` with `inbounds[]` each carrying `nodeId`; replaces the per-row `GetByNode` fan-out that the v0.8.x frontend had to make on each view open) |
+| `inbounds`    | CRUD on `/nodes/{nodeId}/inbounds/{id}` + `GET /inbounds` (v0.8.28; top-level batch endpoint for the inbound catalog — returns `InboundListResponse` with `inbounds[]` each carrying `nodeId`; replaces the per-row `GetByNode` fan-out that the v0.8.x frontend had to make on each view open) |
 | `hosts`       | CRUD on `/hosts/{id}`                                                                                       |
 | `plans`       | CRUD on `/plans/{id}` (v0.6.0) вЂ” the operator-facing tariff catalog                                          |
 | `users`       | CRUD on `/users/{id}` + `POST /users/{id}/rotate-token`                                                     |
 | `panelcfg`    | `GET /panelcfg`, `POST /panelcfg/rotate`, `POST /panelcfg/rotate-to`, `POST /panelcfg/reset`              |
 | `sub`         | `GET /sub/{token}` (the user-facing subscription render; auto-detects client format)                       |
 | `audits`      | `GET /audits` + `GET /audits/{id}` (read-only)                                                              |
-| `backups`     | CRUD on `/backups/{id}` + `POST /backups/{id}/restore` (v0.5.0)                                            |
+| `backups`     | CRUD on `/backups/{id}` + `POST /backups/{id}/restore` (v0.5.0) + `GET /backups/schedule` (v0.8.28; read-only schedule surface for the admin UI — returns `{cron, retentionDays, maxCount, scheduleActive}`; admin-scoped, `backups` scope; paired with the `Backups → Schedule` section in `BackupsView.vue`)                                            |
 | `webhooks`    | CRUD on `/webhooks/{id}` + `/webhooks/{id}/deliveries` + `/webhooks/{id}/test` + `/webhooks/dlq[/...]` (v0.7.0 surface; v0.7.1 wires the dispatcher into every mutating handler so the events actually fan out to subscribers) |
 | `credentials` | CRUD on `/credentials/{id}` + `/credentials/by-user/{userId}` + `/credentials/by-inbound/{ibId}` (v0.8.2 surface; the data model was already in `internal/credentials` + migration 0019 from v0.8.0) |
 | `meta`        | `GET /health` (anonymous, liveness) + `GET /cores` (provider catalog)                                       |

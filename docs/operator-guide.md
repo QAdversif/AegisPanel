@@ -373,9 +373,11 @@ state.
 
 Editing the schedule at runtime requires updating
 `AEGIS_BACKUPS_CRON` in the panel's env file and restarting the
-panel. A POST endpoint for hot-reload is planned for v0.9.1 if
-operators ask for it — the in-process `Service.ReloadCron(ctx, expr)`
-method is already in place; the UI surface is what is missing.
+panel. The in-process `Service.ReloadCron(ctx, expr)` method is
+in place, and the v0.8.28 admin UI surfaces the active schedule
+(read-only) in the `Backups → Schedule` section. A `POST
+/api/v1/backups/schedule` endpoint for runtime hot-reload is
+planned for v0.9.1 if operators ask for it.
 
 #### Retention cleanup
 

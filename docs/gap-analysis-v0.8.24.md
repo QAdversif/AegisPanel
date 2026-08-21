@@ -1,16 +1,21 @@
-# AegisPanel — gap analysis (v0.8.24, post-anti-leak era)
+# AegisPanel — gap analysis (v0.8.28, post-Tier 1 #3 era)
 
-> **Refreshed 2026-08-20** (post-`docs/docs-sync-20260820`).
+> **Refreshed 2026-08-21** (post-`docs/sync-v0.8.28-tier1-3`).
 > Status of the Tier 1 / Tier 2 / Tier 3 lists brought in
-> line with what the `main` HEAD (`c58a1b4`, PR #270
+> line with what the `main` HEAD (`4a3c31a`, PR #275
 > merge, 2026-08-20) actually ships; the
-> `v0.8.27` anti-leak infra + smoke gate batch and the
-> in-progress `v0.8.28` Tier 3 dialog extraction closeout
-> are reflected. The per-PR mapping below mirrors
-> `CHANGELOG.md` and `docs/ROADMAP.md` exactly; nothing
-> in this refresh changes the **GA claim** (that still
-> requires the Tier 1 restore-drill + backup cron + 24h
-> soak to close).
+> `v0.8.27` anti-leak infra + smoke gate batch,
+> the `v0.8.28` Tier 3 dialog extraction closeout,
+> the `v0.8.28` Tier 1 #3 (backup cron) closeout
+> (PRs #273-#275), and the v0.8.28 anti-leak
+> hardening (PR #272) are reflected. The per-PR
+> mapping below mirrors `CHANGELOG.md` and
+> `docs/ROADMAP.md` exactly; nothing in this
+> refresh changes the **GA claim** (that still
+> requires the Tier 1 restore-drill + 24h soak to
+> close — backup-cron step+range hardening is in
+> v0.8.28 but the deferred 7-item follow-up
+> batch is parked for v0.9.1).
 >
 > Recreated 2026-08-14. The original file (referenced from
 > `README.md:39`, `KNOWN_LIMITATIONS.md:23` and `:1093`,
@@ -61,7 +66,7 @@ on 2026-08-14. Status of every row tracks
   (#185); "Show stored key" debug surface (#186). Audit
   log call-site wiring into every mutating service (#166).
   No open items.
-- **Phase 2 (live hardening, `v0.8.6..v0.8.27`)** — shipped.
+- **Phase 2 (live hardening, `v0.8.6..v0.8.28`)** — shipped.
   `Config.validate()` guard for the JSON-logs-in-prod
   silent-misconfig (#187); `RefreshAgentBearer` recovery
   loop (#188); BatchedApplier 401→auto-refresh (#189);
@@ -77,7 +82,26 @@ on 2026-08-14. Status of every row tracks
   #229/#230/#231/#232/#233/#234/#235 — all closed);
   v0.8.27 anti-leak infrastructure + `release.yml` smoke
   gate + oncall runbook + recreate gap-analysis batch
-  (#241 / #246 / #247 / #249 / #250 / #251 / #252).
+  (#241 / #246 / #247 / #249 / #250 / #251 / #252);
+  v0.8.28 Tier 3 dialog-extraction closeout
+  (#254-#270 — `ChangePasswordRequest` dedup, `window.confirm`
+  → `ConfirmDialog`, `as never` cleanup, 5 dialog-extraction
+  PRs splitting HostsView and NodesView into 8 self-contained
+  components, `camelizeKeys` memoization, `GET
+  /api/v1/inbounds` batch endpoint, 52 new vitest tests);
+  v0.8.28 Tier 1 #3 (backup cron) closeout (#273-#275 —
+  full Vixie `N-M` / `N-M/S` / `*/S` / `N,M,K` parser,
+  33 scheduler goroutine tests, admin-UI surface,
+  `Service.ReloadCron`, `GET /api/v1/backups/schedule`
+  endpoint, `Backups → Schedule` section, 10 i18n keys,
+  and OpenAPI schema bump to `0.8.28`); v0.8.28 anti-leak
+  infra hardening (#272 — `ghp_` / `github_pat_` regex in
+  `BANNED_PATTERNS` closing the 2026-08-20 3-PAT incident
+  loop). 7 v0.9.1 follow-up items parked (data race in
+  `scheduler.maybeFire`, `GET /schedule` handler tests,
+  `scheduleActive` semantic, `POST` endpoint for
+  hot-reload, weekly orphan-file cron, `BackupsCron`
+  field naming, doc syntax examples).
   The remaining `KNOWN_LIMITATIONS.md` §"v0.8.25 — currently
   open" items (stale-session toast was closed in v0.8.27;
   `known_hosts` temp-file creation workaround is a
