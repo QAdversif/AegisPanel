@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // E2E smoke test for the auth flow + the
-// v0.8.28 dropdown regression.
+// v0.8.28 dropdown regression + the v0.8.28.2
+// DialogContent centring regression.
 //
 // What this test guards against:
 //   1. The admin login form works end-to-end
@@ -17,6 +18,17 @@
 //      styles.css (the tailwindcss-animate
 //      keyframes were never inlined during the v3
 //      -> v4 migration).
+//   3. The v0.8.28.2 DialogContent centring fix
+//      stays applied: clicking the trigger must
+//      flip `aria-expanded` to "true" AND mount
+//      the listbox in the DOM with visible
+//      options. Pre-fix, the dialog was visible
+//      but the SelectRoot click handler did not
+//      flip the open state in this headless
+//      environment; the test now catches the
+//      same regression class as a regular
+//      pre-prod gate instead of letting it slip
+//      to a manual prod smoke test.
 //
 // The dropdown assertion is the regression guard
 // that justifies the whole E2E suite — every
@@ -44,7 +56,7 @@ test.describe('auth + dropdown regression (v0.8.28 invisible-popups bug)', () =>
   })
 
   test(
-    'dropdowns are visible (regression for the v0.8.28 "all dropdowns are invisible" bug)',
+    'opening a Select popup makes the listbox visible (regression for the v0.8.28 invisible-popups bug + the v0.8.28.2 click-handler regression)',
     async ({ page }) => {
       await loginAsAdmin(page)
       // Navigate to Inbounds via the sidebar
@@ -132,6 +144,66 @@ test.describe('auth + dropdown regression (v0.8.28 invisible-popups bug)', () =>
       // "vless" in its name.
       const vlessTrigger = comboboxes.filter({ hasText: /vless/i }).first()
       await expect(vlessTrigger).toBeVisible()
+      // *** v0.8.28.2 STRONGER ASSERTION ***
+      //
+      // Pre-v0.8.28.2, the "dropdowns are visible"
+      // check above was the only assertion — it
+      // passed because the trigger button itself
+      // is always visible. It did NOT catch the
+      // regression where clicking the trigger did
+      // not flip `aria-expanded` (so the popup
+      // never mounted). The bug was only visible
+      // to a real operator clicking the combobox
+      // in a real browser.
+      //
+      // The new check below actually opens the
+      // popup and asserts the listbox mounted
+      // in the DOM with options. Catches the
+      // same regression class as a CI gate, not
+      // a manual prod smoke test.
+      //
+      // The Protocol combobox is the SECOND one
+      // in the dialog (Node is first). The
+      // click() helper does a real mouse click;
+      // radix-vue's SelectRoot opens on
+      // pointerdown which Chromium fires
+      // alongside mousedown. If the popup fails
+      // to open, the timeout on the listbox
+      // assertion below catches it.
+      const protocolTrigger = comboboxes.nth(1)
+      const beforeClick = await protocolTrigger.getAttribute('aria-expanded')
+      expect(
+        beforeClick,
+        'Protocol combobox must start collapsed (aria-expanded=false) so the click below is a meaningful state change',
+      ).toBe('false')
+      await protocolTrigger.click()
+      // The aria-expanded attribute must flip to
+      // "true" after the click. The 2s timeout
+      // gives the headless browser time to
+      // process the pointerdown + focus events
+      // (radix-vue uses pointerdown, not click,
+      // as the open trigger).
+      await expect
+        .poll(
+          async () => protocolTrigger.getAttribute('aria-expanded'),
+          { timeout: 2_000, intervals: [50, 100, 200] },
+        )
+        .toBe('true')
+      // The listbox portal must mount in the
+      // DOM. radix-vue teleports SelectContent
+      // to the document body, so search the
+      // whole page (not just the dialog). The
+      // listbox must have at least one option
+      // (the four protocols: vless, hysteria2,
+      // shadowsocks, trojan).
+      const listbox = page.getByRole('listbox')
+      await expect(listbox).toBeVisible({ timeout: 2_000 })
+      const options = page.getByRole('option')
+      const optionCount = await options.count()
+      expect(
+        optionCount,
+        'Protocol SelectContent must mount with all 4 protocol options (v0.8.28.2 click-handler regression guard)',
+      ).toBeGreaterThanOrEqual(4)
     },
   )
 })
