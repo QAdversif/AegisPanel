@@ -86,6 +86,45 @@ describe('shadcn-vue <Select> family (regression guard for the v0.8.28 dropdowns
   })
 
   describe('<Select>', () => {
+    it('declares `open: undefined` in withDefaults to BLOCK Vue 3 Boolean prop casting (v0.8.28.5, the load-bearing fix for #287)', () => {
+      // The actual root cause of the v0.8.28-era
+      // click-handler regression: in Vue 3, a prop
+      // declared as `Boolean` (e.g. `open?: boolean`
+      // in `SelectRootProps`) WITHOUT an explicit
+      // default is **cast to `false` (not `undefined`)
+      // when absent**. radix-vue 1.9.17's SelectRoot
+      // setup uses the check
+      //   passive: e.open === void 0
+      // to decide controlled-vs-uncontrolled mode. The
+      // Boolean cast makes `e.open === void 0` resolve
+      // to `false`, pinning the model in **controlled
+      // mode at `false`**. Internal open attempts then
+      // emit `update:open` which the wrapper must
+      // re-emit for the parent to write the prop back.
+      // Without the re-emit, the select can never open.
+      //
+      // The fix is a one-line addition to withDefaults:
+      // declare `open: undefined` so the prop is
+      // actually `undefined` when absent. This is the
+      // same pattern the project's `Tooltip`,
+      // `DropdownMenu`, `Sheet`, `Toast`, and
+      // `Dialog` wrappers already follow (those
+      // work). `Select` was missing it from PR #51
+      // onwards, which is why it was the only broken
+      // root.
+      expect(select).toMatch(/open:\s*undefined/)
+    })
+
+    it('declares `defaultOpen: false` in withDefaults to match radix-vue\'s internal default (v0.8.28.5)', () => {
+      // The corresponding uncontrolled-initial-value
+      // default. Matches radix-vue's own `defaultOpen`
+      // default. Without this the prop would also be
+      // cast to `false` and (more importantly) the
+      // initial render would be inconsistent with
+      // radix-vue's own behaviour.
+      expect(select).toMatch(/defaultOpen:\s*false/)
+    })
+
     it('uses explicit per-prop bindings (NOT v-bind="props") so the consumer\'s "not passed" state is unambiguous to radix-vue useVModel (v0.8.28.4)', () => {
       // Pre-v0.8.28.4 the wrapper used <SelectRoot
       // v-bind="props" + withDefaults({ modelValue:
