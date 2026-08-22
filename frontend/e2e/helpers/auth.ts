@@ -1,126 +1,104 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Auth helper for Playwright E2E tests. Logs in
-// as the admin user once per test worker and
-// persists the storageState (cookies + localStorage)
-// so subsequent tests start authenticated.
+// as the admin user ONCE per test worker via the
+// UI login form (NOT direct API call), so the
+// Pinia auth store's in-memory `accessToken` is
+// populated and the SPA treats the test as
+// authenticated on every subsequent navigation.
+//
+// Why UI login instead of direct API: the v0.8.14+
+// auth flow stores the access token ONLY in Pinia
+// (in-memory), NOT in localStorage. A direct API
+// login sets the HttpOnly refresh cookie + returns
+// the access token in the response body, but the
+// SPA's auth store stays empty and the next page
+// navigation redirects to /login. The UI form
+// submission is what calls `authStore.setAccessToken`
+// from the response.
 //
 // Usage in a spec file:
 //
 //   import { test, expect } from '@playwright/test'
-//   import { adminStorageState } from './helpers/auth'
-//
-//   test.use({ storageState: adminStorageState })
+//   import { loginAsAdmin } from './helpers/auth'
 //
 //   test('can navigate to InboundsView', async ({ page }) => {
+//     await loginAsAdmin(page)
 //     await page.goto('/inbounds')
 //     expect(page).toHaveURL(/\/inbounds$/)
 //   })
 //
-// The auth flow follows the v0.8.14 cookie-only
-// contract: POST /api/v1/auth/login with
-// `{ username, password }` returns a 200 with
-// the access-token response body AND sets the
-// `aegis_rt` HttpOnly cookie (refresh token).
-// Subsequent /api/v1/* requests carry the cookie
-// automatically. The access token is also stored
-// in the Pinia auth store's localStorage so the
-// UI's in-memory auth state hydrates on reload.
+// The helper does NOT expose a storageState —
+// each test calls `loginAsAdmin(page)` at the
+// top. Caching across tests is done by Playwright's
+// `test.use({ storageState })` if you need it
+// (the storageState here would have the refresh
+// cookie + whatever else, but the in-memory
+// access token wouldn't survive anyway).
 
-import { request, type APIRequestContext, type BrowserContext } from '@playwright/test'
-import { E2E_CREDS } from '../playwright.config'
+import { type Page, expect } from '@playwright/test'
+import { E2E_CREDS } from '../../playwright.config'
 
-const LOGIN_PATH = '/api/v1/auth/login'
+const LOGIN_PATH = 'api/v1/auth/login'  // relative (no leading slash) — the baseURL has the path prefix; leading slash would replace the base path
 
 export interface AuthFixture {
   storageState: string
 }
 
 /**
- * Logs in as admin via the public API and returns
- * the cookie-bearing storageState JSON. Caches
- * the result in a module-level promise so the
- * login runs once per test worker, not once per
- * test.
+ * Logs in via the UI login form. Navigates to the
+ * login page, fills username + password, submits,
+ * waits for the redirect to the dashboard.
  *
- * Throws if E2E_ADMIN_PASSWORD is empty (the
- * auth helper refuses to silently use a default
- * password).
+ * Throws if E2E_ADMIN_PASSWORD is empty.
  */
-let cachedStorageState: Promise<string> | null = null
-
-export async function getAdminStorageState(
-  baseURL = E2E_CREDS.baseURL,
-  username = E2E_CREDS.username,
-  password = E2E_CREDS.password,
-): Promise<string> {
-  if (cachedStorageState) return cachedStorageState
+export async function loginAsAdmin(
+  page: Page,
+  username: string = E2E_CREDS.username,
+  password: string = E2E_CREDS.password,
+): Promise<void> {
   if (!password) {
     throw new Error(
       'E2E_ADMIN_PASSWORD is not set. The Playwright ' +
         'E2E suite refuses to run with an empty admin ' +
         'password (would silently use a default that may ' +
-        'not match the real admin). Set the env var to ' +
-        'the prod 1Password password or the dev stack ' +
-        'fixture password.',
+        'not match the real admin). Set the env var.',
     )
   }
-  cachedStorageState = (async (): Promise<string> => {
-    const api: APIRequestContext = await request.newContext({
-      baseURL,
-      storageState: { cookies: [], origins: [] },
+  // Navigate to the UI. We need the path-prefixed
+  // baseURL to land on the UI (not the decoy
+  // root). `page.goto('login')` is relative to the
+  // configured baseURL.
+  await page.goto('login')
+  // The vee-validate <Form> + <Input> pattern
+  // doesn't put `name=` on the underlying <input>.
+  // Identify inputs by their autocomplete
+  // attribute (set by the LoginView):
+  //   - autocomplete="username" → username field
+  //   - autocomplete="current-password" → password field
+  // These are stable across en / ru translations.
+  const usernameInput = page.locator('input[autocomplete="username"]').first()
+  const passwordInput = page.locator('input[autocomplete="current-password"]').first()
+  // The submit button is type=submit inside the
+  // form. Use a Playwright role-based locator
+  // (i18n-safe via the button's accessible name).
+  const submitButton = page.getByRole('button', {
+    name: /sign in|log in|войти|вход/i,
+  }).first()
+  await expect(usernameInput).toBeVisible({ timeout: 10_000 })
+  await expect(passwordInput).toBeVisible()
+  await expect(submitButton).toBeVisible()
+  await usernameInput.fill(username)
+  await passwordInput.fill(password)
+  await submitButton.click()
+  // Wait for navigation away from /login (to
+  // /dashboard or /).
+  try {
+    await page.waitForURL((url) => !url.pathname.endsWith('/login'), {
+      timeout: 15_000,
     })
-    const response = await api.post(LOGIN_PATH, {
-      data: { username, password },
-      headers: { 'Content-Type': 'application/json' },
-    })
-    if (!response.ok()) {
-      const body = await response.text().catch(() => '<unreadable>')
-      throw new Error(
-        `admin login failed: ${response.status()} ${response.statusText()}\n` +
-          `body: ${body.slice(0, 500)}\n` +
-          `baseURL: ${baseURL}`,
-      )
-    }
-    // The aegis_rt HttpOnly cookie + any non-HttpOnly
-    // cookies are now on the api.context. Save the
-    // whole storage state so the UI's in-memory
-    // auth (which reads from localStorage on
-    // bootstrap) also hydrates. For the dev stack
-    // there's no localStorage entry to save (the
-    // UI hydrates from the /me probe which uses
-    // the cookie).
-    const state = await api.storageState()
-    await api.dispose()
-    return JSON.stringify(state)
-  })()
-  return cachedStorageState
-}
-
-/**
- * Convenience: a synchronous-ish wrapper that
- * returns the JSON string. Playwright's
- * `test.use({ storageState })` accepts a string
- * (the JSON-serialised state) so this can be
- * called from the module top-level.
- */
-export const adminStorageState = getAdminStorageState()
-
-/**
- * Asserts the admin session is alive by hitting
- * /api/v1/auth/me. Throws if the cookie is gone
- * or the user was deleted between login and the
- * test run.
- */
-export async function assertAdminLoggedIn(
-  context: BrowserContext,
-  baseURL = E2E_CREDS.baseURL,
-): Promise<void> {
-  const response = await context.request.get(`${baseURL}/api/v1/auth/me`)
-  if (!response.ok()) {
-    throw new Error(
-      `admin session check failed: ${response.status()}\n` +
-        'cookie may have expired or the admin was deleted',
-    )
+  } catch (e) {
+    process.stderr.write(`[auth] login did not redirect, current url: ${page.url()}\n`)
+    throw e
   }
 }
