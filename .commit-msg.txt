@@ -1,0 +1,115 @@
+test(ui): add regression guard for the shadcn-vue animation keyframes
+
+Two test files that together prevent the
+"all dropdowns are invisible" bug from
+recurring:
+
+1. `frontend/src/assets/styles.test.ts` (Node
+   test, no jsdom) — reads the source
+   `styles.css` and asserts:
+   - `@keyframes animate-in` /
+     `@keyframes animate-out` are defined
+   - both keyframes read from the per-utility
+     `--tw-enter-*` / `--tw-exit-*` CSS
+     variables (so the fade-in-0 / zoom-in-95 /
+     slide-in-from-*-2 utility classes can
+     override them at the element level)
+   - the legacy accordion keyframes are still
+     present (guards against a "clean-up"
+     PR that removes them too)
+   - the `@theme` block has `--animate-in` /
+     `--animate-out` with the standard shadcn
+     "out-quint" easing
+     `cubic-bezier(0.16, 1, 0.3, 1)`
+   - the 10 state utility classes are
+     present (fade-in-0, fade-out-0,
+     zoom-in-95, zoom-out-95,
+     slide-in-from-{top,bottom,left,right}-2)
+   - the 2 data-attribute variant utility
+     classes are present
+     (data-[state=open]:animate-in,
+     data-[state=closed]:animate-out)
+
+   Runs in < 100 ms (single file read + a
+   dozen regex matches). Part of the existing
+   `pnpm test` run; the `frontend` CI job
+   runs it on every PR.
+
+2. `frontend/src/components/ui/Select.test.ts`
+   (Node test, no jsdom) — reads the .vue
+   SOURCE files for the shadcn-vue <Select>
+   family and asserts:
+   - <SelectContent> includes
+     `data-[state=open]:animate-in` and
+     `data-[state=closed]:animate-out` (the
+     animation trigger wiring)
+   - <SelectContent> includes all 6
+     `slide-in-from-*-2` utilities + the
+     `fade-in-0` and `zoom-in-95` from-state
+     utilities
+   - <SelectContent> wraps the content in
+     <SelectPortal> (the Teleport)
+   - <Select> forwards all SelectRootProps
+     via `v-bind="props"` (so v-model:open
+     on the consumer side wires through)
+   - <Select> emits `update:modelValue`
+   - <SelectItem> wraps in <RxSelectItem>
+     and includes `focus:bg-accent`
+   - <SelectTrigger> wraps in <RxSelectTrigger>
+     and includes `focus:ring-1 focus:ring-ring`
+
+   Originally written as a jsdom mount test
+   (mount <Select>, open via v-model:open,
+   assert SelectContent is in the DOM with the
+   expected className + data-state). Failed
+   in CI because radix-vue's Teleport +
+   Floating UI popper positioning + Presence
+   exit-animation keep-alive do not initialise
+   cleanly in jsdom (the same fragility the
+   PR #270 dialog tests work around with the
+   `uiStubs` render-function shims). Source-level
+   assertions catch the same regression class
+   (someone changes the SelectContent className
+   to drop `animate-in` or the
+   `data-[state=open]:` prefix) without the
+   jsdom mount flakiness.
+
+The two files together cover the structural
+CSS contract AND the Vue-component className
+contract. They would catch any of the
+following regressions:
+
+- A future commit removes the
+  `@keyframes animate-in` /
+  `@keyframes animate-out` definitions
+- A future commit removes the 10 state
+  utility classes
+- A future commit removes the
+  `--animate-in` / `--animate-out` tokens
+  from `@theme`
+- A future commit renames the data-attribute
+  variant utility classes
+- A future commit changes the
+  <SelectContent> className to drop
+  `animate-in` / `fade-in-0` / `zoom-in-95`
+  or the `data-[state=open]:` /
+  `data-[state=closed]:` prefix
+- A future commit changes <Select> to no
+  longer `v-bind="props"` to <SelectRoot>
+  (would silently break v-model:open)
+
+The actual visual effect (opacity 1 at the
+resting state after the entrance animation
+runs) requires a real CSS engine and is out
+of scope for jsdom. A Playwright E2E test
+could cover that, but Playwright is not
+currently set up in this project (would be a
+1-2 day setup).
+
+Bug origin: the Tailwind v3 -> v4 migration
+(PR B of the frontend-deps batch, v0.8.11
+era) dropped the `tailwindcss-animate` plugin
+and inlined only the two accordion keyframes.
+The 7 other keyframes (the ones every
+shadcn-vue primitive uses) were forgotten.
+Fixed in PR #280.
