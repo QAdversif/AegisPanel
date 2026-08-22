@@ -68,6 +68,82 @@
   to { height: 0; }
 }
 
+/* Entrance / exit keyframes for the shadcn-vue
+ * primitives (Select, Dialog, Sheet, Popover,
+ * Tooltip, DropdownMenu, Accordion content, etc.).
+ *
+ * The `data-[state=open]:animate-in fade-in-0
+ *  zoom-in-95 data-[side=bottom]:slide-in-from-top-2`
+ * pattern in each primitive's <Content> component
+ * sets a *from* state via fade-in-0 / zoom-in-95 /
+ * slide-in-from-top-2 (which are plain utility
+ * classes — opacity: 0, scale: 0.95, translateY: -8px
+ * respectively) and triggers the `animate-in`
+ * keyframe via the data-attribute selector. The
+ * keyframe interpolates from those per-utility
+ * `--tw-enter-*` variables to the resting state
+ * (opacity 1, scale 1, translate 0).
+ *
+ * Without these keyframes the *from* state is the
+ * resting state of the element, but the *animation*
+ * never runs, so the element sits at opacity 0
+ * forever — the popup is in the DOM (radix-vue
+ * mounted it) but invisible. This is the long-
+ * standing "all dropdowns broken" bug the operator
+ * reported post-v0.8.28 (was present since the
+ * Tailwind v3 -> v4 migration dropped the
+ * `tailwindcss-animate` plugin and only inlined
+ * the two accordion keyframes; the other 7
+ * keyframes from `tailwindcss-animate` were
+ * forgotten).
+ *
+ * The keyframe contract follows the upstream
+ * `tailwindcss-animate` v1.0.7 (the last release
+ * before the v4 migration). The per-utility
+ * `--tw-enter-*` / `--tw-exit-*` variables are
+ * set by the matching `fade-in-0` / `zoom-in-95` /
+ * `slide-in-from-*` utility classes.
+ */
+@keyframes animate-in {
+  from {
+    opacity: var(--tw-enter-opacity, 1);
+    transform: translate3d(
+        var(--tw-enter-translate-x, 0),
+        var(--tw-enter-translate-y, 0),
+        0
+      )
+      scale3d(
+        var(--tw-enter-scale, 1),
+        var(--tw-enter-scale, 1),
+        var(--tw-enter-scale, 1)
+      );
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+}
+
+@keyframes animate-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+  to {
+    opacity: var(--tw-exit-opacity, 1);
+    transform: translate3d(
+        var(--tw-exit-translate-x, 0),
+        var(--tw-exit-translate-y, 0),
+        0
+      )
+      scale3d(
+        var(--tw-exit-scale, 1),
+        var(--tw-exit-scale, 1),
+        var(--tw-exit-scale, 1)
+      );
+  }
+}
+
 @theme {
   /* shadcn-vue convention: every colour is a CSS
    * variable so theming is a single CSS rule
@@ -110,6 +186,99 @@
   /* shadcn-vue's accordion / collapsible animations */
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  /* shadcn-vue's entrance / exit animations
+   * (Select, Dialog, Sheet, Popover, Tooltip,
+   * DropdownMenu). Drives the .animate-in /
+   * .animate-out utility classes below. The
+   * `cubic-bezier(0.16, 1, 0.3, 1)` is the
+   * upstream tailwindcss-animate "out-quint"
+   * easing — the standard shadcn easing.
+   */
+  --animate-in: animate-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-out: animate-out 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Entrance / exit utility classes for the shadcn-vue
+ * primitives. The two animation-utility classes
+ * (`animate-in` / `animate-out`) trigger the
+ * corresponding `@keyframes`. The state-utility
+ * classes (`fade-in-0`, `zoom-in-95`, etc.) set
+ * the per-utility CSS variables that the
+ * keyframe reads. The data-attribute selector
+ * variant on `animate-in` / `animate-out`
+ * (`data-[state=open]:animate-in` /
+ * `data-[state=closed]:animate-out`) is what
+ * radix-vue's <Content> components use to
+ * trigger the animation when the popup
+ * opens / closes.
+ *
+ * Tailwind v4 picks up these rules via the
+ * normal CSS-cascade (no plugin needed).
+ */
+@layer utilities {
+  .animate-in {
+    animation: var(--animate-in);
+  }
+
+  .animate-out {
+    animation: var(--animate-out);
+  }
+
+  /* The data-attribute variants are how radix-vue
+   * actually invokes the animation. We list them
+   * explicitly because Tailwind v4's data-attribute
+   * variant generator would create the same
+   * rules, but the underlying `animate-in` class
+   * here is referenced via the `--animate-in`
+   * token, not a direct `animation` shorthand.
+   */
+  .data-\[state\=open\]\:animate-in[data-state="open"] {
+    animation: var(--animate-in);
+  }
+
+  .data-\[state\=closed\]\:animate-out[data-state="closed"] {
+    animation: var(--animate-out);
+  }
+
+  /* The "from" state of the entrance animation.
+   * Each class sets one CSS variable that the
+   * @keyframes animate-in reads. The 0/95/2
+   * values are the upstream tailwindcss-animate
+   * defaults (Tailwind units, so 0.5rem for
+   * slide-in-from-*-2).
+   */
+  .fade-in-0 {
+    --tw-enter-opacity: 0;
+  }
+
+  .fade-out-0 {
+    --tw-exit-opacity: 0;
+  }
+
+  .zoom-in-95 {
+    --tw-enter-scale: 0.95;
+  }
+
+  .zoom-out-95 {
+    --tw-exit-scale: 0.95;
+  }
+
+  .slide-in-from-top-2 {
+    --tw-enter-translate-y: -0.5rem;
+  }
+
+  .slide-in-from-bottom-2 {
+    --tw-enter-translate-y: 0.5rem;
+  }
+
+  .slide-in-from-left-2 {
+    --tw-enter-translate-x: -0.5rem;
+  }
+
+  .slide-in-from-right-2 {
+    --tw-enter-translate-x: 0.5rem;
+  }
 }
 
 @layer base {
