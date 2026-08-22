@@ -1,115 +1,116 @@
-test(ui): add regression guard for the shadcn-vue animation keyframes
+test(e2e): add Playwright setup + v0.8.28 dropdowns regression guard
 
-Two test files that together prevent the
-"all dropdowns are invisible" bug from
-recurring:
+Sets up the Playwright E2E test infrastructure
+for the admin UI and adds the first spec file:
+the v0.8.28 dropdowns-regression test.
 
-1. `frontend/src/assets/styles.test.ts` (Node
-   test, no jsdom) — reads the source
-   `styles.css` and asserts:
-   - `@keyframes animate-in` /
-     `@keyframes animate-out` are defined
-   - both keyframes read from the per-utility
-     `--tw-enter-*` / `--tw-exit-*` CSS
-     variables (so the fade-in-0 / zoom-in-95 /
-     slide-in-from-*-2 utility classes can
-     override them at the element level)
-   - the legacy accordion keyframes are still
-     present (guards against a "clean-up"
-     PR that removes them too)
-   - the `@theme` block has `--animate-in` /
-     `--animate-out` with the standard shadcn
-     "out-quint" easing
-     `cubic-bezier(0.16, 1, 0.3, 1)`
-   - the 10 state utility classes are
-     present (fade-in-0, fade-out-0,
-     zoom-in-95, zoom-out-95,
-     slide-in-from-{top,bottom,left,right}-2)
-   - the 2 data-attribute variant utility
-     classes are present
-     (data-[state=open]:animate-in,
-     data-[state=closed]:animate-out)
+### What's in this PR
 
-   Runs in < 100 ms (single file read + a
-   dozen regex matches). Part of the existing
-   `pnpm test` run; the `frontend` CI job
-   runs it on every PR.
+- `frontend/playwright.config.ts` - Playwright
+  config. Uses BASE_URL from env (default
+  http://localhost:5173 = local vite dev
+  server), single chromium project, serial
+  execution (1 worker), 0 retries, screenshot
+  + trace on failure.
+- `frontend/e2e/helpers/auth.ts` - admin login
+  helper. Caches the storageState in a
+  module-level promise so the login runs ONCE
+  per test worker (not once per test). The
+  helper throws on empty E2E_ADMIN_PASSWORD
+  (refuses to silently use a default that may
+  not match the real admin).
+- `frontend/e2e/01-auth.spec.ts` - 3 tests:
+  1. `lands on the dashboard after login` -
+     smoke test that the auth flow works
+     end-to-end
+  2. `dropdowns are visible (regression for the
+     v0.8.28 "all dropdowns are invisible" bug)`
+     - the actual regression guard. Navigates
+     to Inbounds, opens the Create dialog,
+     clicks the protocol <Select> trigger,
+     asserts the listbox (popup) is visible
+     (Playwright's toBeVisible checks computed
+     style, not just DOM presence) and has a
+     non-zero bounding box, asserts a <option>
+     is visible
+  3. `clears the session and redirects to
+     /login on logout` - smoke test for the
+     logout flow
+- `frontend/package.json` - adds @playwright/test
+  ^1.49.1 devDep + 5 new npm scripts:
+  - `e2e` - run the suite (uses BASE_URL env
+    or default http://localhost:5173)
+  - `e2e:headed` - headed mode for debugging
+  - `e2e:debug` - debug mode (pauses on failure)
+  - `e2e:prod` - run against the prod panel
+    (E2E_BASE_URL must be set; E2E_NO_WEBSERVER=1
+    is implied)
+  - `e2e:install` - install chromium + deps
+- `.github/workflows/e2e.yml` - CI workflow
+  that runs the suite. Triggered by
+  workflow_dispatch (manual) and on a daily
+  cron (03:00 UTC) to catch prod-side
+  regressions. Supports both the prod path
+  (default) and the dev docker-compose stack
+  (via the `compose` input).
+  Requires the GitHub Actions secret
+  `E2E_ADMIN_PASSWORD` (the prod admin
+  password from 1Password) + `PANEL_BASE_URL`
+  (the prod panel base URL).
 
-2. `frontend/src/components/ui/Select.test.ts`
-   (Node test, no jsdom) — reads the .vue
-   SOURCE files for the shadcn-vue <Select>
-   family and asserts:
-   - <SelectContent> includes
-     `data-[state=open]:animate-in` and
-     `data-[state=closed]:animate-out` (the
-     animation trigger wiring)
-   - <SelectContent> includes all 6
-     `slide-in-from-*-2` utilities + the
-     `fade-in-0` and `zoom-in-95` from-state
-     utilities
-   - <SelectContent> wraps the content in
-     <SelectPortal> (the Teleport)
-   - <Select> forwards all SelectRootProps
-     via `v-bind="props"` (so v-model:open
-     on the consumer side wires through)
-   - <Select> emits `update:modelValue`
-   - <SelectItem> wraps in <RxSelectItem>
-     and includes `focus:bg-accent`
-   - <SelectTrigger> wraps in <RxSelectTrigger>
-     and includes `focus:ring-1 focus:ring-ring`
+### Why this PR is just the setup + 1 spec
 
-   Originally written as a jsdom mount test
-   (mount <Select>, open via v-model:open,
-   assert SelectContent is in the DOM with the
-   expected className + data-state). Failed
-   in CI because radix-vue's Teleport +
-   Floating UI popper positioning + Presence
-   exit-animation keep-alive do not initialise
-   cleanly in jsdom (the same fragility the
-   PR #270 dialog tests work around with the
-   `uiStubs` render-function shims). Source-level
-   assertions catch the same regression class
-   (someone changes the SelectContent className
-   to drop `animate-in` or the
-   `data-[state=open]:` prefix) without the
-   jsdom mount flakiness.
+The full test suite (12+ views, ~40+ scenarios
+in total) is too big for one PR. The plan is
+to ship the setup first so the user can verify
+the infrastructure works on the live prod panel
+(navigate to Inbounds, click Create, assert
+the protocol dropdown is visible) before
+committing to the full test matrix in
+follow-up PRs:
 
-The two files together cover the structural
-CSS contract AND the Vue-component className
-contract. They would catch any of the
-following regressions:
+  - PR-A (this): setup + auth + dashboard +
+    dropdowns regression guard
+  - PR-B: read-only views (Profile, Settings,
+    Audits, Backups, Subscription)
+  - PR-C: form-heavy views with selects
+    (Inbounds, Hosts)
+  - PR-D: Nodes (the 4 dialogs - most complex)
+  - PR-E: Users, Plans, Webhooks
 
-- A future commit removes the
-  `@keyframes animate-in` /
-  `@keyframes animate-out` definitions
-- A future commit removes the 10 state
-  utility classes
-- A future commit removes the
-  `--animate-in` / `--animate-out` tokens
-  from `@theme`
-- A future commit renames the data-attribute
-  variant utility classes
-- A future commit changes the
-  <SelectContent> className to drop
-  `animate-in` / `fade-in-0` / `zoom-in-95`
-  or the `data-[state=open]:` /
-  `data-[state=closed]:` prefix
-- A future commit changes <Select> to no
-  longer `v-bind="props"` to <SelectRoot>
-  (would silently break v-model:open)
+The dropdowns-regression test in this PR is
+the highest-value test of the whole suite -
+it directly guards against the v0.8.28 bug
+that started this whole thread.
 
-The actual visual effect (opacity 1 at the
-resting state after the entrance animation
-runs) requires a real CSS engine and is out
-of scope for jsdom. A Playwright E2E test
-could cover that, but Playwright is not
-currently set up in this project (would be a
-1-2 day setup).
+### Run it locally (against the prod panel)
 
-Bug origin: the Tailwind v3 -> v4 migration
-(PR B of the frontend-deps batch, v0.8.11
-era) dropped the `tailwindcss-animate` plugin
-and inlined only the two accordion keyframes.
-The 7 other keyframes (the ones every
-shadcn-vue primitive uses) were forgotten.
-Fixed in PR #280.
+```
+cd frontend
+pnpm install
+pnpm exec playwright install --with-deps chromium
+E2E_BASE_URL=https://<prod-host>/<sub-path>/ \
+E2E_ADMIN_PASSWORD=<password> \
+  pnpm e2e:prod
+```
+
+### Run it locally (against the dev stack)
+
+```
+cd deploy/docker && cp .env.example .env
+docker compose -f docker-compose.dev.yml up -d
+cd ../../backend && make run  # in another terminal
+cd ../frontend && pnpm dev   # in another terminal
+cd frontend && pnpm e2e
+```
+
+### Out of scope (deferred)
+
+- A per-view test for every admin view (12+
+  spec files, ~40+ tests). Will land in PRs
+  B-E as outlined above.
+- WebKit / Firefox projects. The admin UI is
+  Chromium-only by design.
+- Visual regression snapshots. Out of scope;
+  can be added later via Playwright's
+  `toHaveScreenshot()` matcher.
