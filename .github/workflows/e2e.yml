@@ -1,0 +1,151 @@
+﻿name: e2e
+
+# Playwright E2E test suite for the Aegis admin
+# UI. Runs against the prod panel (the v0.8.28
+# dropdowns-regression guard). Triggered:
+#   - manually via workflow_dispatch
+#   - nightly at 03:00 UTC (catches prod-side
+#     regressions that the unit / integration
+#     tests miss)
+#
+# This workflow does NOT run on every PR because
+# it depends on the prod panel being reachable
+# from the GitHub Actions runner (the runner is
+# on the public internet) AND on a known admin
+# password (stored in GitHub Actions secrets).
+# The vitest unit tests + the regression tests
+# in styles.test.ts / Select.test.ts cover the
+# build-time contract; this workflow covers the
+# runtime / visual contract.
+#
+# Required GitHub Actions secrets:
+#   E2E_ADMIN_PASSWORD   the prod admin password
+#                         (from 1Password "AegisPanel
+#                         / Live / admin")
+#
+# The dev docker-compose stack path (with a
+# fresh seed admin) is supported via the
+# `compose` input - set to 'true' to bring up
+# the dev stack first (postgres + redis + nats +
+# the Go panel) and run the suite against
+# http://localhost:8080. Default is 'false' (run
+# against prod).
+
+on:
+  workflow_dispatch:
+    inputs:
+      compose:
+        description: 'Bring up the dev docker-compose stack first'
+        type: boolean
+        default: false
+  schedule:
+    # Nightly at 03:00 UTC. Catches prod-side
+    # regressions (Caddyfile overrides, cert
+    # renewals, the bfcache behaviour, etc.) that
+    # the build-time contract tests miss.
+    - cron: '0 3 * * *'
+
+# Cancel any in-flight run for the same ref.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The prod panel URL is the placeholder
+  # `<prod-host>/<sub-path>`; the operator
+  # overrides it via the E2E_BASE_URL secret
+  # at workflow time. We do NOT hardcode the
+  # public hostname in this workflow file
+  # because the secret-scan pattern blocks
+  # it (see AGENTS.md "Banned patterns").
+  # The default below points at the dev
+  # docker-compose stack (used when the
+  # `compose` input is true).
+  E2E_BASE_URL: ${{ inputs.compose == true && 'http://localhost:8080' || format('https://{0}', secrets.PANEL_BASE_URL) }}
+  E2E_NO_WEBSERVER: '1'
+  E2E_ADMIN_USERNAME: admin
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install frontend deps + Playwright
+        run: |
+          cd frontend
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Bring up dev stack (conditional)
+        if: ${{ inputs.compose == true }}
+        run: |
+          cp deploy/docker/.env.example deploy/docker/.env
+          # Patch the .env to use the dev seed
+          # admin password (aegis-fixture-admin-password)
+          # - the same one the Go CLI uses for the
+          # dev fixture admin.
+          sed -i 's/^AEGIS_JWT_SECRET=.*/AEGIS_JWT_SECRET=dev-stack-jwt-secret-32-bytes-min/' deploy/docker/.env
+          cd deploy/docker
+          docker compose -f docker-compose.dev.yml up -d
+          # Wait for the Go panel to be ready.
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8080/api/v1/health 2>/dev/null; then
+              echo "panel ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run Playwright
+        run: |
+          cd frontend
+          pnpm e2e
+        env:
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+          E2E_BASE_URL: ${{ env.E2E_BASE_URL }}
+          E2E_NO_WEBSERVER: '1'
+          E2E_ADMIN_USERNAME: admin
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: frontend/test-results/
+          retention-days: 3
+
+      - name: Tear down dev stack (conditional)
+        if: ${{ always() && inputs.compose == true }}
+        run: |
+          cd deploy/docker
+          docker compose -f docker-compose.dev.yml down -v
+        ignore-error: true
