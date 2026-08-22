@@ -99,17 +99,40 @@
  *
  * The keyframe contract follows the upstream
  * `tailwindcss-animate` v1.0.7 (the last release
- * before the v4 migration). The per-utility
- * `--tw-enter-*` / `--tw-exit-*` variables are
- * set by the matching `fade-in-0` / `zoom-in-95` /
- * `slide-in-from-*` utility classes.
+ * before the v4 migration), with one
+ * v0.8.28.2 extension: the `--tw-rest-translate-x`
+ * / `--tw-rest-translate-y` CSS variables let a
+ * caller preserve an existing static transform
+ * (like the DialogContent's `translate(-50%, -50%)`
+ * for centring) across the animation. The keyframe
+ * `to` state is
+ *   transform: translate(--tw-rest-*, 0) scale(1)
+ * (default 0,0 = the upstream behaviour). The
+ * `from` state adds the per-utility
+ * `--tw-enter-*` / `--tw-exit-*` to the rest
+ * translate so the entrance / exit offset is
+ * relative to the resting position. Components
+ * that use a transform-based centring scheme
+ * (DialogContent) set
+ *   --tw-rest-translate-x: -50%;
+ *   --tw-rest-translate-y: -50%;
+ * to keep the panel anchored to the viewport
+ * centre through the animation cycle. Components
+ * that anchor via `top` / `right` / `bottom` /
+ * `left` (Sheet) leave the variable unset and
+ * keep the original upstream behaviour.
+ *
+ * The per-utility `--tw-enter-*` / `--tw-exit-*`
+ * variables are set by the matching
+ * `fade-in-0` / `zoom-in-95` / `slide-in-from-*`
+ * utility classes.
  */
 @keyframes animate-in {
   from {
     opacity: var(--tw-enter-opacity, 1);
     transform: translate3d(
-        var(--tw-enter-translate-x, 0),
-        var(--tw-enter-translate-y, 0),
+        calc(var(--tw-rest-translate-x, 0) + var(--tw-enter-translate-x, 0)),
+        calc(var(--tw-rest-translate-y, 0) + var(--tw-enter-translate-y, 0)),
         0
       )
       scale3d(
@@ -120,20 +143,30 @@
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+    transform: translate3d(
+        var(--tw-rest-translate-x, 0),
+        var(--tw-rest-translate-y, 0),
+        0
+      )
+      scale3d(1, 1, 1);
   }
 }
 
 @keyframes animate-out {
   from {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+    transform: translate3d(
+        var(--tw-rest-translate-x, 0),
+        var(--tw-rest-translate-y, 0),
+        0
+      )
+      scale3d(1, 1, 1);
   }
   to {
     opacity: var(--tw-exit-opacity, 1);
     transform: translate3d(
-        var(--tw-exit-translate-x, 0),
-        var(--tw-exit-translate-y, 0),
+        calc(var(--tw-rest-translate-x, 0) + var(--tw-exit-translate-x, 0)),
+        calc(var(--tw-rest-translate-y, 0) + var(--tw-exit-translate-y, 0)),
         0
       )
       scale3d(
