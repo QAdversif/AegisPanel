@@ -86,12 +86,50 @@ describe('shadcn-vue <Select> family (regression guard for the v0.8.28 dropdowns
   })
 
   describe('<Select>', () => {
-    it('forwards all SelectRootProps via v-bind (so v-model:open on <Select> wires to <SelectRoot>)', () => {
-      // The minimal contract: <SelectRoot v-bind="props" ...>
-      // ensures any prop on <Select> (including the
-      // controlled `open` prop) is forwarded to the
-      // radix-vue primitive.
-      expect(select).toMatch(/<SelectRoot[^>]*v-bind="props"/)
+    it('uses explicit per-prop bindings (NOT v-bind="props") so the consumer\'s "not passed" state is unambiguous to radix-vue useVModel (v0.8.28.4)', () => {
+      // Pre-v0.8.28.4 the wrapper used <SelectRoot
+      // v-bind="props" + withDefaults({ modelValue:
+      // undefined, defaultValue: undefined }). The
+      // v-bind spread forced `modelValue: undefined`
+      // onto the radix-vue SelectRoot even when the
+      // consumer did not pass it, which radix-vue
+      // 1.9.17's `useVModel` can interpret as a
+      // deliberate assignment (controlled-mode path)
+      // instead of "prop not passed" (uncontrolled
+      // mode). The 0.8.28-era click-handler regression
+      // manifested as the SelectRoot's onPointerdown
+      // firing but the popup never mounting — the
+      // controlled-vs-uncontrolled ambiguity was one
+      // of the two suspect root causes (the other
+      // being the keyframe contract, reverted in
+      // v0.8.28.3 because it caused a visible dialog
+      // mount glitch). The explicit per-prop bindings
+      // make the prop-not-passed state unambiguous:
+      // when the consumer does not pass `modelValue`,
+      // Vue's defaulting gives us `undefined`, the
+      // wrapper does `:model-value="undefined"`, and
+      // radix-vue's `useVModel` enters uncontrolled
+      // mode via `passive: e.modelValue === void 0`.
+      expect(select).not.toMatch(/<SelectRoot[^>]*v-bind="props"/)
+    })
+
+    it('forwards each SelectRootProp explicitly to <SelectRoot> (no prop can be silently dropped)', () => {
+      // Regression guard against a future "let me
+      // re-introduce v-bind for simplicity" change
+      // that would re-introduce the v0.8.28-era
+      // click-handler regression. Every prop the
+      // radix-vue SelectRoot accepts must be
+      // explicitly forwarded.
+      expect(select).toMatch(/<SelectRoot\b/)
+      expect(select).toMatch(/:model-value="props\.modelValue"/)
+      expect(select).toMatch(/:default-value="props\.defaultValue"/)
+      expect(select).toMatch(/:open="props\.open"/)
+      expect(select).toMatch(/:default-open="props\.defaultOpen"/)
+      expect(select).toMatch(/:dir="props\.dir"/)
+      expect(select).toMatch(/:name="props\.name"/)
+      expect(select).toMatch(/:autocomplete="props\.autocomplete"/)
+      expect(select).toMatch(/:disabled="props\.disabled"/)
+      expect(select).toMatch(/:required="props\.required"/)
     })
 
     it('emits update:modelValue (so v-model on the consumer side picks up value changes)', () => {
@@ -101,6 +139,18 @@ describe('shadcn-vue <Select> family (regression guard for the v0.8.28 dropdowns
       // work. If this is removed the value is silently
       // never persisted.
       expect(select).toMatch(/emit\(['"]update:modelValue['"]/)
+    })
+
+    it('emits update:open (so v-model:open on the consumer side keeps the controlled state in sync, v0.8.28.4)', () => {
+      // The previous wrapper declared the event via
+      // defineEmits<SelectRootEmits>() but only
+      // forwarded update:model-value in the template.
+      // Any consumer using v-model:open on <Select>
+      // would have a broken controlled-state loop.
+      // Not used in the v0.1.0 views, but the API
+      // is now consistent.
+      expect(select).toMatch(/emit\(['"]update:open['"]/)
+      expect(select).toMatch(/@update:open=/)
     })
   })
 
