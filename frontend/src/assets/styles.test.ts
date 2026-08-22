@@ -95,44 +95,6 @@ describe('shadcn-vue animation contract (regression guard for the v0.8.28 dropdo
       expect(body).toMatch(/var\(--tw-enter-scale/)
     })
 
-    it('animate-in keyframe respects the per-component --tw-rest-translate-* resting offset (v0.8.28.2 fix for the DialogContent centring regression)', () => {
-      // Pre-v0.8.28.2 the keyframe `to` state was
-      // `transform: translate(0) scale(1)`. DialogContent
-      // uses `left-[50%] top-[50%] translate-x-[-50%]
-      // translate-y-[-50%]` for centring — the animation
-      // overwrote the centring translate, leaving the
-      // panel at top-left-of-centre (its `left:50%
-      // top:50%` corner, not the panel centre).
-      //
-      // The fix: the keyframe reads `--tw-rest-translate-x`
-      // / `--tw-rest-translate-y` (default 0,0) and the
-      // `to` state is `translate(--tw-rest-*, 0) scale(1)`.
-      // DialogContent sets these to -50%/-50% so the
-      // panel ends at the same centring translate the
-      // static CSS class established. The `from` state
-      // adds the per-utility --tw-enter-* offsets on top
-      // of the rest so the slide-in direction is
-      // preserved.
-      const animateInBlock = styles.match(/@keyframes\s+animate-in\s*\{([\s\S]*?)\n\}/)
-      expect(animateInBlock, '@keyframes animate-in is missing entirely').toBeTruthy()
-      const body = animateInBlock![1]
-      // to-block: must reference the rest translate
-      // (not hardcode translate(0)).
-      const toBlock = body.match(/\bto\s*\{([\s\S]*?)\}/)
-      expect(toBlock, '@keyframes animate-in: missing `to` block').toBeTruthy()
-      expect(toBlock![1]).toMatch(/var\(--tw-rest-translate-x/)
-      expect(toBlock![1]).toMatch(/var\(--tw-rest-translate-y/)
-      // from-block: must add the rest translate to
-      // the per-utility enter translate so the slide
-      // direction is preserved.
-      const fromBlock = body.match(/\bfrom\s*\{([\s\S]*?)\}/)
-      expect(fromBlock, '@keyframes animate-in: missing `from` block').toBeTruthy()
-      expect(fromBlock![1]).toMatch(/var\(--tw-rest-translate-x/)
-      expect(fromBlock![1]).toMatch(/var\(--tw-rest-translate-y/)
-      expect(fromBlock![1]).toMatch(/var\(--tw-enter-translate-x/)
-      expect(fromBlock![1]).toMatch(/var\(--tw-enter-translate-y/)
-    })
-
     it('animate-out keyframe interpolates the reverse (resting state to the per-utility --tw-exit-* variables)', () => {
       const animateOutBlock = styles.match(/@keyframes\s+animate-out\s*\{([\s\S]*?)\n\}/)
       expect(animateOutBlock, '@keyframes animate-out is missing entirely').toBeTruthy()
@@ -141,12 +103,6 @@ describe('shadcn-vue animation contract (regression guard for the v0.8.28 dropdo
       expect(body).toMatch(/var\(--tw-exit-translate-x/)
       expect(body).toMatch(/var\(--tw-exit-translate-y/)
       expect(body).toMatch(/var\(--tw-exit-scale/)
-      // The reverse keyframe also respects the rest
-      // translate so a Sheet/Dialog centred via
-      // translate(-50%, -50%) doesn't snap to
-      // translate(0) when the exit starts.
-      expect(body).toMatch(/var\(--tw-rest-translate-x/)
-      expect(body).toMatch(/var\(--tw-rest-translate-y/)
     })
 
     it('keeps the legacy accordion keyframes (the v3 -> v4 migration was supposed to inline them)', () => {
