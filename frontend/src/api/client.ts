@@ -135,20 +135,38 @@ async function refreshTokens(): Promise<string | null> {
     // reads the cookie via http.Cookie. The body
     // backwards-compat path is a v0.8.0-v0.8.12
     // affordance, not the v0.8.13+ canonical path.
+    //
+    // v0.8.28.6: the response interceptor above
+    // (`response.use` at line ~196) camelizes every
+    // success body, including this one. Reading
+    // `data.accessToken` (camelCase) — NOT
+    // `data.access_token` — is load-bearing; the
+    // pre-v0.8.28.6 snake_case destructure
+    // (`data.access_token`) silently returned
+    // `undefined` (the keys had already been
+    // camelized), which set the auth store to
+    // `{accessToken: undefined, expiresAt: undefined}`,
+    // failed the `if (newToken)` truthy-check in the
+    // 401 interceptor's error branch, cleared the
+    // store, and bounced the user to /login on
+    // every access-token expiry (15 min TTL) even
+    // when the HttpOnly refresh cookie was still
+    // valid. Symptom: any tab left open for >15 min
+    // logged the user out on the next API call.
     const { data } = await api.post<{
-      access_token: string
-      expires_at: string
+      accessToken: string
+      expiresAt: string
     }>('/api/v1/auth/refresh', null)
     // Push the new access token into the in-memory
     // store. The Pinia ref is the only authoritative
     // source of the access token — the localStorage
     // surface was deleted in v0.8.13+.
     useAuthStore().setAccessToken({
-      accessToken: data.access_token,
-      expiresAt: data.expires_at,
+      accessToken: data.accessToken,
+      expiresAt: data.expiresAt,
     })
-    flushRefreshQueue(data.access_token)
-    return data.access_token
+    flushRefreshQueue(data.accessToken)
+    return data.accessToken
   } catch {
     // Refresh failed: the cookie is gone or
     // revoked. Clear the store and surface a clear
@@ -224,13 +242,45 @@ api.interceptors.response.use(
       original._retried = true
       const newToken = await refreshTokens()
       if (newToken) {
+        // Stamp the new bearer onto the original
+        // request's headers and retry it. The
+        // `original.headers` field is typed as
+        // `RawAxiosRequestHeaders | AxiosHeaders | undefined`
+        // in axios v1.x (the response interceptor sees
+        // the original request config, not the
+        // InternalAxiosRequestConfig that dispatch
+        // normalises). The assignment + Record cast
+        // works for both RawAxiosRequestHeaders
+        // (plain object — direct field write) and
+        // AxiosHeaders (the cast is a no-op since
+        // AxiosHeaders indexer is also Record-shaped
+        // for `Authorization`). v0.8.28.6: removed
+        // the duplicate `auth.clear()` call in the
+        // catch path that followed this `if` block —
+        // the refresh-failure handler in
+        // `refreshTokens()` already clears the store,
+        // fires the latched "session expired" toast,
+        // and pushes the router to /login.
         original.headers = original.headers ?? {}
         ;(original.headers as Record<string, string>).Authorization = `Bearer ${newToken}`
         return api.request(original)
       }
-      // Refresh failed: drop tokens, kick the auth
-      // store so the UI re-routes to /login.
-      useAuthStore().clear()
+      // Refresh failed. `refreshTokens()` already
+      // called `auth.clear()` + fired the latched
+      // "session expired" toast + pushed the router
+      // to /login (with the original URL in
+      // `?redirect=`). Do NOT call `auth.clear()` a
+      // second time here — the v0.8.26+ latch in
+      // `sessionExpiredNotified` makes the second
+      // clear a no-op, but the second
+      // `router.push({ name: 'login' })` was
+      // firing twice in the failure path and
+      // double-pushing the router history. The
+      // 401 just falls through to `Promise.reject`
+      // and the per-call catch in the view handles
+      // the toast (or silently swallows if the
+      // `sessionExpiredNotified` toast is already on
+      // screen).
     }
 
     return Promise.reject(error)
