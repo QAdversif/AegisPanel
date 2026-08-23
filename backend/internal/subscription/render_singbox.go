@@ -133,7 +133,13 @@ func (s *Service) RenderSingbox(ctx context.Context, u *User, eps []ResolvedEndp
 	// fallback to params in every per-endpoint
 	// builder). A nil `u` is the test-friendly
 	// baseline (no user → no per-user lookup).
-	s.precomputeUserCreds(ctx, u)
+	//
+	// v0.8.28.8 (#289/C3): the map is RENDER-LOCAL —
+	// precomputeUserCreds returns it instead of
+	// writing a shared Service field, so concurrent
+	// renders for different users cannot race on (or
+	// cross-leak through) the map.
+	userCreds := s.precomputeUserCreds(ctx, u)
 	if len(eps) > 0 {
 		// Apply format variables + wildcard salt
 		// once, before the per-endpoint builder.
@@ -148,7 +154,7 @@ func (s *Service) RenderSingbox(ctx context.Context, u *User, eps []ResolvedEndp
 	}
 	doc := singboxDoc{Outbounds: make([]singboxOutbound, 0, len(eps))}
 	for _, ep := range eps {
-		out, err := renderSingboxOutbound(ep, s.userCredFor(ep.Inbound.ID))
+		out, err := renderSingboxOutbound(ep, userCredFor(userCreds, ep.Inbound.ID))
 		if err != nil {
 			// A single unrenderable endpoint
 			// must not poison the whole

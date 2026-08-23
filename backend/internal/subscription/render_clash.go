@@ -116,7 +116,13 @@ type clashDoc struct {
 // Phase 1 / Phase 2 contract — the clash renderer
 // is the same pattern.
 func (s *Service) RenderClash(ctx context.Context, u *User, eps []ResolvedEndpoint) ([]byte, error) {
-	s.precomputeUserCreds(ctx, u)
+	// v0.8.28.8 (#289/C3): the credential map is
+	// RENDER-LOCAL — see RenderSingbox for the full
+	// rationale (concurrent renders for different
+	// users raced on the old shared Service field and
+	// could cross-leak credentials into each other's
+	// payloads).
+	userCreds := s.precomputeUserCreds(ctx, u)
 	if len(eps) > 0 {
 		// Apply format variables + wildcard salt
 		// once, before the per-endpoint builder.
@@ -131,7 +137,7 @@ func (s *Service) RenderClash(ctx context.Context, u *User, eps []ResolvedEndpoi
 	}
 	doc := clashDoc{Proxies: make([]clashProxy, 0, len(eps))}
 	for _, ep := range eps {
-		proxy, err := renderClashProxy(ep, s.userCredFor(ep.Inbound.ID))
+		proxy, err := renderClashProxy(ep, userCredFor(userCreds, ep.Inbound.ID))
 		if err != nil {
 			// A single unrenderable endpoint
 			// must not poison the whole

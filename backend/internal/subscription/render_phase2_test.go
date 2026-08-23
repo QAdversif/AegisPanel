@@ -21,7 +21,9 @@ package subscription
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,5 +221,91 @@ func TestRenderSingbox_Phase2_OtherUserCredNotLeaked(t *testing.T) {
 	body := string(out)
 	if strings.Contains(body, otherUserCred) {
 		t.Errorf("RenderSingbox output contains another user's credential — auth boundary leak:\n%s", body)
+	}
+}
+
+// TestRender_ConcurrentUsers_NoCrossLeak pins the
+// v0.8.28.8 (#289/C3) fix: the per-render credential
+// map is RENDER-LOCAL.
+//
+// Pre-fix, the credential map lived on the Service and
+// was overwritten by every Render* call. Two concurrent
+// renders for different users raced on the map (Go maps
+// are not safe for concurrent write — `go test -race`
+// flags this immediately) and, worse, the second
+// render's precompute could overwrite the first
+// render's view mid-loop, putting user B's credential
+// into user A's subscription payload.
+//
+// This test hammers both renderers with interleaved
+// renders for two users who each hold a credential on
+// the SAME inbound, then asserts each output carries
+// only its own credential. Run under `-race` in CI;
+// pre-fix it fails within the first few rounds (race +
+// leak), post-fix it is deterministic.
+func TestRender_ConcurrentUsers_NoCrossLeak(t *testing.T) {
+	t.Parallel()
+	svc, eps, uA, inbID := phase2Fixture(t)
+	credsSvc := credentials.NewService(credentials.NewMemoryStore())
+
+	const (
+		credA = "phase2-conc-uuid-aaaaaaaa-111111111111111111111111"
+		credB = "phase2-conc-uuid-bbbbbbbb-222222222222222222222222"
+	)
+	if _, err := credsSvc.Create(context.Background(), uA.ID, inbID, credA); err != nil {
+		t.Fatalf("seed user A credential: %v", err)
+	}
+	uB := &User{
+		ID:       uuid.MustParse("50000000-0000-0000-0000-000000000002"),
+		Username: "bob",
+		Status:   UserStatusActive,
+		ExpireAt: uA.ExpireAt,
+	}
+	if _, err := credsSvc.Create(context.Background(), uB.ID, inbID, credB); err != nil {
+		t.Fatalf("seed user B credential: %v", err)
+	}
+	svc.WithCreds(credsSvc)
+
+	const rounds = 200
+	var wg sync.WaitGroup
+	errCh := make(chan error, 4*rounds)
+	render := func(u *User, own, other string, format string) {
+		defer wg.Done()
+		var (
+			out []byte
+			err error
+		)
+		switch format {
+		case "singbox":
+			out, err = svc.RenderSingbox(context.Background(), u, eps)
+		case "clash":
+			out, err = svc.RenderClash(context.Background(), u, eps)
+		}
+		if err != nil {
+			errCh <- fmt.Errorf("%s (%s): render: %w", u.Username, format, err)
+			return
+		}
+		body := string(out)
+		if !strings.Contains(body, own) {
+			errCh <- fmt.Errorf("%s (%s): output does not contain the user's OWN credential — Phase 2 lookup broken:\n%s", u.Username, format, body)
+		}
+		if strings.Contains(body, other) {
+			errCh <- fmt.Errorf("%s (%s): output contains ANOTHER user's credential — cross-user leak (#289/C3):\n%s", u.Username, format, body)
+		}
+	}
+
+	for i := 0; i < rounds; i++ {
+		format := "singbox"
+		if i%2 == 1 {
+			format = "clash"
+		}
+		wg.Add(2)
+		go render(uA, credA, credB, format)
+		go render(uB, credB, credA, format)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
 	}
 }

@@ -120,13 +120,17 @@ type Service struct {
 	// user_inbound_credentials table (PR #167 +
 	// PR #168 + this PR). Set via WithCreds.
 	creds *credentials.Service
-	// userCreds is the per-render cache populated
-	// by pre-render helpers (see precomputeUserCreds).
-	// The per-endpoint builders read it via
-	// userCredFor. nil means "no per-render
-	// lookup" (Phase 1 fallback path).
-	userCreds map[uuid.UUID]credentials.Credential
-	now       func() time.Time
+	// v0.8.28.8 (#289/C3): the per-render credential
+	// cache MOVED OUT of the Service. The old shared
+	// `userCreds map[uuid.UUID]credentials.Credential`
+	// field was overwritten by every Render* call, so
+	// two concurrent renders for different users raced
+	// on the map AND user B's credentials could land in
+	// user A's subscription payload (cross-user auth
+	// boundary leak). It is now returned by
+	// precomputeUserCreds as a render-local value and
+	// threaded through the endpoint builders.
+	now func() time.Time
 }
 
 // NewService wires a Service. The store + the three
@@ -177,56 +181,71 @@ func (s *Service) WithCreds(svc *credentials.Service) *Service {
 	return s
 }
 
-// precomputeUserCreds populates `s.userCreds` with
-// every (user, inbound) credential the user has in
-// the per-inbound Phase 2 table. Called once per
-// render (singbox, clash, etc.) so the per-endpoint
-// builders can do an O(1) lookup without a DB hit
-// each. A nil `s.creds` (Phase 1 path) leaves the
-// cache empty — the per-endpoint builders fall
-// back to `params["uuid"]` / `["password"]`. A
-// per-render query failure (e.g. transient pg
-// blip) is logged and treated as "no per-user
-// credentials" — the same fail-soft policy as
-// the Builder's per-inbound query (PR #169).
-func (s *Service) precomputeUserCreds(ctx context.Context, u *User) {
-	s.userCreds = nil
+// precomputeUserCreds loads every (user, inbound)
+// credential the user has in the per-inbound Phase 2
+// table and returns it as a RENDER-LOCAL map.
+//
+// v0.8.28.8 (#289/C3): the map is no longer stored on
+// the Service. The previous shared field made two
+// concurrent renders for different users race on the
+// map (Go maps are not safe for concurrent write) and,
+// worse, let the second render's precompute overwrite
+// the first render's view mid-loop — user B's
+// credentials could end up inside user A's rendered
+// subscription payload.
+//
+// Called once per render (singbox, clash, etc.) so the
+// per-endpoint builders can do an O(1) lookup without a
+// DB hit each. A nil `s.creds` (Phase 1 path) returns
+// nil — the per-endpoint builders fall back to
+// `params["uuid"]` / `["password"]`. A per-render query
+// failure (e.g. transient pg blip) is logged and
+// treated as "no per-user credentials" — the same
+// fail-soft policy as the Builder's per-inbound query
+// (PR #169).
+func (s *Service) precomputeUserCreds(ctx context.Context, u *User) map[uuid.UUID]credentials.Credential {
 	if s.creds == nil || u == nil {
-		return
+		return nil
 	}
 	creds, err := s.creds.ListByUser(ctx, u.ID)
 	if err != nil {
-		// Fail-soft: log + leave cache empty. The
+		// Fail-soft: log + return empty. The
 		// per-endpoint builders fall back to
 		// params, which is the v0.7.2 behaviour.
 		// A render that fails because pg is
 		// down would prevent every user from
 		// fetching their sub URL — wrong
 		// failure mode for a transient blip.
-		return
+		return nil
 	}
 	if len(creds) == 0 {
-		return
+		return nil
 	}
-	s.userCreds = make(map[uuid.UUID]credentials.Credential, len(creds))
+	out := make(map[uuid.UUID]credentials.Credential, len(creds))
 	for _, c := range creds {
 		if c == nil {
 			continue
 		}
-		s.userCreds[c.InboundID] = *c
+		out[c.InboundID] = *c
 	}
+	return out
 }
 
 // userCredFor returns the per-(user, inbound)
-// credential value for `inboundID`, or "" when
-// no per-user credential exists. The per-endpoint
-// builders use this with a "use the user cred if
-// non-empty, else fall back to params" pattern —
-// a clean Phase 1 / Phase 2 split where the
-// builder does not need to know which path was
-// taken.
-func (s *Service) userCredFor(inboundID uuid.UUID) string {
-	c, ok := s.userCreds[inboundID]
+// credential value for `inboundID` from the
+// render-local credential map returned by
+// precomputeUserCreds, or "" when no per-user
+// credential exists. The per-endpoint builders use
+// this with a "use the user cred if non-empty, else
+// fall back to params" pattern — a clean Phase 1 /
+// Phase 2 split where the builder does not need to
+// know which path was taken.
+//
+// v0.8.28.8: a free function over an explicitly
+// passed map — there is no shared Service state to
+// read anymore.
+func userCredFor(userCreds map[uuid.UUID]credentials.Credential, inboundID uuid.UUID) string {
+	c, ok := userCreds[inboundID]
 	if !ok {
 		return ""
 	}
