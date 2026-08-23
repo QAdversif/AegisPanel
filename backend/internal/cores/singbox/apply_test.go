@@ -660,3 +660,127 @@ func TestApply_401_RefreshSucceeds_RetryNon401(t *testing.T) {
 		t.Errorf("error must mention retry, got %q", msg)
 	}
 }
+
+// ---- v0.8.28.7 (#289/C4): response-body lifecycle ----
+//
+// The pre-fix postApply returned the raw io.ReadCloser and
+// no caller closed it: every successful apply (and most
+// error branches) leaked one pooled connection until the
+// transport's idle timer reclaimed it. The tests below pin
+// the new contract: postApply owns the body — it is closed
+// exactly once per HTTP response, on every terminal path,
+// and the read is capped at maxAgentBodyBytes.
+
+// trackingBody counts Close calls on the wrapped body.
+type trackingBody struct {
+	io.ReadCloser
+	closes *atomic.Int32
+}
+
+func (b *trackingBody) Close() error {
+	b.closes.Add(1)
+	return b.ReadCloser.Close()
+}
+
+// trackingClient swaps every response body for a
+// trackingBody sharing the test's counter.
+type trackingClient struct {
+	inner  httpClient
+	closes *atomic.Int32
+}
+
+func (c *trackingClient) Do(req *http.Request) (*http.Response, error) {
+	resp, err := c.inner.Do(req)
+	if err != nil {
+		return resp, err
+	}
+	resp.Body = &trackingBody{ReadCloser: resp.Body, closes: c.closes}
+	return resp, nil
+}
+
+// TestApply_PostApply_ClosesBody_HappyPath pins the
+// success path: a 2xx response's body is closed even
+// though the caller ignores it.
+func TestApply_PostApply_ClosesBody_HappyPath(t *testing.T) {
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer agent.Close()
+
+	var closes atomic.Int32
+	resolver := &fakeNodeResolver{addr: strings.TrimPrefix(agent.URL, "http://"), bearer: "b"}
+	p := New()
+	p.Configure(resolver, &trackingClient{inner: agent.Client(), closes: &closes})
+
+	if err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if c := closes.Load(); c != 1 {
+		t.Errorf("body Close calls = %d, want 1 (leaked fd on the happy path)", c)
+	}
+}
+
+// TestApply_PostApply_BodyCappedAndClosed_Non2xx pins the
+// error path: a non-2xx body is closed, the read is
+// capped at maxAgentBodyBytes (a megabyte-sized body does
+// not reach memory in full), and the error message stays
+// truncated.
+func TestApply_PostApply_BodyCappedAndClosed_Non2xx(t *testing.T) {
+	huge := strings.Repeat("x", maxAgentBodyBytes*4)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(huge))
+	}))
+	defer agent.Close()
+
+	var closes atomic.Int32
+	resolver := &fakeNodeResolver{addr: strings.TrimPrefix(agent.URL, "http://"), bearer: "b"}
+	p := New()
+	p.Configure(resolver, &trackingClient{inner: agent.Client(), closes: &closes})
+
+	err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("Apply should return error on 500")
+	}
+	if c := closes.Load(); c != 1 {
+		t.Errorf("body Close calls = %d, want 1 (leaked fd on the error path)", c)
+	}
+	if !strings.Contains(err.Error(), "(truncated)") {
+		t.Errorf("error message must be truncated, got %q", err.Error())
+	}
+}
+
+// TestApply_PostApply_ClosesBothBodies_RetryPath pins the
+// 401 → refresh → retry path: BOTH the first response's
+// body and the retry's body are closed (the pre-fix code
+// leaked the first body on every retry branch).
+func TestApply_PostApply_ClosesBothBodies_RetryPath(t *testing.T) {
+	var hits atomic.Int32
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer agent.Close()
+
+	var closes atomic.Int32
+	resolver := &fakeNodeResolver{
+		addr:            strings.TrimPrefix(agent.URL, "http://"),
+		bearer:          "stale",
+		refreshedBearer: "fresh",
+	}
+	p := New()
+	p.Configure(resolver, &trackingClient{inner: agent.Client(), closes: &closes})
+
+	if err := p.Apply(context.Background(), uuid.New().String(), []byte(`{}`)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if rc := resolver.refreshCalls.Load(); rc != 1 {
+		t.Errorf("RefreshBearer calls = %d, want 1", rc)
+	}
+	if c := closes.Load(); c != 2 {
+		t.Errorf("body Close calls = %d, want 2 (first attempt + retry both leak pre-fix)", c)
+	}
+}
