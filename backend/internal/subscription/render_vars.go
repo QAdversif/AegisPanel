@@ -391,9 +391,22 @@ func enrichEndpoint(ep ResolvedEndpoint, rc *RenderContext) ResolvedEndpoint {
 	// displayName / remark (host-level). Note
 	// displayName wins per the per-entity override
 	// chain in the model.
+	//
+	// v0.8.28.8 (#289/C3b): the host pointer can be
+	// SHARED across renders (a caller may re-use one
+	// resolved slice — sequentially or concurrently),
+	// so the salted values are written into a
+	// per-render copy of the struct, never back into
+	// *out.Host. Writing through the shared pointer
+	// raced under `go test -race` (concurrent renders
+	// for different users) and double-salted
+	// DisplayName / Remark whenever the same slice was
+	// enriched twice.
 	if out.Host != nil {
-		out.Host.DisplayName = applyFormatVariables(applyWildcardSalt(out.Host.DisplayName, salt), vars)
-		out.Host.Remark = applyFormatVariables(applyWildcardSalt(out.Host.Remark, salt), vars)
+		h := *out.Host
+		h.DisplayName = applyFormatVariables(applyWildcardSalt(out.Host.DisplayName, salt), vars)
+		h.Remark = applyFormatVariables(applyWildcardSalt(out.Host.Remark, salt), vars)
+		out.Host = &h
 	}
 	// Endpoint-level overrides: address / sni /
 	// host / path. Port is an int and is not
