@@ -336,7 +336,7 @@ func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 // megabytes of HTML: the read stops after the cap, the
 // connection is closed, and `truncateBody` keeps the log
 // line short.
-func (p *Provider) postApply(ctx context.Context, url string, body []byte, bearer string) (int, []byte, error) {
+func (p *Provider) postApply(ctx context.Context, url string, body []byte, bearer string) (status int, respBody []byte, postErr error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, fmt.Errorf("singbox apply: build request: %w", err)
@@ -349,9 +349,12 @@ func (p *Provider) postApply(ctx context.Context, url string, body []byte, beare
 	}
 	// Close is unconditional once Do succeeded — net/http
 	// requires it for connection reuse, and skipping the
-	// read (early return below) does not exempt us.
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAgentBodyBytes+1))
+	// read (early return below) does not exempt us. The
+	// error is deliberately discarded (errcheck-clean):
+	// a Close failure on a fully-read body only affects
+	// connection reuse, never the apply result.
+	defer func() { _ = resp.Body.Close() }()
+	respBody, err = io.ReadAll(io.LimitReader(resp.Body, maxAgentBodyBytes+1))
 	if err != nil {
 		return resp.StatusCode, nil, fmt.Errorf("singbox apply: POST %s: read response body: %w", url, err)
 	}
