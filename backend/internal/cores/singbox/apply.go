@@ -56,6 +56,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// maxAgentBodyBytes caps how much of the agent's
+// /v1/apply response body postApply reads into memory
+// (v0.8.28.7, #289/C4). The agent answers with a small
+// JSON ack; the cap exists so a misbehaving agent that
+// streams megabytes cannot balloon panel memory — the
+// error wrapper truncates to 512 bytes anyway via
+// truncateBody.
+const maxAgentBodyBytes = 64 << 10 // 64 KiB
+
 // ErrApplyNotConfigured is returned by Apply when the
 // panel main() has not called Configure() on the
 // provider. The v0.3.0 stub returned a different error
@@ -277,16 +286,19 @@ func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 		// in manually and re-run
 		// `aegis admin node
 		// rotate-panel-key`).
+		//
+		// v0.8.28.7: postApply now returns
+		// the body already read ([]byte)
+		// and closed; no io.ReadAll at
+		// the call sites.
 		status2, respBody2, postErr2 := p.postApply(ctx, url, body, newBearer)
 		if postErr2 != nil {
 			return postErr2
 		}
 		if status2 == http.StatusUnauthorized {
-			respBody2, _ := io.ReadAll(respBody2)
 			return fmt.Errorf("singbox apply: agent %s returned 401 on retry with refreshed bearer: %s", url, truncateBody(respBody2, 512))
 		}
 		if status2 < 200 || status2 >= 300 {
-			respBody2, _ := io.ReadAll(respBody2)
 			return fmt.Errorf("singbox apply: agent %s returned %d on retry: %s", url, status2, truncateBody(respBody2, 512))
 		}
 		// Retry succeeded. The
@@ -296,11 +308,9 @@ func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 		// matches the
 		// no-recovery happy
 		// path).
-		_ = respBody
 		return nil
 	}
 	if status < 200 || status >= 300 {
-		respBody, _ := io.ReadAll(respBody)
 		return fmt.Errorf("singbox apply: agent %s returned %d: %s",
 			url, status, truncateBody(respBody, 512))
 	}
@@ -308,18 +318,25 @@ func (p *Provider) Apply(ctx context.Context, nodeID string, cfg []byte) error {
 }
 
 // postApply fires a single POST /v1/apply with the
-// supplied bearer. The function returns the HTTP
-// status code, the raw response body (for the error
-// wrapper to read on a non-2xx), and any transport
-// error. The body is not consumed here so the caller
-// can re-derive the truncated error message; the
-// caller is responsible for the `io.ReadAll` on the
-// non-2xx path. The split is intentional: the existing
-// v0.4.0-v0.8.7 single-attempt path wanted the body
-// only on error; the v0.8.8 retry path needs the
-// status BEFORE the body read so the 401 branch can
-// fire before the body is consumed.
-func (p *Provider) postApply(ctx context.Context, url string, body []byte, bearer string) (int, io.ReadCloser, error) {
+// supplied bearer and returns (status, body, error).
+//
+// v0.8.28.7 (#289/C4): the function now OWNS the response
+// lifecycle — `resp.Body` is closed here via defer, and
+// the body is read into memory (capped at
+// maxAgentBodyBytes) before returning `[]byte`. The
+// previous contract returned the raw `io.ReadCloser` and
+// pushed the read/close responsibility onto the caller;
+// none of the five call-path branches closed it, so every
+// successful apply (and most error branches) leaked one
+// pooled connection until Go's idle-connection timer
+// reclaimed it — under a steady apply cadence this
+// exhausted the panel process's file descriptors.
+//
+// The 64 KiB cap bounds a misbehaving agent that streams
+// megabytes of HTML: the read stops after the cap, the
+// connection is closed, and `truncateBody` keeps the log
+// line short.
+func (p *Provider) postApply(ctx context.Context, url string, body []byte, bearer string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, fmt.Errorf("singbox apply: build request: %w", err)
@@ -330,7 +347,15 @@ func (p *Provider) postApply(ctx context.Context, url string, body []byte, beare
 	if err != nil {
 		return 0, nil, fmt.Errorf("singbox apply: POST %s: %w", url, err)
 	}
-	return resp.StatusCode, resp.Body, nil
+	// Close is unconditional once Do succeeded — net/http
+	// requires it for connection reuse, and skipping the
+	// read (early return below) does not exempt us.
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAgentBodyBytes+1))
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("singbox apply: POST %s: read response body: %w", url, err)
+	}
+	return resp.StatusCode, respBody, nil
 }
 
 // applyEnvelope is the JSON body the aegis-agent expects on
