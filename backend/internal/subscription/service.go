@@ -181,6 +181,19 @@ func (s *Service) WithCreds(svc *credentials.Service) *Service {
 	return s
 }
 
+// CredsSource returns the installed per-(user,
+// inbound) credential source, or nil when the
+// Phase 1 params fallback is active. Exposed so the
+// app wiring smoke test can assert Build actually
+// installed the Phase 2 source: the #289/C2 bug was
+// WithCreds receiving a not-yet-assigned nil
+// *credentials.Service because of a Build-ordering
+// mistake, and a nil-tolerant setter cannot catch
+// that by itself.
+func (s *Service) CredsSource() *credentials.Service {
+	return s.creds
+}
+
 // precomputeUserCreds loads every (user, inbound)
 // credential the user has in the per-inbound Phase 2
 // table and returns it as a RENDER-LOCAL map.

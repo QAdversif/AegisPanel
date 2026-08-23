@@ -117,6 +117,16 @@ func TestBuild_AllMemoryBackends(t *testing.T) {
 		{"Users", a.Users != nil},
 		{"Plans", a.Plans != nil},
 		{"Subs", a.Subs != nil},
+		// v0.8.28.9 (#289/C2): the Phase 2 credential
+		// source must be INSTALLED on the subscription
+		// service. The original bug: WithCreds was
+		// called in step 12 with the not-yet-assigned
+		// nil a.Credentials; the nil-safe setter
+		// accepted it and every render silently ran on
+		// the Phase 1 params fallback. A non-nil
+		// CredsSource here fails if anyone reorders
+		// Build's steps again.
+		{"Subs.CredsSource (Phase 2 wiring)", a.Subs != nil && a.Subs.CredsSource() != nil},
 		{"PanelCfg", a.PanelCfg != nil},
 		{"Audits", a.Audits != nil},
 		{"Backups", a.Backups != nil},
