@@ -41,7 +41,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -460,18 +459,6 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 // use while the handler is growing. A future
 // PR may add query-string filters (e.g.
 // ?include=state-only for a status endpoint).
-var _ = strconv.Itoa
-
-// formatHex returns the 4-digit hex escape for
-// a non-ASCII rune. Kept separate from jsonEscape
-// to keep the inlined switch above readable.
-func formatHex(r rune) string {
-	const hex = "0123456789ABCDEF"
-	return string([]byte{
-		'\\', 'u',
-		hex[(r>>12)&0xF],
-		hex[(r>>8)&0xF],
-		hex[(r>>4)&0xF],
-		hex[r&0xF],
-	})
-}
+// (the placeholder itself has been removed: with the
+// D3 migration, the import went unused and the placeholder
+// was no longer needed.)

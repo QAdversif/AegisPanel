@@ -37,13 +37,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
+
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"net/http"
-	"time"
 )
+
 // AdminRouter returns a chi subrouter for the user
 // admin surface:
 //
@@ -314,7 +316,5 @@ func writeUserError(w http.ResponseWriter, err error) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + httpjson.String(msg) + `}`))
+	httpjson.WriteError(w, status, msg)
 }

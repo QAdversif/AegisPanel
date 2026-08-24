@@ -5,11 +5,13 @@ package auth
 import (
 	"context"
 	"errors"
-	"github.com/QAdversif/AegisPanel/internal/httpjson"
-	"github.com/go-chi/chi/v5"
 	"net/http"
 	"strings"
+
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
+	"github.com/go-chi/chi/v5"
 )
+
 // ctxKey is unexported to prevent collisions in request contexts.
 type ctxKey int
 
