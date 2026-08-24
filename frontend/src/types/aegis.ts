@@ -124,14 +124,6 @@ export interface NodeProvisionRequest {
   expected_fingerprint?: string;
 }
 
-export interface NodeProvisionResponse {
-  node_id: UUID;
-  new_state: NodeState;
-  install_stage?: string;
-  install_error?: string;
-  verify_latency?: string;
-}
-
 // NodeRotatePanelKeyRequest is the v0.8.4 wire
 // shape. Only the operator's existing private
 // key is required; ssh_port / ssh_user are
