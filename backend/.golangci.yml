@@ -25,6 +25,15 @@ linters:
     - prealloc       # slice prealloc hints
     - unconvert      # unnecessary conversions
     - unparam        # unused function params
+  # Note: `forbidigo` is not yet enabled. The D3 follow-up
+  # should add it with a single rule per legacy identifier
+  # (jsonString / writeError / writeJSON / jsonEscape) anchored
+  # on `^name$`, and exclude `internal/httpjson/`. The first
+  # attempt to wire this in the same PR hit a config-parsing
+  # edge case in golangci-lint v2 (the `^` / `$` anchors were
+  # applied too broadly, so every identifier in the package
+  # got flagged). The tripwire is left for a separate PR so
+  # this one stays focused on the migration itself.
   settings:
     gocritic:
       enabled-tags:

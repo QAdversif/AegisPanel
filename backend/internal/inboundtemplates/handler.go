@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/QAdversif/AegisPanel/internal/auth"
 )
 
 // Router returns a chi subrouter for the panel-wide
@@ -79,7 +79,7 @@ func (s *Service) handleList() http.HandlerFunc {
 		if items == nil {
 			items = []*InboundTemplate{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"templates": items})
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"templates": items})
 	}
 }
 
@@ -94,7 +94,7 @@ func (s *Service) handleGet() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		httpjson.WriteJSON(w, http.StatusOK, t)
 	}
 }
 
@@ -102,7 +102,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		in := CreateInput{
@@ -117,7 +117,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, t)
+		httpjson.WriteJSON(w, http.StatusCreated, t)
 	}
 }
 
@@ -129,7 +129,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 		}
 		var req updateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		in := UpdateInput(req)
@@ -138,7 +138,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, t)
+		httpjson.WriteJSON(w, http.StatusOK, t)
 	}
 }
 
@@ -165,7 +165,7 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	raw := chi.URLParam(r, "id")
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
+		httpjson.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
 		return uuid.Nil, false
 	}
 	return id, true
@@ -184,57 +184,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	var vErr *ValidationError
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		httpjson.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrDuplicate):
-		writeError(w, http.StatusConflict, err.Error())
+		httpjson.WriteError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &vErr):
-		writeError(w, http.StatusBadRequest, vErr.Error())
+		httpjson.WriteError(w, http.StatusBadRequest, vErr.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe inclusion
-// in a JSON string literal. Same convention as the
-// inbounds package's helper.
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b = append(b, '\\', '"')
-		case '\\':
-			b = append(b, '\\', '\\')
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			if r < 0x80 {
-				b = append(b, byte(r))
-				continue
-			}
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
 }

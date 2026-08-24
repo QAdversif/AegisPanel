@@ -23,16 +23,15 @@ package audits
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
@@ -80,15 +79,15 @@ func (s *Service) handleList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := parseListFilter(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpjson.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		entries, err := s.List(r.Context(), filter)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, listResponse{Audits: entries})
+		httpjson.WriteJSON(w, http.StatusOK, listResponse{Audits: entries})
 	}
 }
 
@@ -99,19 +98,19 @@ func (s *Service) handleGet() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := chi.URLParam(r, "id")
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "id is required")
+			httpjson.WriteError(w, http.StatusBadRequest, "id is required")
 			return
 		}
 		entry, err := s.GetByID(r.Context(), raw)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, err.Error())
+				httpjson.WriteError(w, http.StatusNotFound, err.Error())
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, entry)
+		httpjson.WriteJSON(w, http.StatusOK, entry)
 	}
 }
 
@@ -157,55 +156,6 @@ func parseListFilter(r *http.Request) (ListFilter, error) {
 		return filter, fmt.Errorf("until must be at or after since")
 	}
 	return filter, nil
-}
-
-// --- shared helpers ---------------------------------------------------
-
-// writeJSON serialises v as JSON with a 200 (or
-// caller-chosen) status. Hand-rolled to keep
-// the package dependency-light; the v0.2.0
-// panels all use the same {"error": "..."}
-// envelope so the frontend can read any of them
-// through toApiError.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe
-// inclusion in a JSON string literal. Same shape
-// as the rest of the v0.2.0 packages. The
-// fmt.Sprintf hex-escape avoids gosec-flagged
-// rune-to-byte casts.
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b = append(b, '\\', byte(r))
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
 }
 
 // --- context helpers (used by other packages) ------------------------

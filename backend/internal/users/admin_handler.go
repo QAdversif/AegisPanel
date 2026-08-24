@@ -40,10 +40,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/QAdversif/AegisPanel/internal/auth"
 )
 
 // AdminRouter returns a chi subrouter for the user
@@ -123,7 +123,7 @@ func (s *Service) handleListUsers() http.HandlerFunc {
 		if rows == nil {
 			rows = []*User{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"users": rows})
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"users": rows})
 	}
 }
 
@@ -138,7 +138,7 @@ func (s *Service) handleGetUser() http.HandlerFunc {
 			writeUserError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, u)
+		httpjson.WriteJSON(w, http.StatusOK, u)
 	}
 }
 
@@ -168,7 +168,7 @@ func (s *Service) handleCreateUser() http.HandlerFunc {
 			writeUserError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, u)
+		httpjson.WriteJSON(w, http.StatusCreated, u)
 	}
 }
 
@@ -218,7 +218,7 @@ func (s *Service) handleUpdateUser() http.HandlerFunc {
 			writeUserError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, u)
+		httpjson.WriteJSON(w, http.StatusOK, u)
 	}
 }
 
@@ -241,7 +241,7 @@ func (s *Service) handleRotateSubToken() http.HandlerFunc {
 			writeUserError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, u)
+		httpjson.WriteJSON(w, http.StatusOK, u)
 	}
 }
 
@@ -315,49 +315,6 @@ func writeUserError(w http.ResponseWriter, err error) {
 	}
 }
 
-// writeJSON / writeJSONError / jsonString are the
-// tiny shims the handler needs. They live in this
-// file (not a shared httpkit) because every package
-// has its own copy of these and the duplication is
-// cheaper than a new package dependency for 20
-// lines of code.
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe inclusion
-// in a JSON string literal. Same shape as the
-// other handlers in this repo; the round-trip via
-// fmt.Sprintf avoids gosec-flagged rune→byte casts.
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b = append(b, '\\', byte(r))
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
+	httpjson.WriteError(w, status, msg)
 }

@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
-
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/bootstrap"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // bootstrapProvider is the subset of
@@ -258,7 +258,7 @@ func (s *Service) handleList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodes, err := s.List(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("list: %v", err))
+			httpjson.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("list: %v", err))
 			return
 		}
 		// Always return a JSON array, never null, so the
@@ -266,7 +266,7 @@ func (s *Service) handleList() http.HandlerFunc {
 		if nodes == nil {
 			nodes = []*Node{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	}
 }
 
@@ -281,7 +281,7 @@ func (s *Service) handleGet() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, n)
+		httpjson.WriteJSON(w, http.StatusOK, n)
 	}
 }
 
@@ -356,17 +356,17 @@ func (s *Service) handleGetStoredKey() http.HandlerFunc {
 			// model is the same across the
 			// two surfaces.
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, "node not found")
+				httpjson.WriteError(w, http.StatusNotFound, "node not found")
 				return
 			}
 			msg := err.Error()
 			switch {
 			case contains(msg, "envelope is not configured"):
-				writeError(w, http.StatusInternalServerError, msg)
+				httpjson.WriteError(w, http.StatusInternalServerError, msg)
 			case contains(msg, "decrypt stored SSH key"), contains(msg, "parse stored SSH key"):
-				writeError(w, http.StatusBadGateway, msg)
+				httpjson.WriteError(w, http.StatusBadGateway, msg)
 			default:
-				writeError(w, http.StatusInternalServerError, msg)
+				httpjson.WriteError(w, http.StatusInternalServerError, msg)
 			}
 			return
 		}
@@ -386,7 +386,7 @@ func (s *Service) handleGetStoredKey() http.HandlerFunc {
 				},
 			})
 		}
-		writeJSON(w, http.StatusOK, sk)
+		httpjson.WriteJSON(w, http.StatusOK, sk)
 	}
 }
 
@@ -414,7 +414,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		in := CreateInput{
@@ -431,7 +431,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, n)
+		httpjson.WriteJSON(w, http.StatusCreated, n)
 	}
 }
 
@@ -443,7 +443,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 		}
 		var req updateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		// updateRequest and UpdateInput have identical fields, so
@@ -456,7 +456,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, n)
+		httpjson.WriteJSON(w, http.StatusOK, n)
 	}
 }
 
@@ -481,7 +481,7 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	raw := chi.URLParam(r, "id")
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
+		httpjson.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
 		return uuid.Nil, false
 	}
 	return id, true
@@ -500,63 +500,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	var vErr *ValidationError
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		httpjson.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrDuplicate):
-		writeError(w, http.StatusConflict, err.Error())
+		httpjson.WriteError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &vErr):
-		writeError(w, http.StatusBadRequest, vErr.Error())
+		httpjson.WriteError(w, http.StatusBadRequest, vErr.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	// Hand-rolled JSON to stay consistent with the auth
-	// package and to keep this layer free of a JSON-helper
-	// dependency. The format is the same {"error":"..."}
-	// envelope the auth package emits.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe inclusion in a JSON
-// string literal. Same implementation as auth.jsonString,
-// duplicated here so this package has no dependency on auth
-// internals. Non-ASCII runes are emitted as JSON \uXXXX escapes
-// via a hex round-trip rather than a direct byte cast, which
-// gosec flags as a potential integer-overflow conversion.
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b = append(b, '\\', '\\', byte(r))
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				// Skip control characters — they would
-				// be invalid in JSON anyway.
-				continue
-			}
-			// Round-trip through fmt.Sprintf so we get the
-			// right escape for any rune without the
-			// gosec-flagged rune→byte cast.
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
 }
