@@ -22,13 +22,12 @@ package panelcfg
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
+	"github.com/go-chi/chi/v5"
 )
 
 // Router returns a chi subrouter for the panelcfg
@@ -86,7 +85,7 @@ func (s *Service) handleGet() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, cfg)
+		httpjson.WriteJSON(w, http.StatusOK, cfg)
 	}
 }
 
@@ -99,7 +98,7 @@ func (s *Service) handleRotate() http.HandlerFunc {
 		var req rotateRequest
 		if r.ContentLength > 0 {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeError(w, http.StatusBadRequest, "malformed request body")
+				httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 				return
 			}
 		}
@@ -109,7 +108,7 @@ func (s *Service) handleRotate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, cfg)
+		httpjson.WriteJSON(w, http.StatusOK, cfg)
 	}
 }
 
@@ -120,11 +119,11 @@ func (s *Service) handleRotateTo() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req rotateToRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		if req.SubPath == "" {
-			writeError(w, http.StatusBadRequest, "sub_path is required")
+			httpjson.WriteError(w, http.StatusBadRequest, "sub_path is required")
 			return
 		}
 		grace := graceFromSeconds(req.GraceWindowSeconds)
@@ -133,7 +132,7 @@ func (s *Service) handleRotateTo() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, cfg)
+		httpjson.WriteJSON(w, http.StatusOK, cfg)
 	}
 }
 
@@ -149,7 +148,7 @@ func (s *Service) handleReset() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, cfg)
+		httpjson.WriteJSON(w, http.StatusOK, cfg)
 	}
 }
 
@@ -174,66 +173,12 @@ func graceFromSeconds(s *int) time.Duration {
 func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		httpjson.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrEmpty):
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpjson.WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrInvalidPath):
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpjson.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-// writeJSON serialises v as JSON with the
-// application/json content type and a 200 OK
-// status. Every endpoint in this package returns
-// 200; error responses go through writeError
-// instead, which sets the non-200 status
-// explicitly. A future endpoint that needs a
-// different success code (e.g. 201 Created on
-// insert) can add a new helper rather than
-// growing a status param on this one.
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	// Hand-rolled JSON envelope (`{"error":"..."}`) to
-	// stay consistent with the auth / nodes / hosts
-	// / inbounds packages. The frontend's `toApiError`
-	// reads this verbatim.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe inclusion
-// in a JSON string literal. Non-ASCII runes round-
-// trip through a hex escape rather than a direct
-// byte cast (gosec G103 / G105 flags the cast as
-// a potential integer-overflow conversion).
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b = append(b, '\\', byte(r))
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
 }

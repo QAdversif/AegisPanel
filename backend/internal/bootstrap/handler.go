@@ -45,12 +45,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QAdversif/AegisPanel/internal/audits"
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-
-	"github.com/QAdversif/AegisPanel/internal/audits"
-	"github.com/QAdversif/AegisPanel/internal/auth"
 )
 
 // provisionRequest is the POST body. The
@@ -127,12 +127,12 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 		rawID := chi.URLParam(r, "id")
 		nodeID, err := uuid.Parse(rawID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid node id: "+err.Error())
+			httpjson.WriteError(w, http.StatusBadRequest, "invalid node id: "+err.Error())
 			return
 		}
 		var req provisionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		// Exactly one auth method: key XOR password.
@@ -146,7 +146,7 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 		hasPassword := req.SSHPassword != ""
 		if hasKey == hasPassword {
 			// Both or neither: ambiguous.
-			writeError(w, http.StatusBadRequest, "exactly one of ssh_private_key or ssh_password is required")
+			httpjson.WriteError(w, http.StatusBadRequest, "exactly one of ssh_private_key or ssh_password is required")
 			return
 		}
 		// Translate the wire format into the
@@ -161,7 +161,7 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 		case "accept-and-append":
 			tp = TofuAcceptAndAppend
 		default:
-			writeError(w, http.StatusBadRequest, "unknown tofu_policy: "+req.TofuPolicy)
+			httpjson.WriteError(w, http.StatusBadRequest, "unknown tofu_policy: "+req.TofuPolicy)
 			return
 		}
 		provReq := ProvisionRequest{
@@ -182,13 +182,13 @@ func (s *Service) HandleProvision() http.HandlerFunc {
 			// (the upstream SSH server is
 			// the source of the problem).
 			if errors.Is(err, errInvalidStartState) {
-				writeError(w, http.StatusConflict, err.Error())
+				httpjson.WriteError(w, http.StatusConflict, err.Error())
 				return
 			}
-			writeError(w, http.StatusBadGateway, err.Error())
+			httpjson.WriteError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, provisionResponse{
+		httpjson.WriteJSON(w, http.StatusOK, provisionResponse{
 			NodeID:   nodeID.String(),
 			NewState: string(newState),
 		})
@@ -334,16 +334,16 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 		rawID := chi.URLParam(r, "id")
 		nodeID, err := uuid.Parse(rawID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid node id: "+err.Error())
+			httpjson.WriteError(w, http.StatusBadRequest, "invalid node id: "+err.Error())
 			return
 		}
 		var req rotatePanelKeyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		if req.SSHPrivateKey == "" {
-			writeError(w, http.StatusBadRequest, "ssh_private_key is required")
+			httpjson.WriteError(w, http.StatusBadRequest, "ssh_private_key is required")
 			return
 		}
 		// Fail fast if the panel was booted
@@ -354,7 +354,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 		// panel's env, not a transient
 		// upstream problem.
 		if s.envelope == nil {
-			writeError(w, http.StatusInternalServerError, "bootstrap: envelope is not configured on the panel (set AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS and AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE)")
+			httpjson.WriteError(w, http.StatusInternalServerError, "bootstrap: envelope is not configured on the panel (set AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS and AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE)")
 			return
 		}
 		// Resolve the node row. The handler
@@ -365,7 +365,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 		// the row must exist.
 		row, err := s.nodes.GetByID(r.Context(), nodeID)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "node not found: "+err.Error())
+			httpjson.WriteError(w, http.StatusNotFound, "node not found: "+err.Error())
 			return
 		}
 		// Build the SSH client. The handler
@@ -406,7 +406,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 			KnownHosts: s.knownHosts,
 		})
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "ssh client: "+err.Error())
+			httpjson.WriteError(w, http.StatusBadGateway, "ssh client: "+err.Error())
 			return
 		}
 		defer func() {
@@ -415,7 +415,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 			}
 		}()
 		if err := sshClient.Connect(ctx); err != nil {
-			writeError(w, http.StatusBadGateway, "ssh connect: "+err.Error())
+			httpjson.WriteError(w, http.StatusBadGateway, "ssh connect: "+err.Error())
 			return
 		}
 		// Rotate. The function generates
@@ -427,7 +427,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 		// SetSSHPrivateKeyCiphertext.
 		result, err := s.RotatePanelKey(ctx, nodeID, row.Name, sshClient)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "rotation failed: "+err.Error())
+			httpjson.WriteError(w, http.StatusBadGateway, "rotation failed: "+err.Error())
 			return
 		}
 		// Audit. After-commit ordering:
@@ -448,7 +448,7 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 				},
 			})
 		}
-		writeJSON(w, http.StatusOK, rotatePanelKeyResponse{
+		httpjson.WriteJSON(w, http.StatusOK, rotatePanelKeyResponse{
 			NodeID:        nodeID.String(),
 			PublicKeyLine: result.PublicKeyLine,
 			Fingerprint:   result.Fingerprint,
@@ -461,66 +461,6 @@ func (s *Service) HandleRotatePanelKey() http.HandlerFunc {
 // PR may add query-string filters (e.g.
 // ?include=state-only for a status endpoint).
 var _ = strconv.Itoa
-
-// writeJSON / writeError are tiny helpers that
-// match the v0.2.0 panelcfg / subscription
-// pattern (hand-rolled envelope `{"error":
-// "..."}`, content-type `application/json`).
-// The frontend reads `error` verbatim through
-// toApiError.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-// writeError emits a JSON error body AND logs
-// the error to the panel logger. v0.8.15 added
-// the log line — the previous implementation
-// only wrote the body, so install failures
-// from POST /api/v1/nodes/{id}/provision were
-// invisible in `docker logs aegis-panel` and
-// the operator had to dig through response
-// bodies to find the cause. Now every 4xx/5xx
-// from this package lands in the structured log
-// stream with the (status, msg) pair.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	log.Error().
-		Int("status", status).
-		Str("error", msg).
-		Msg("bootstrap: http error")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":"` + jsonEscape(msg) + `"}`))
-}
-
-// jsonString escapes a Go string for safe
-// inclusion in a JSON string literal. The
-// implementation avoids the gosec-flagged
-// `[]byte(r)` cast.
-func jsonEscape(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			b = append(b, '\\', byte(r))
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			b = append(b, []byte(formatHex(r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
-}
 
 // formatHex returns the 4-digit hex escape for
 // a non-ASCII rune. Kept separate from jsonEscape

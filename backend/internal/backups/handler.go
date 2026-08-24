@@ -42,10 +42,10 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
-
-	"github.com/QAdversif/AegisPanel/internal/auth"
 )
 
 // Handler is the http.Handler for the backups
@@ -102,7 +102,7 @@ func (h *Handler) handleCreate() http.HandlerFunc {
 		// to TriggerManual.
 		if r.ContentLength > 0 {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+				httpjson.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 				return
 			}
 		}
@@ -110,13 +110,13 @@ func (h *Handler) handleCreate() http.HandlerFunc {
 			req.Trigger = TriggerManual
 		}
 		if req.Trigger != TriggerManual && req.Trigger != TriggerScheduled {
-			writeError(w, http.StatusBadRequest, "trigger must be 'manual' or 'scheduled'")
+			httpjson.WriteError(w, http.StatusBadRequest, "trigger must be 'manual' or 'scheduled'")
 			return
 		}
 		row, err := h.svc.Create(r.Context(), req.Trigger)
 		if err != nil {
 			if errors.Is(err, ErrBackupInProgress) {
-				writeError(w, http.StatusConflict, "another backup is in progress")
+				httpjson.WriteError(w, http.StatusConflict, "another backup is in progress")
 				return
 			}
 			// Create returns the (failed) row + an
@@ -124,13 +124,13 @@ func (h *Handler) handleCreate() http.HandlerFunc {
 			// the operator can see the failure
 			// immediately.
 			if row != nil {
-				writeJSON(w, http.StatusInternalServerError, row)
+				httpjson.WriteJSON(w, http.StatusInternalServerError, row)
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusAccepted, row)
+		httpjson.WriteJSON(w, http.StatusAccepted, row)
 	}
 }
 
@@ -138,10 +138,10 @@ func (h *Handler) handleList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := h.svc.List(r.Context())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, rows)
+		httpjson.WriteJSON(w, http.StatusOK, rows)
 	}
 }
 
@@ -151,13 +151,13 @@ func (h *Handler) handleGet() http.HandlerFunc {
 		row, err := h.svc.Get(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, "backup not found")
+				httpjson.WriteError(w, http.StatusNotFound, "backup not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, row)
+		httpjson.WriteJSON(w, http.StatusOK, row)
 	}
 }
 
@@ -167,15 +167,15 @@ func (h *Handler) handleDownload() http.HandlerFunc {
 		row, err := h.svc.Get(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, "backup not found")
+				httpjson.WriteError(w, http.StatusNotFound, "backup not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		f, err := h.svc.Open(r.Context(), id)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		defer closeQuiet(f)
@@ -192,7 +192,7 @@ func (h *Handler) handleDelete() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if err := h.svc.Delete(r.Context(), id); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -204,14 +204,14 @@ func (h *Handler) handleRestore() http.HandlerFunc {
 		id := chi.URLParam(r, "id")
 		if err := h.svc.Restore(r.Context(), id); err != nil {
 			if errors.Is(err, ErrBackupDisabled) {
-				writeError(w, http.StatusForbidden, err.Error())
+				httpjson.WriteError(w, http.StatusForbidden, err.Error())
 				return
 			}
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, "backup not found")
+				httpjson.WriteError(w, http.StatusNotFound, "backup not found")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
@@ -243,33 +243,13 @@ func (h *Handler) handleRestore() http.HandlerFunc {
 func (h *Handler) handleGetSchedule() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		expr, _, active := h.svc.Schedule()
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{
 			"cron":           expr,
 			"retentionDays":  h.svc.Cfg().RetentionDays,
 			"maxCount":       h.svc.Cfg().MaxCount,
 			"scheduleActive": active,
 		})
 	}
-}
-
-// writeJSON serialises v as JSON and writes it to
-// w with the given status. Errors during write are
-// logged but not surfaced (the response is already
-// partially sent).
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Warn().Err(err).Msg("backups: write JSON response")
-	}
-}
-
-// writeError writes a small JSON error envelope.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	body := map[string]string{"error": msg}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }
 
 // hashHex is a tiny helper used by the tests to

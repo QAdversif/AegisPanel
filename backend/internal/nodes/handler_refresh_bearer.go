@@ -85,6 +85,7 @@ import (
 	"strings"
 
 	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 )
 
 // refreshAgentBearerRequest is the POST
@@ -164,7 +165,7 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 				// — also a 400 to
 				// keep the surface
 				// explicit.
-				writeError(w, http.StatusBadRequest, "malformed request body")
+				httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 				return
 			}
 		}
@@ -177,7 +178,7 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 		// missing, fail closed).
 		claims := auth.ClaimsFromContext(r.Context())
 		if claims == nil {
-			writeError(w, http.StatusUnauthorized, "missing auth claims")
+			httpjson.WriteError(w, http.StatusUnauthorized, "missing auth claims")
 			return
 		}
 		// Delegate to the Service. The
@@ -197,7 +198,7 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 			// handler and the v0.8.4
 			// rotate-panel-key POST.
 			if errors.Is(err, ErrNotFound) {
-				writeError(w, http.StatusNotFound, "node not found")
+				httpjson.WriteError(w, http.StatusNotFound, "node not found")
 				return
 			}
 			if errors.Is(err, ErrNoStoredKey) {
@@ -208,7 +209,7 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 				// must
 				// rotate-panel-key
 				// first.
-				writeError(w, http.StatusConflict, "no stored panel SSH key (rotate-panel-key first)")
+				httpjson.WriteError(w, http.StatusConflict, "no stored panel SSH key (rotate-panel-key first)")
 				return
 			}
 			msg := err.Error()
@@ -218,9 +219,9 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 				// 500: panel
 				// wiring
 				// missing.
-				writeError(w, http.StatusInternalServerError, msg)
+				httpjson.WriteError(w, http.StatusInternalServerError, msg)
 			case strings.Contains(msg, "envelope is not configured"):
-				writeError(w, http.StatusInternalServerError, msg)
+				httpjson.WriteError(w, http.StatusInternalServerError, msg)
 			case strings.Contains(msg, "SSH connect"),
 				strings.Contains(msg, "read agent.env"),
 				strings.Contains(msg, "parse agent.env"),
@@ -240,9 +241,9 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 				// DB
 				// update
 				// failed).
-				writeError(w, http.StatusBadGateway, msg)
+				httpjson.WriteError(w, http.StatusBadGateway, msg)
 			default:
-				writeError(w, http.StatusInternalServerError, msg)
+				httpjson.WriteError(w, http.StatusInternalServerError, msg)
 			}
 			return
 		}
@@ -253,7 +254,7 @@ func (s *Service) handleRefreshAgentBearer() http.HandlerFunc {
 		// "refresh result" card (same
 		// UX pattern as the v0.8.4
 		// rotate-panel-key).
-		writeJSON(w, http.StatusOK, refreshAgentBearerResponse{
+		httpjson.WriteJSON(w, http.StatusOK, refreshAgentBearerResponse{
 			NodeID:               out.NodeID.String(),
 			Bearer:               out.Bearer,
 			KeyFingerprintSHA256: out.KeyFingerprintSHA256,

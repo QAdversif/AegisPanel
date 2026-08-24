@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/QAdversif/AegisPanel/internal/auth"
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/QAdversif/AegisPanel/internal/auth"
 )
 
 // Router returns a chi subrouter for the inbounds of a
@@ -125,12 +125,12 @@ func nodeIDFromURL(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 		// router; a missing value is a routing bug,
 		// not user input. Return 500 to surface the
 		// misconfiguration loudly.
-		writeError(w, http.StatusInternalServerError, "nodeId path parameter is missing")
+		httpjson.WriteError(w, http.StatusInternalServerError, "nodeId path parameter is missing")
 		return uuid.Nil, false
 	}
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid nodeId %q", raw))
+		httpjson.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid nodeId %q", raw))
 		return uuid.Nil, false
 	}
 	return id, true
@@ -152,7 +152,7 @@ func (s *Service) handleList() http.HandlerFunc {
 		if items == nil {
 			items = []*Inbound{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"inbounds": items})
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"inbounds": items})
 	}
 }
 
@@ -172,7 +172,7 @@ func (s *Service) handleListAll() http.HandlerFunc {
 		if items == nil {
 			items = []*Inbound{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"inbounds": items})
+		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"inbounds": items})
 	}
 }
 
@@ -199,10 +199,10 @@ func (s *Service) handleGet() http.HandlerFunc {
 		nodeID := chi.URLParam(r, "nodeId")
 		parsed, _ := uuid.Parse(nodeID)
 		if i.NodeID != parsed {
-			writeError(w, http.StatusNotFound, "inbound does not belong to this node")
+			httpjson.WriteError(w, http.StatusNotFound, "inbound does not belong to this node")
 			return
 		}
-		writeJSON(w, http.StatusOK, i)
+		httpjson.WriteJSON(w, http.StatusOK, i)
 	}
 }
 
@@ -214,7 +214,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 		}
 		var req createRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		in := CreateInput{
@@ -235,7 +235,7 @@ func (s *Service) handleCreate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, i)
+		httpjson.WriteJSON(w, http.StatusCreated, i)
 	}
 }
 
@@ -250,7 +250,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 		}
 		var req updateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "malformed request body")
+			httpjson.WriteError(w, http.StatusBadRequest, "malformed request body")
 			return
 		}
 		in := UpdateInput(req)
@@ -259,7 +259,7 @@ func (s *Service) handleUpdate() http.HandlerFunc {
 			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, i)
+		httpjson.WriteJSON(w, http.StatusOK, i)
 	}
 }
 
@@ -289,7 +289,7 @@ func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	raw := chi.URLParam(r, "id")
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
+		httpjson.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid id %q", raw))
 		return uuid.Nil, false
 	}
 	return id, true
@@ -308,62 +308,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	var vErr *ValidationError
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		httpjson.WriteError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrDuplicate):
-		writeError(w, http.StatusConflict, err.Error())
+		httpjson.WriteError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &vErr):
-		writeError(w, http.StatusBadRequest, vErr.Error())
+		httpjson.WriteError(w, http.StatusBadRequest, vErr.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpjson.WriteError(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
-}
-
-// jsonString escapes a Go string for safe inclusion
-// in a JSON string literal. ASCII letters and digits
-// are written verbatim; control characters and
-// JSON-meaningful punctuation are escaped with the
-// standard backslash forms. Non-ASCII runes
-// round-trip through a \uXXXX hex escape (rather than
-// a direct byte cast, which gosec flags as a potential
-// integer-overflow conversion).
-func jsonString(s string) string {
-	var b []byte
-	b = append(b, '"')
-	for _, r := range s {
-		switch r {
-		case '"':
-			b = append(b, '\\', '"')
-		case '\\':
-			b = append(b, '\\', '\\')
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			if r < 0x20 {
-				continue
-			}
-			if r < 0x80 {
-				b = append(b, byte(r))
-				continue
-			}
-			b = append(b, []byte(fmt.Sprintf(`\u%04X`, r))...)
-		}
-	}
-	b = append(b, '"')
-	return string(b)
 }

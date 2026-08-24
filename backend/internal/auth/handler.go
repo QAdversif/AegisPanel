@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/QAdversif/AegisPanel/internal/httpjson"
 )
 
 // Cookie name + path for the refresh-token cookie. The
@@ -165,7 +167,7 @@ func (s *Service) handleLogin() http.HandlerFunc {
 			return
 		}
 		setRefreshCookie(w, s, result.RefreshToken)
-		writeJSON(w, loginResponse{
+		httpjson.WriteJSON(w, http.StatusOK, loginResponse{
 			AccessToken: result.AccessToken,
 			TokenType:   "Bearer",
 			ExpiresAt:   result.ExpiresAt,
@@ -204,7 +206,7 @@ func (s *Service) handleRefresh() http.HandlerFunc {
 			return
 		}
 		setRefreshCookie(w, s, result.RefreshToken)
-		writeJSON(w, loginResponse{
+		httpjson.WriteJSON(w, http.StatusOK, loginResponse{
 			AccessToken: result.AccessToken,
 			TokenType:   "Bearer",
 			ExpiresAt:   result.ExpiresAt,
@@ -232,7 +234,7 @@ func (s *Service) handleMe() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("me: %v", err))
 			return
 		}
-		writeJSON(w, meResponse{
+		httpjson.WriteJSON(w, http.StatusOK, meResponse{
 			UserID:   u.ID,
 			Username: u.Username,
 			Scopes:   u.Scopes.Strings(),
@@ -320,22 +322,12 @@ func (s *Service) handleChangePassword() http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("change password: %v", err))
 			return
 		}
-		writeJSON(w, changePasswordResponse{
+		httpjson.WriteJSON(w, http.StatusOK, changePasswordResponse{
 			UserID:   u.ID,
 			Username: u.Username,
 			Scopes:   u.Scopes.Strings(),
 		})
 	}
-}
-
-// writeJSON writes v as a JSON object with a 200 status. Kept
-// local to the auth package so we don't take on a project-wide
-// JSON helper dependency. Every call-site in the auth package
-// returns 200; error responses go through writeJSONError instead.
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // handleLogout revokes the operator's current refresh
