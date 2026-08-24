@@ -451,10 +451,16 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	// without one the renderer falls back to the
 	// v0.7.2 params-based single-credential path
 	// (see internal/subscription/service.go
-	// WithCreds docstring). Wired AFTER Credentials
-	// is built (the order in this function is the
-	// same order as the step numbers).
-	a.Subs.WithCreds(a.Credentials)
+	// WithCreds docstring).
+	//
+	// v0.8.28.9 (#289/C2): the WithCreds call MOVED
+	// to step 14c, after a.Credentials is built. It
+	// previously sat HERE, where a.Credentials was
+	// still nil (Credentials is constructed in step
+	// 14c, below) — the nil-safe WithCreds accepted
+	// it and every production render silently ran
+	// on the Phase 1 params fallback, ignoring the
+	// per-(user, inbound) credentials table.
 
 	// 13. Panel-wide config.
 	panelCfgStore := MustBuild(pool, StoreBuilder[panelcfg.Store]{
@@ -514,6 +520,15 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.Credentials = credentials.NewService(credentialsStore)
 	a.Credentials.WithAudits(a.Audits)
+	// v0.8.28.9 (#289/C2): NOW Credentials exists —
+	// wire the Phase 2 multi-user render source into
+	// the subscription service. The call previously
+	// lived in step 12 (subscription build), passing
+	// the not-yet-assigned nil a.Credentials; see the
+	// comment there. The app_test.go smoke build
+	// asserts the source is non-nil so a future
+	// reordering cannot silently regress this.
+	a.Subs.WithCreds(a.Credentials)
 
 	// 15. Bootstrap (BYO Node) service. References
 	//     nodes + audits. No backend switch: the
