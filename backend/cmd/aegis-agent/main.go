@@ -319,11 +319,17 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(statsResponse{})
 }
 
-// run starts the HTTP server and blocks until SIGINT
-// or SIGTERM. The deferred cancel propagates the
-// shutdown signal to in-flight requests via the
-// request context.
-func run(ctx context.Context, listenAddr string) error {
+// run starts the HTTP server and the gRPC server in parallel and
+// blocks until SIGINT/SIGTERM. v0.8.29 introduced the gRPC server;
+// the HTTP server is unchanged from v0.4.0-b. The two transports
+// share the bearer secret and the sing-box apply state, so the
+// BatchedApplier can keep using the HTTP path while the panel-side
+// transport switch (v0.8.29 PR 3) migrates to gRPC method by method.
+//
+// The deferred cancel propagates the shutdown signal to in-flight
+// HTTP requests via the request context and to the gRPC server via
+// the `grpc.Server.GracefulStop` path in `runGRPC`.
+func run(ctx context.Context, listenAddr, listenGRPC string) error {
 	// Read the bearer secret once at start. The
 	// bootstrap install writes
 	// `/etc/aegis/agent.env` with
@@ -367,7 +373,8 @@ func run(ctx context.Context, listenAddr string) error {
 			log.Printf("AEGIS_AGENT_APPLY_MAX_BYTES=%q invalid, using default %d", v, applyMaxBytes) // #nosec G706 -- operator-controlled env var
 		}
 	}
-	log.Printf("aegis-agent %s starting on %s (config=%s reload=%q timeout=%s)", version, listenAddr, singboxConfigPath, singboxReloadCmd, singboxReloadTimeout)
+	log.Printf("aegis-agent %s starting on %s (gRPC=%s) (config=%s reload=%q timeout=%s)",
+		version, listenAddr, listenGRPC, singboxConfigPath, singboxReloadCmd, singboxReloadTimeout)
 	srv := &http.Server{
 		Addr:              listenAddr,
 		Handler:           newMux(),
@@ -376,16 +383,20 @@ func run(ctx context.Context, listenAddr string) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	// Run the server in a goroutine so the
+	// Run both servers in goroutines so the
 	// signal handler in main() can call Shutdown
-	// without blocking the main thread.
-	errCh := make(chan error, 1)
+	// on either without blocking the main thread.
+	httpErrCh := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+			httpErrCh <- err
 			return
 		}
-		errCh <- nil
+		httpErrCh <- nil
+	}()
+	grpcErrCh := make(chan error, 1)
+	go func() {
+		grpcErrCh <- runGRPC(ctx, listenGRPC)
 	}()
 	select {
 	case <-ctx.Done():
@@ -405,7 +416,9 @@ func run(ctx context.Context, listenAddr string) error {
 			return fmt.Errorf("graceful shutdown: %w", err)
 		}
 		return nil
-	case err := <-errCh:
+	case err := <-httpErrCh:
+		return err
+	case err := <-grpcErrCh:
 		return err
 	}
 }
@@ -415,12 +428,20 @@ func main() {
 	// address via the `AEGIS_AGENT_LISTEN_ADDR`
 	// env var (the flag is a manual-override path
 	// for the docker-compose smoke).
+	//
+	// v0.8.29: the gRPC server is opt-in via
+	// `AEGIS_AGENT_LISTEN_GRPC` (default `:7001`).
+	// Setting it to "" disables gRPC; setting it
+	// to `127.0.0.1:7001` is the v0.8.30 mTLS
+	// posture (loopback until the cert bootstrap
+	// lands; the panel still SSH-tunnels).
 	listen := flag.String("listen", envOr("AEGIS_AGENT_LISTEN_ADDR", defaultListenAddr), "HTTP listen address (host:port)")
+	listenGRPC := flag.String("listen-grpc", envOr("AEGIS_AGENT_LISTEN_GRPC", defaultGRPCListenAddr), "gRPC listen address (host:port); empty disables gRPC")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if err := run(ctx, *listen); err != nil {
+	if err := run(ctx, *listen, *listenGRPC); err != nil {
 		log.Fatalf("aegis-agent: %v", err)
 	}
 }

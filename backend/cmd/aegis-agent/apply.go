@@ -63,7 +63,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -194,61 +193,17 @@ func applyConfig(r *http.Request) (status int, body []byte) {
 	if len(env.Config) == 0 {
 		return http.StatusBadRequest, []byte("missing config field")
 	}
-	// The inner `config` must be a JSON object.
-	// sing-box configs are always objects; accepting
-	// a string/number/null here would let a buggy
-	// panel call overwrite sing-box's config with
-	// garbage.
-	if trimmed := bytes.TrimLeft(env.Config, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
-		return http.StatusBadRequest, []byte("config must be a JSON object")
-	}
-	// The inner object must itself parse as JSON.
-	// (json.RawMessage is opaque until you unmarshal
-	// it; the envelope decode does not validate the
-	// inner shape.)
-	var probe any
-	if err := json.Unmarshal(env.Config, &probe); err != nil {
-		return http.StatusBadRequest, []byte("config is not valid JSON: " + err.Error())
-	}
-	if singboxConfigPath == "" {
-		return http.StatusInternalServerError, []byte("AEGIS_AGENT_SINGBOX_CONFIG_PATH is not configured")
-	}
-	if singboxReloadCmd == "" {
-		return http.StatusInternalServerError, []byte("AEGIS_AGENT_SINGBOX_RELOAD_CMD is not configured")
-	}
-	// Write first. If the write fails, the reload
-	// is skipped and the on-disk config is left at
-	// the previous (working) state. sing-box
-	// continues running the old config.
-	if err := writeAtomic(singboxConfigPath, env.Config); err != nil {
-		return http.StatusInternalServerError,
-			[]byte("write config: " + err.Error())
-	}
-	receivedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	// Reload. Use the request context so a client
-	// disconnect cancels the subprocess; layer the
-	// configured timeout on top.
-	took, err := runReload(r.Context(), singboxReloadCmd, singboxReloadTimeout)
+	// Hand off to the transport-agnostic core. The
+	// core is shared with the gRPC Apply RPC
+	// (see apply_core.go); this wrapper translates
+	// the sentinel errors into the legacy HTTP
+	// status code + body shape so the v0.4.0-b
+	// BatchedApplier contract is preserved.
+	result, err := applyCore(r.Context(), env.Config)
 	if err != nil {
-		// The new config is on disk. Return 500 so
-		// the BatchedApplier retries; the operator
-		// sees a clear error in the panel log.
-		return http.StatusInternalServerError,
-			[]byte("reload failed: " + err.Error())
+		return applyCoreErrorToHTTP(err)
 	}
-	// Success. Update the in-memory last-apply
-	// timestamp so /v1/status reflects the new
-	// value, and serialize the response.
-	lastApplyISO = receivedAt
-	log.Printf("apply ok: bytes=%d reload_took_ms=%d target=%s",
-		len(env.Config), took.Milliseconds(), singboxConfigPath)
-	resp := applyResponse{
-		Accepted:     true,
-		ReceivedAt:   receivedAt,
-		Bytes:        len(env.Config),
-		Reloaded:     true,
-		ReloadTookMS: took.Milliseconds(),
-	}
+	resp := applyResponse(result)
 	buf, err := json.Marshal(resp)
 	if err != nil {
 		// Marshalling a fixed-shape struct should
@@ -258,6 +213,42 @@ func applyConfig(r *http.Request) (status int, body []byte) {
 			[]byte("marshal response: " + err.Error())
 	}
 	return http.StatusAccepted, buf
+}
+
+// applyCoreErrorToHTTP maps the sentinel errors returned by
+// `applyCore` to the HTTP status + body shape the v0.4.0-b
+// BatchedApplier expects. The gRPC handler in `grpc_apply.go` has
+// the parallel `applyCoreErrorToGRPC` mapper; both must stay in
+// sync. New sentinels added to `applyCore` MUST be mapped in both
+// functions or the corresponding transport will surface a
+// 500 / `Unknown` to the caller.
+func applyCoreErrorToHTTP(err error) (status int, body []byte) {
+	switch {
+	case errors.Is(err, errApplyEmptyConfig):
+		status = http.StatusBadRequest
+		body = []byte("empty config")
+	case errors.Is(err, errApplyNotJSONObject):
+		status = http.StatusBadRequest
+		body = []byte("config must be a JSON object")
+	case errors.Is(err, errApplyInvalidJSON):
+		status = http.StatusBadRequest
+		body = []byte(err.Error())
+	case errors.Is(err, errApplyConfigPathNotSet):
+		status = http.StatusInternalServerError
+		body = []byte("AEGIS_AGENT_SINGBOX_CONFIG_PATH is not configured")
+	case errors.Is(err, errApplyReloadCmdNotSet):
+		status = http.StatusInternalServerError
+		body = []byte("AEGIS_AGENT_SINGBOX_RELOAD_CMD is not configured")
+	default:
+		// writeAtomic and runReload errors arrive here.
+		// The wrapped messages are operator-friendly
+		// (file path, subprocess stderr); the panel
+		// surfaces them verbatim in the BatchedApplier
+		// retry path.
+		status = http.StatusInternalServerError
+		body = []byte(err.Error())
+	}
+	return status, body
 }
 
 // applyMaxBytes is the upper bound for the /v1/apply
