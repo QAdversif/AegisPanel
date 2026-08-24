@@ -14,8 +14,10 @@ AGENT_DIR  := ./cmd/aegis-agent
 PKG        := ./...
 COVERAGE   := coverage.out
 LINTER_CFG := .golangci.yml
+PROTO_ROOT := ../proto
+PB_OUT     := internal/agentv1pb
 
-.PHONY: help build build-agent run test test-integration test-coverage lint fmt tidy clean docker docker-build
+.PHONY: help build build-agent run test test-integration test-coverage lint fmt tidy clean docker docker-build proto proto-check
 
 help: ## Show this help.
 	@printf "Backend Makefile\n\nUsage: make <target>\n\nTargets:\n"
@@ -73,3 +75,61 @@ docker-build: ## Build the panel Docker image.
 
 docker-build-agent: ## Build the per-node agent Docker image.
 	@docker build -t QAdversif/aegis-agent:dev -f cmd/aegis-agent/Dockerfile .
+
+# --- Protobuf / gRPC codegen -----------------------------------------------
+
+# proto regenerates the gRPC stubs from ../proto/aegis/v1/agent.proto.
+# Requires `protoc` (the protobuf compiler) + `protoc-gen-go` +
+# `protoc-gen-go-grpc` on PATH. The two Go plugins install via:
+#
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+#   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+#
+# On Windows, install protoc via winget:
+#
+#   winget install --id=Google.Protobuf -e --accept-package-agreements \
+#                  --accept-source-agreements
+#
+# The generated files are committed to the repo (see
+# docs/superpowers/plans/2026-08-25-mtls-grpc-agent.md §Phases v0.8.29),
+# so a clean checkout can build without protoc. The CI installs
+# protoc + plugins and runs `make proto-check` to verify the committed
+# files match a fresh codegen.
+proto: ## Regenerate the gRPC stubs from ../proto (requires protoc + plugins).
+	@command -v protoc >/dev/null || { echo "protoc not installed (see Makefile 'proto' target)"; exit 1; }
+	@command -v protoc-gen-go >/dev/null || { echo "protoc-gen-go not installed (go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)"; exit 1; }
+	@command -v protoc-gen-go-grpc >/dev/null || { echo "protoc-gen-go-grpc not installed (go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest)"; exit 1; }
+	protoc \
+		--proto_path=$(PROTO_ROOT) \
+		--go_out=$(PB_OUT) \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=$(PB_OUT) \
+		--go-grpc_opt=paths=source_relative \
+		$(PROTO_ROOT)/aegis/v1/agent.proto
+	@echo "✓ regenerated $(PB_OUT)/aegis/v1/agent.pb.go + agent_grpc.pb.go"
+
+# proto-check runs the codegen into a scratch directory and diffs
+# against the committed files. Used by CI to catch "committed stub is
+# out of date with the .proto" mistakes. Locally it is a no-op when
+# the stubs are up to date.
+proto-check: ## Verify the committed gRPC stubs match a fresh codegen.
+	@command -v protoc >/dev/null || { echo "protoc not installed (see Makefile 'proto' target)"; exit 1; }
+	@command -v protoc-gen-go >/dev/null || { echo "protoc-gen-go not installed"; exit 1; }
+	@command -v protoc-gen-go-grpc >/dev/null || { echo "protoc-gen-go-grpc not installed"; exit 1; }
+	@mkdir -p .proto-check
+	@protoc \
+		--proto_path=$(PROTO_ROOT) \
+		--go_out=.proto-check \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=.proto-check \
+		--go-grpc_opt=paths=source_relative \
+		$(PROTO_ROOT)/aegis/v1/agent.proto
+	@diff -ruN $(PB_OUT)/aegis/v1 .proto-check/aegis/v1 > .proto-check/diff.txt 2>&1; \
+		if [ -s .proto-check/diff.txt ]; then \
+			echo "✗ committed gRPC stubs are out of date with $(PROTO_ROOT)/aegis/v1/agent.proto"; \
+			echo "  run 'make proto' and commit the result"; \
+			cat .proto-check/diff.txt; \
+			exit 1; \
+		fi
+	@rm -rf .proto-check
+	@echo "✓ committed gRPC stubs are up to date"
