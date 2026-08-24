@@ -1,0 +1,87 @@
+# AegisPanel production stack — `aegis-panel` + `aegis-ui` only.
+# (Postgres / Redis / NATS are kept as plain `docker run` — they're stable,
+# have long-lived volumes, and migrating them under compose is out of scope.)
+#
+# Use:
+#   # 1. Copy this file to /opt/aegis/docker-compose.yml on the server.
+#   cp tools/scripts/aegis-stack.yml /opt/aegis/docker-compose.yml
+#
+#   # 2. Set host env or write a .env file next to the compose file:
+#   cat > /opt/aegis/.env <<'ENV'
+#   AEGIS_PROD_IP=1.2.3.4          # your public IP; the panel binds here
+#   AEGIS_PANEL_TAG=0.8.28.6       # aegispanel image tag
+#   AEGIS_UI_TAG=v0.8.28.6         # aegispanel-ui image tag
+#   AEGIS_ENV_FILE=/tmp/aegis-v0.8.28.env
+#   AEGIS_UI_CADDYFILE=/tmp/ui-Caddyfile
+#   ENV
+#
+#   # 3. Bring up:
+#   cd /opt/aegis && docker compose up -d
+#
+# For a fresh install (also creates dirs, network, and chowns age.key), use
+# tools/scripts/aegis-install.sh which wraps this.
+
+name: aegis
+
+# External network — created by `aegis-install.sh` (or by a previous
+# `docker run --network aegis-net` for the DB containers). Marked external
+# so compose doesn't try to manage it.
+networks:
+  aegis-net:
+    external: true
+    name: aegis-net
+
+services:
+  aegis-panel:
+    image: ghcr.io/qadversif/aegispanel:${AEGIS_PANEL_TAG:-0.8.28.6}
+    container_name: aegis-panel
+    restart: always
+    # env_file: carries all 11 AEGIS_*_BACKEND=pg + AEGIS_SECRETS_BACKEND=sops
+    # + DB DSN + JWT secret + age recipient + webhooks age envelope. Built
+    # offline by the operator via sops and shipped to /tmp/. Never commit.
+    env_file:
+      - ${AEGIS_ENV_FILE:-/tmp/aegis-v0.8.28.env}
+    volumes:
+      # Schema migrations — panel-internal contract, never drop.
+      - /var/lib/aegis/migrations:/app/migrations:ro
+      # agent SSH known_hosts (rw — BatchedApplier writes host keys here).
+      - /var/lib/aegis/known_hosts:/var/lib/aegis/known_hosts
+      # age envelope for webhooks (ro) — must be chown 65532:65532, chmod 0640.
+      - /etc/aegis/age.key:/etc/aegis/age.key:ro
+      # Backup directory (rw for new backups, list-backups needs read).
+      # Missing this mount → GET /api/v1/backups/ returns [] in the UI
+      # even though .sql.gz files are on the host. (See the 2026-08-24
+      # v0.8.28.6 ops-lesson in MEMORY.md.)
+      - /var/lib/aegis/backups:/app/var/backups
+    # Bind on the operator's public IP. NOT 0.0.0.0 (panel must NOT be
+    # reachable from other interfaces) and NOT 127.0.0.1 (top-level Caddy
+    # may dial via lo and would then miss the binding). Use $AEGIS_PROD_IP.
+    ports:
+      - "${AEGIS_PROD_IP}:8080:8080"
+    networks:
+      - aegis-net
+
+  aegis-ui:
+    image: ghcr.io/qadversif/aegispanel-ui:${AEGIS_UI_TAG:-v0.8.28.6}
+    container_name: aegis-ui
+    restart: always
+    environment:
+      # UI's internal Caddy reverse-proxies /api/* to aegis-panel via
+      # the `aegis-net` Docker DNS — the literal name, not localhost.
+      BACKEND_ADDR: http://aegis-panel:8080
+    volumes:
+      # UI Caddyfile — defines SPA caching rules. Operationally owned.
+      - ${AEGIS_UI_CADDYFILE:-/tmp/ui-Caddyfile}:/etc/caddy/Caddyfile:ro
+    # CRITICAL: bind on 0.0.0.0, NOT on $AEGIS_PROD_IP. The top-level
+    # Caddy (Go runtime) does `reverse_proxy <prod-ip>:8081`. If we
+    # bind only on $AEGIS_PROD_IP, docker-proxy listens on that specific
+    # IP and Caddy's dial (which Linux may source-route via lo) hits
+    # "connection refused" → 502 from the public URL. With 0.0.0.0
+    # docker-proxy listens on all interfaces and Caddy always reaches it.
+    # This was the 2026-08-24 v0.8.28.6 prod-deploy 502 root cause.
+    ports:
+      - "0.0.0.0:8081:8080"
+    networks:
+      - aegis-net
+    depends_on:
+      - aegis-panel
