@@ -39,6 +39,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/agentgrpc"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/singbox"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -108,25 +109,27 @@ func (a *fakeAgent) snapshot() []appliedPayload {
 // auto-refresh tests in
 // `singbox/apply_test.go` cover
 // that path with a richer fake.
+//
+// v0.8.29 (PR 3): the resolver shape changed from
+// `singbox.NodeResolver` (Resolve + RefreshBearer) to
+// `agentgrpc.NodeResolver` (ResolveAddr + GetBearer +
+// Refresh). The stub mirrors the new contract; the
+// smoke test does not exercise the 401-auto-refresh
+// path so `Refresh` is a no-op.
 type stubResolver struct {
 	hostPort string
 	bearer   string
 }
 
-func (r *stubResolver) Resolve(_ context.Context, _ uuid.UUID) (string, string, error) {
-	return r.hostPort, r.bearer, nil
+func (r *stubResolver) ResolveAddr(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.hostPort, nil
 }
 
-// RefreshBearer implements the v0.8.8
-// half of singbox.NodeResolver. The
-// smoke test does not exercise the
-// 401-auto-refresh path, so the
-// method is a no-op returning the
-// same bearer. The dedicated
-// auto-refresh tests in
-// `singbox/apply_test.go` cover the
-// behaviour.
-func (r *stubResolver) RefreshBearer(_ context.Context, _ uuid.UUID) (string, error) {
+func (r *stubResolver) GetBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
+}
+
+func (r *stubResolver) Refresh(_ context.Context, _ uuid.UUID) (string, error) {
 	return r.bearer, nil
 }
 
@@ -153,13 +156,19 @@ func TestFlushFn_AppliesConfigToAgent(t *testing.T) {
 	defer srv.Close()
 
 	// 2. Real singbox provider, configured with the
-	// fake resolver. NewHTTPClient is the same
-	// client the real main() uses.
+	// fake resolver + the agentgrpc test client.
+	// The test client wraps the production
+	// httpTransport so the smoke covers the same
+	// 401 -> BearerRefresher -> one-retry path
+	// the BatchedApplier uses in prod.
 	provider := singbox.New()
-	provider.Configure(&stubResolver{
+	resolver := &stubResolver{
 		hostPort: hostPortFromURL(t, srv.URL),
 		bearer:   "test-bearer-fixture-aaaaaaaaaaaaa",
-	}, singbox.NewHTTPClient())
+	}
+	client, teardown := agentgrpc.NewTestClient(srv, resolver)
+	defer teardown()
+	provider.Configure(client)
 
 	// 3. Seed inbounds. We need a real
 	// *nodes.Service (inbounds.Service.Create
@@ -285,10 +294,13 @@ func TestFlushFn_EmptyNodeStillApplies(t *testing.T) {
 	defer srv.Close()
 
 	provider := singbox.New()
-	provider.Configure(&stubResolver{
+	resolver := &stubResolver{
 		hostPort: hostPortFromURL(t, srv.URL),
 		bearer:   "test-bearer-fixture-bbbbbbbbbbbbb",
-	}, singbox.NewHTTPClient())
+	}
+	client, teardown := agentgrpc.NewTestClient(srv, resolver)
+	defer teardown()
+	provider.Configure(client)
 
 	// For the empty-node smoke we still need a
 	// non-nil *nodes.Service so inbounds.NewService
