@@ -295,6 +295,28 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	// the adapter in `app` is the bridge.
 	a.Nodes.WithAgentCA(agentCAAdapter{svc: a.AgentCA})
 
+	// v0.8.31.1 hotfix: lazy-ensure the panel's root
+	// CA is provisioned at boot so the mTLS factory
+	// in `bootstrap.ServiceConfig.MTLSCerts` does not
+	// return "root CA not yet provisioned" on the first
+	// `Provision` call. Without this, `mintMTLSCerts`
+	// (internal/bootstrap/provisioner.go:226) silently
+	// swallows the error and the installer's
+	// `writeMTLSCerts` skips the cert push, leaving the
+	// v0.8.31+ agent on the node without
+	// `/etc/aegis/agent.{crt,key,ca.pem}`. The agent
+	// hard-fails to start without those files
+	// (cmd/aegis-agent/grpc.go: "gRPC mTLS required but
+	// load failed: read cert /etc/aegis/agent.crt: no
+	// such file or directory"). One call at boot is
+	// enough: `Service.EnsureRoot` is idempotent and
+	// caches the result in `cachedRoot`; subsequent
+	// `RootCertPEM()` calls return the same in-memory
+	// cert without round-tripping through the Store.
+	if _, err := a.AgentCA.EnsureRoot(ctx); err != nil {
+		return nil, fmt.Errorf("app: ensure agentca root: %w", err)
+	}
+
 	// 5. Inbounds references nodes.
 	inboundsStore := MustBuild(pool, StoreBuilder[inbounds.Store]{
 		Name:    "inbounds",

@@ -190,6 +190,11 @@ jobs:
 
   # -----------------------------------------------------------------------
   # Migrations (sqlfluff on the SQL files)
+  # v0.8.31.1: SQL files moved from `backend/migrations/`
+  # to `backend/internal/migrations/sql/` so the migrator
+  # can `//go:embed` them. The panel binary now ships
+  # the full set; the host mount at
+  # `/var/lib/aegis/migrations` is an optional override.
   # -----------------------------------------------------------------------
   migrations:
     name: migrations
@@ -199,7 +204,7 @@ jobs:
       - name: Install sqlfluff
         run: pip install sqlfluff==3.0.3
       - name: Lint
-        run: sqlfluff lint backend/migrations --dialect postgres
+        run: sqlfluff lint backend/internal/migrations/sql --dialect postgres
 
   # -----------------------------------------------------------------------
   # mTLS+gRPC migration guard (v0.8.31)

@@ -507,18 +507,53 @@ WantedBy=multi-user.target
 	return err
 }
 
+// verifyDeadline is the timeout for the post-install
+// `systemctl is-active aegis-agent` verify. The
+// package-level var (not const) is a deliberate seam
+// for the test suite: `TestInstaller_VerifyFailure`
+// overrides it to a sub-second value so the failure
+// path does not extend the test's wall time to
+// 30s. The v0.8.31.1 hotfix bumps the default from
+// 5s to 30s (see the comment on `verify` for the
+// rationale); a fresh install of the v0.8.30+ agent
+// can take >5s to become `active` while the mTLS
+// cert loads + the gRPC listener binds on :7001.
+var verifyDeadline = 30 * time.Second
+
 // verify waits for the agent to come up. The
 // placeholder agent is `sleep infinity` so the
 // unit goes `active` within a second; the real
 // agent (v0.4.0) may take longer on a fresh
-// install, hence the 5-second deadline.
+// install, hence the original 5-second deadline.
+//
+// v0.8.31.1 hotfix: the v0.8.30+ agent loads mTLS
+// certs (or falls back to plaintext refusal) +
+// starts the gRPC server during `systemctl start`.
+// On a fresh install the agent can take >5s to
+// become `active` (cert generation, gRPC listener
+// bind on :7001, mTLS handshake with the panel
+// in the subsequent apply). The 5s deadline was
+// calibrated for the v0.4.0 placeholder agent
+// (`sleep infinity`, instant `active`) and was
+// never re-tuned for v0.8.30+. The pre-fix
+// behaviour: the verify loop would report the
+// final state as `active` (the LAST probe
+// succeeds, the 5s loop didn't catch it) but
+// fail because the deadline expired; the
+// provisioner then transitions the node to
+// `offline` and the operator has to SQL-UPDATE
+// the state back to `online` by hand. Bump to
+// 30s — still well below the operator's
+// patience threshold, and covers the cert
+// generation + bind time observed on a demo-node
+// fresh install.
 //
 // The function is the only place where the
 // installer speaks "service is up" semantics;
 // the rest of the install is "bytes on disk".
 func (i *Installer) verify(ctx context.Context, c Client) (time.Duration, error) {
 	start := time.Now()
-	deadline := start.Add(5 * time.Second)
+	deadline := start.Add(verifyDeadline)
 	for time.Now().Before(deadline) {
 		out, err := c.Run(ctx, "systemctl is-active aegis-agent.service")
 		if err == nil && strings.TrimSpace(out) == "active" {

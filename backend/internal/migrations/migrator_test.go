@@ -234,3 +234,187 @@ func TestUp_AppliesAllFilesInLexicalOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveSource_EmbeddedIsNonEmpty is the v0.8.31.1
+// hotfix regression guard for the embed.FS migration
+// source. The build pipeline must bundle the SQL files
+// (via //go:embed) so a fresh v0.8.30+ install can apply
+// migrations without the operator having to scp them into
+// the host mount. A pre-fix build would have an empty
+// embedded FS (the dir param was the only path).
+func TestResolveSource_EmbeddedIsNonEmpty(t *testing.T) {
+	names, err := readEmbeddedNames()
+	if err != nil {
+		t.Fatalf("readEmbeddedNames: %v", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("embedded migrations FS is empty — //go:embed did not pick up backend/internal/migrations/sql/*.sql")
+	}
+	// Sanity: the canonical 2026-08-25 set is
+	// 0001..0024. We only assert >= 24 (a future
+	// release may add migrations without breaking
+	// the test). Operators get the latest set at
+	// build time.
+	if len(names) < 24 {
+		t.Errorf("expected >= 24 embedded migrations, got %d: %v", len(names), names)
+	}
+	// Every entry must be a .sql file in lexical order
+	// (readEmbeddedNames sorts).
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Errorf("embedded names not sorted: %q >= %q", names[i-1], names[i])
+		}
+	}
+}
+
+// TestResolveSource_EmptyDirFallsBackToEmbedded covers
+// the canonical v0.8.31.1 install contract: a fresh
+// deploy with NO host mount (or an empty one) reads
+// from the embedded FS. The pre-fix behaviour read from
+// the host dir unconditionally and would fail with
+// "read migrations dir" if the dir was missing.
+func TestResolveSource_EmptyDirFallsBackToEmbedded(t *testing.T) {
+	readFile, names, err := resolveSource(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveSource: %v", err)
+	}
+	embeddedNames, err := readEmbeddedNames()
+	if err != nil {
+		t.Fatalf("readEmbeddedNames: %v", err)
+	}
+	if len(names) != len(embeddedNames) {
+		t.Errorf("names count: got %d, want %d (embed length)", len(names), len(embeddedNames))
+	}
+	// Smoke: read the first embedded migration via
+	// the returned closure and assert it parses as
+	// a non-empty goose-style file.
+	if len(embeddedNames) == 0 {
+		t.Skip("no embedded migrations — set the file count assertion in TestResolveSource_EmbeddedIsNonEmpty first")
+	}
+	raw, err := readFile(embeddedNames[0])
+	if err != nil {
+		t.Fatalf("readFile(%q): %v", embeddedNames[0], err)
+	}
+	if !strings.Contains(raw, "-- +migrate Up") {
+		t.Errorf("first embedded migration %q missing -- +migrate Up marker", embeddedNames[0])
+	}
+}
+
+// TestResolveSource_MissingDirFallsBackToEmbedded covers
+// the "operator removed the host mount" install
+// contract: a non-existent path is treated as "no
+// override", not as an error.
+func TestResolveSource_MissingDirFallsBackToEmbedded(t *testing.T) {
+	readFile, names, err := resolveSource(t.TempDir() + "/definitely-not-here")
+	if err != nil {
+		t.Fatalf("resolveSource (missing dir): %v (expected silent fallback to embedded)", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("resolveSource returned no names for missing-dir case")
+	}
+	// Closure must be the embedded reader, not a
+	// file-system reader (the dir is missing).
+	raw, err := readFile("0001_initial.sql")
+	if err != nil {
+		t.Fatalf("readFile(0001_initial.sql) via embedded: %v", err)
+	}
+	if len(raw) < 100 {
+		t.Errorf("readFile result suspiciously short: %d bytes (first 80): %q", len(raw), raw[:min(80, len(raw))])
+	}
+	if !strings.Contains(raw, "-- +migrate Up") {
+		t.Errorf("readFile result missing -- +migrate Up marker: %q (first 80)", raw[:min(80, len(raw))])
+	}
+}
+
+// TestResolveSource_CompleteDirOverride covers the
+// operator hot-fix path: a non-empty host dir that
+// contains EVERY embedded migration is accepted as an
+// override. The migrator reads from the dir, not the
+// embed.
+func TestResolveSource_CompleteDirOverride(t *testing.T) {
+	embeddedNames, err := readEmbeddedNames()
+	if err != nil {
+		t.Fatalf("readEmbeddedNames: %v", err)
+	}
+	dir := t.TempDir()
+	for _, n := range embeddedNames {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("-- +migrate Up\n-- override\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", n, err)
+		}
+	}
+	readFile, names, err := resolveSource(dir)
+	if err != nil {
+		t.Fatalf("resolveSource: %v", err)
+	}
+	if len(names) != len(embeddedNames) {
+		t.Errorf("override names: got %d, want %d", len(names), len(embeddedNames))
+	}
+	// The returned reader must serve the override
+	// content, not the embed. The override body is
+	// "-- override" (no CREATE TABLE) so this is
+	// distinguishable.
+	raw, err := readFile(embeddedNames[0])
+	if err != nil {
+		t.Fatalf("readFile: %v", err)
+	}
+	if !strings.Contains(raw, "-- override") {
+		t.Errorf("expected override body, got embed content: %q (first 80)", raw[:min(80, len(raw))])
+	}
+}
+
+// TestResolveSource_FailsLoudOnPartialDir is the
+// critical v0.8.31.1 hotfix regression guard: a
+// non-empty host mount that is missing some embedded
+// migrations must FAIL with a clear error, not
+// silently fall back to embed. Silently falling back
+// would let the panel boot with a partial schema and
+// crash on the first query against a missing column —
+// the same failure mode the v0.8.30/31 mTLS
+// chicken-and-egg hit on prod 2026-08-25 (the panel
+// booted with 0001..0022 applied + 0023/0024 missing
+// from the host mount, then crashed on `SELECT
+// n.agent_transport FROM nodes`).
+func TestResolveSource_FailsLoudOnPartialDir(t *testing.T) {
+	embeddedNames, err := readEmbeddedNames()
+	if err != nil {
+		t.Fatalf("readEmbeddedNames: %v", err)
+	}
+	if len(embeddedNames) < 2 {
+		t.Skip("need >= 2 embedded migrations for this test")
+	}
+	dir := t.TempDir()
+	// Write only the first file. The override is
+	// "incomplete" — the second file (and all the
+	// rest) are missing.
+	first := embeddedNames[0]
+	if err := os.WriteFile(filepath.Join(dir, first), []byte("-- +migrate Up\n-- partial\n"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", first, err)
+	}
+	_, _, err = resolveSource(dir)
+	if err == nil {
+		t.Fatal("resolveSource: expected error on partial override, got nil (silent fallback would let panel boot with partial schema and crash on first new-column query)")
+	}
+	// Error must mention BOTH the missing files and
+	// the install-contract remediation.
+	if !strings.Contains(err.Error(), first) {
+		// The first file is present, not missing —
+		// assert at least one of the OTHER files is
+		// listed.
+		mentioned := false
+		for _, n := range embeddedNames[1:] {
+			if strings.Contains(err.Error(), n) {
+				mentioned = true
+				break
+			}
+		}
+		if !mentioned {
+			t.Errorf("error should mention at least one missing migration, got: %v", err)
+		}
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("error should contain the word 'incomplete' to make the diagnosis obvious, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "embed") && !strings.Contains(err.Error(), "host mount") {
+		t.Errorf("error should hint at the remediation (embed or host-mount), got: %v", err)
+	}
+}

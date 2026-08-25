@@ -21,6 +21,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/QAdversif/AegisPanel/internal/config"
@@ -190,4 +191,89 @@ func TestBuild_ProductionMemoryBackend_Refused(t *testing.T) {
 	// `MustBuild` (see stores.go). The smoke script
 	// (PR #152) is the place that exercises the
 	// log.Fatal branch end-to-end.
+}
+
+// TestBuild_EnsuresAgentCARoot is the v0.8.31.1 regression
+// guard for the half-wired mTLS pipeline: the panel's
+// root CA must be provisioned at boot so the mTLS factory
+// in `bootstrap.ServiceConfig.MTLSCerts` does not return
+// "root CA not yet provisioned" on the first `Provision`
+// call. Without this hotfix, `mintMTLSCerts`
+// (internal/bootstrap/provisioner.go:226) silently
+// swallows the error and the installer's `writeMTLSCerts`
+// skips the cert push, leaving the v0.8.31+ agent on the
+// node without `/etc/aegis/agent.{crt,key,ca.pem}`. The
+// agent hard-fails to start without those files
+// (cmd/aegis-agent/grpc.go: "gRPC mTLS required but load
+// failed: read cert /etc/aegis/agent.crt: no such file or
+// directory").
+//
+// The fixture is the same hermetic "all memory" backend
+// configuration as TestBuild_AllMemoryBackends above:
+// every AEGIS_*_BACKEND defaults to "memory" (incl.
+// agentca), no live pg connection, retry worker disabled.
+// The assertion is a single `RootCertPEM()` call after
+// `Build` — a pre-fix build would return ErrNotFound; a
+// post-fix build returns the freshly-minted cert PEM.
+func TestBuild_EnsuresAgentCARoot(t *testing.T) {
+	t.Setenv("AEGIS_ENV", "development")
+	t.Setenv("AEGIS_JWT_SECRET", "test-jwt-secret-must-be-at-least-32-characters-long-xxxxxx")
+	t.Setenv("AEGIS_POSTGRES_DSN", "postgres://localhost:5432/aegis_smoke?sslmode=disable")
+	t.Setenv("AEGIS_REDIS_ADDR", "localhost:6379")
+	t.Setenv("AEGIS_NATS_URL", "nats://localhost:4222")
+	t.Setenv("AEGIS_AUTH_BACKEND", "memory")
+	t.Setenv("AEGIS_NODES_BACKEND", "memory")
+	t.Setenv("AEGIS_INBOUNDS_BACKEND", "memory")
+	t.Setenv("AEGIS_HOSTS_BACKEND", "memory")
+	t.Setenv("AEGIS_USERS_BACKEND", "memory")
+	t.Setenv("AEGIS_PLANS_BACKEND", "memory")
+	t.Setenv("AEGIS_SUBSCRIPTION_BACKEND", "memory")
+	t.Setenv("AEGIS_PANELCFG_BACKEND", "memory")
+	t.Setenv("AEGIS_AUDITS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED", "false")
+	t.Setenv("AEGIS_BACKUPS_DIR", t.TempDir())
+	t.Setenv("AEGIS_AGENT_BINARY", t.TempDir()+"/aegis-agent-not-used-in-smoke")
+	t.Setenv("AEGIS_AGENT_KNOWN_HOSTS", t.TempDir()+"/known_hosts")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := Build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer a.Close()
+
+	// Post-fix assertion: RootCertPEM() must succeed
+	// and return a non-empty PEM. Pre-fix: this would
+	// return ErrNotFound because the in-memory root
+	// was never minted during Build.
+	pem, err := a.AgentCA.RootCertPEM()
+	if err != nil {
+		t.Fatalf("AgentCA.RootCertPEM after Build: %v (post-fix should return nil; pre-fix returns ErrNotFound)", err)
+	}
+	if pem == "" {
+		t.Fatal("AgentCA.RootCertPEM returned empty string after Build")
+	}
+	if !strings.HasPrefix(pem, "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("AgentCA.RootCertPEM: not a PEM (missing BEGIN marker), first 80 chars: %q", pem[:min(80, len(pem))])
+	}
+
+	// Idempotency: a second call must return the same
+	// cert (the in-memory cache should be a hit, not a
+	// re-mint from the Store). The agentca service's
+	// internal mutex + cachedRoot pointer make this
+	// safe; a regression that drops the cache between
+	// calls would generate a fresh root here.
+	pem2, err := a.AgentCA.RootCertPEM()
+	if err != nil {
+		t.Fatalf("AgentCA.RootCertPEM (2nd call): %v", err)
+	}
+	if pem2 != pem {
+		t.Error("AgentCA.RootCertPEM idempotency: 1st call != 2nd call (cache miss on second read — regression in Service.cachedRoot wiring)")
+	}
 }
