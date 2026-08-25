@@ -742,6 +742,152 @@ is exactly what a memory-only dev install wants.
   for the full description. The v1.0.0 GA tag is unblocked
   by this fix.
 
+## mTLS+gRPC migration (v0.8.31)
+
+v0.8.29 added the gRPC control plane alongside the v0.4.0-b
+HTTP+bearer surface (dual-stack). v0.8.30 wired mTLS
+end-to-end (self-signed root CA in the `agentca` table,
+per-node server certs, panel-side client certs,
+`RequireAndVerifyClientCert` on the agent, mTLS dial on the
+panel). v0.8.31 ships the operator-facing surface for the
+migration; v0.8.32 cuts the HTTP+bearer path entirely.
+
+### Why a migration
+
+The v0.4.0-b HTTP+bearer path is the v0.x default for
+historical reasons (it's the v0.4.0 `singbox/apply.go`
+wire format). The mTLS+gRPC path is the v0.8.x+
+canonical mode: gRPC has structured error codes
+(`codes.Unauthenticated` vs the HTTP 401), mTLS
+eliminates the bearer-secret-rotation footgun (the
+agent no longer needs to share a secret with the
+panel — the cert is the auth), and the wire format
+streams cleanly through proxies that understand HTTP/2.
+
+The migration is one-way for v0.8.32+ (the `http`
+value is dropped from the column's `CHECK` constraint).
+The v0.8.31 release is the operator's window.
+
+### Migration runbook (single node, then bulk)
+
+The five-step flow per node is:
+
+1. **Pre-flight**: verify the agent has the v0.8.30
+   mTLS material on disk. SSH into the node and check
+   that `/etc/aegis/agent.crt`, `/etc/aegis/agent.key`,
+   and `/etc/aegis/agent-ca.pem` exist and are
+   non-empty. The v0.8.30 PR 2c installer writes
+   these files on next provision; a v0.8.30 install
+   that has not been re-provisioned since the upgrade
+   may need a re-provision first.
+
+2. **Verify the agent gRPC listener is up**: from the
+   panel host,
+   `openssl s_client -connect <node-ip>:7001 -showcerts </dev/null 2>&1 | grep -A1 'subject\|issuer'`
+   should show a cert with `CN=<node-uuid>` (the
+   per-node server cert). A failure here means the
+   agent is not running with mTLS; check
+   `/etc/aegis/agent.env` for `AEGIS_AGENT_MTLS_CERT`,
+   `AEGIS_AGENT_MTLS_KEY`, `AEGIS_AGENT_MTLS_CA`.
+
+3. **Run the rotate-transport CLI**:
+
+   ```bash
+   aegis admin node rotate-transport <node-uuid>
+   ```
+
+   The CLI flips the `agent_transport` column from
+   `http` to `grpc` and writes a `node.transport.rotated`
+   audit row. Idempotent: re-running on an
+   already-`grpc` node is a no-op.
+
+4. **Verify the panel is using the gRPC path**:
+   restart the panel so the new
+   `AEGIS_AGENT_TRANSPORT=grpc` env var is picked up
+   (or set the env var in the panel's systemd unit /
+   docker-compose file and reload). A
+   `GET /api/v1/nodes` call should return the node
+   with `agent_transport: "grpc"`, and the
+   deprecation warning headers should NOT be set
+   once every node is on `grpc`.
+
+5. **Bulk-migrate the rest of the fleet** (if you
+   have more than one node):
+
+   ```bash
+   aegis admin node rotate-transport --filter transport=http
+   ```
+
+   This rotates every node that is still on `http`
+   to `grpc`. The CLI is safe to run on cron
+   (idempotent at the Service layer).
+
+### Deprecation warning
+
+`GET /api/v1/nodes` carries three deprecation
+headers when at least one node is on
+`agent_transport=http`:
+
+- `Deprecation: true` (RFC 8594)
+- `X-Aegis-Deprecation-Notice: <exact CLI command>`
+- `X-Aegis-Deprecation-Sunset: v0.8.32`
+
+The headers fire when ANY node is on `http`, not
+when ALL nodes are. The operator's daily
+`GET /api/v1/nodes` check is the migration
+progress signal: as long as a single node is
+still on `http`, the headers are set, and they
+disappear the moment the migration is complete.
+
+The body still includes the per-node
+`agent_transport` so the operator's existing
+tooling does not need to learn the header.
+
+### Rollback (rare)
+
+If a v0.8.30 mTLS handshake misbehaves in prod
+and the operator needs to take a node off the
+new path, the per-uuid rollback is:
+
+```bash
+aegis admin node rotate-transport <node-uuid> --to http
+```
+
+The Service no-ops a same-value rotation, so
+this is safe to run after the operator has
+re-set `AEGIS_AGENT_TRANSPORT=http` on the
+panel and restarted. A bulk rollback is not
+supported at v0.8.31 (the closed filter set is
+just `transport=http`); a v0.8.32 follow-up
+adds `--filter transport=grpc` if needed.
+
+### v0.8.32 cut (post-migration)
+
+Once all three conditions hold:
+
+1. `GET /api/v1/nodes` shows 0% `transport=http`
+   in prod for at least 1 release.
+2. Telemetry confirms 0% HTTP at peak hour for
+   7 days.
+3. Operator sign-off.
+
+The v0.8.32 cut removes:
+
+- `backend/internal/agentgrpc/http_transport.go`
+- `backend/internal/agentgrpc/http_transport_test.go`
+- `backend/cmd/aegis-agent/http.go`
+- `backend/cmd/aegis-agent/apply.go` (the HTTP-only
+  path; the side-effect primitives are reused by
+  `grpc_apply.go`)
+- `AEGIS_AGENT_TRANSPORT` env var (the only Client
+  is the gRPC transport)
+
+The v0.8.32 PR is the "painless cut" — the schema
+migration is forward-only (the `agent_transport`
+column drops its `http` value from the CHECK), the
+rollback path is the v0.8.31 release tag, and the
+diff is ~5 files. No data migration.
+
 ## Where to next?
 
 - [Quickstart](./guide/quickstart) — a shorter "first 5 minutes"

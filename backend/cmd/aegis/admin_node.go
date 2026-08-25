@@ -65,9 +65,10 @@ import (
 )
 
 // runAdminNode dispatches the `aegis admin node
-// <subcommand>` namespace. v0.8.3 ships one
-// subcommand (`rotate-panel-key`); future
-// subcommands (e.g. `decrypt-key-for-emergency-
+// <subcommand>` namespace. v0.8.3 ships
+// `rotate-panel-key`; v0.8.31 adds
+// `rotate-transport` for the mTLS+gRPC migration.
+// Future subcommands (e.g. `decrypt-key-for-emergency-
 // access`) land in this same dispatcher.
 func runAdminNode(ctx context.Context, args []string) {
 	if len(args) == 0 {
@@ -77,6 +78,18 @@ func runAdminNode(ctx context.Context, args []string) {
 	switch args[0] {
 	case "rotate-panel-key":
 		runAdminNodeRotatePanelKey(ctx, args[1:])
+	case "rotate-transport":
+		// v0.8.31: the per-node transport
+		// flip for the mTLS+gRPC migration.
+		// The implementation lives in
+		// admin_node_transport.go (separate
+		// file because the dispatch is larger
+		// than the rotate-panel-key CLI; the
+		// 4-arg surface --all / --filter /
+		// --dry-run / --to has its own
+		// comments and is otherwise
+		// self-contained).
+		runAdminNodeRotateTransport(ctx, args[1:])
 	default:
 		nodeUsage()
 		os.Exit(2)
@@ -84,17 +97,30 @@ func runAdminNode(ctx context.Context, args []string) {
 }
 
 func nodeUsage() {
-	fmt.Fprintln(os.Stderr, "usage: aegis admin node <rotate-panel-key> [args]")
+	fmt.Fprintln(os.Stderr, "usage: aegis admin node <rotate-panel-key|rotate-transport> [args]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "  aegis admin node rotate-panel-key <node-uuid> --key <path>")
+	fmt.Fprintln(os.Stderr, "  aegis admin node rotate-transport <node-uuid> [--to grpc|http]")
+	fmt.Fprintln(os.Stderr, "  aegis admin node rotate-transport --all [--to grpc|http]")
+	fmt.Fprintln(os.Stderr, "  aegis admin node rotate-transport --filter transport=http [--to grpc|http]")
+	fmt.Fprintln(os.Stderr, "  aegis admin node rotate-transport [...flags] --dry-run")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "The CLI opens a pg pool (AEGIS_POSTGRES_DSN), loads the node")
-	fmt.Fprintln(os.Stderr, "row, SSHes into the node using the operator's existing private")
+	fmt.Fprintln(os.Stderr, "rotate-panel-key opens a pg pool (AEGIS_POSTGRES_DSN), loads the")
+	fmt.Fprintln(os.Stderr, "node row, SSHes into the node using the operator's existing private")
 	fmt.Fprintln(os.Stderr, "key, generates a fresh panel ed25519 keypair, pushes the public")
 	fmt.Fprintln(os.Stderr, "half to authorized_keys, and stores the encrypted private half")
 	fmt.Fprintln(os.Stderr, "in the nodes row. The envelope is built from")
 	fmt.Fprintln(os.Stderr, "AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS /")
 	fmt.Fprintln(os.Stderr, "AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE (same as the panel's webhooks).")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "rotate-transport (v0.8.31) flips the per-node agent_transport")
+	fmt.Fprintln(os.Stderr, "column between 'http' and 'grpc' (the v0.8.31 closed set).")
+	fmt.Fprintln(os.Stderr, "Default --to is grpc. The bulk paths are --all (every node) and")
+	fmt.Fprintln(os.Stderr, "--filter transport=http (the migration backlog; only http nodes).")
+	fmt.Fprintln(os.Stderr, "The flow is idempotent at the Service layer (a no-op rotation is")
+	fmt.Fprintln(os.Stderr, "safe on cron / as a remediation step). See")
+	fmt.Fprintln(os.Stderr, "docs/operator-guide.md and docs/KNOWN_LIMITATIONS.md for the")
+	fmt.Fprintln(os.Stderr, "v0.8.31 mTLS+gRPC migration runbook.")
 }
 
 // runAdminNodeRotatePanelKey is the v0.8.3

@@ -202,6 +202,76 @@ jobs:
         run: sqlfluff lint backend/migrations --dialect postgres
 
   # -----------------------------------------------------------------------
+  # mTLS+gRPC migration guard (v0.8.31)
+  # -----------------------------------------------------------------------
+  # The v0.8.31 release ships the per-node
+  # `agent_transport` column + the
+  # `aegis admin node rotate-transport` CLI.
+  # v0.8.32 cuts the HTTP+bearer transport
+  # entirely (~5 files deleted). The grep
+  # gate below fails the build on a NEW
+  # `http_transport*.go` file added to
+  # `internal/agentgrpc/` after the v0.8.29
+  # baseline. The v0.8.29 baseline is two
+  # files (the production code + its unit
+  # test). The gate is also a typo sentinel:
+  # the single-word `agenthttp` (no
+  # underscore) is not a term the codebase
+  # uses, so any reference is a typo /
+  # thinko that would land the v0.8.32 cut
+  # in a half-state.
+  transport-guard:
+    name: transport guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify only the v0.8.29 http_transport baseline exists
+        # Two checks in one step. Both must
+        # pass; the step is `set -e` so the
+        # first failure aborts.
+        run: |
+          set -euo pipefail
+          # 1. agenthttp typo sentinel: the
+          # single-word form is not used
+          # anywhere in the codebase. A hit
+          # here is a typo that would land
+          # the v0.8.32 cut in a half-state.
+          if grep -rn 'agenthttp' backend/ --include='*.go' --exclude-dir=archive; then
+            echo "ERROR: 'agenthttp' (no underscore) is a banned term."
+            echo "The v0.8.32 cut removes the HTTP+bearer transport; a new"
+            echo "reference would land the cut in a half-state."
+            exit 1
+          fi
+          # 2. File-count gate: the v0.8.29
+          # baseline is exactly 1
+          # `http_*.go` file in
+          # `internal/agentgrpc/`
+          # (http_transport.go — the
+          # v0.8.29 transport shipped
+          # without a dedicated unit
+          # test, the existing tests in
+          # `internal/cores/singbox`
+          # cover the wire). A new
+          # `http_*.go` file here would
+          # resurrect the deprecated
+          # surface. The v0.8.32 cut
+          # deletes the file; the count
+          # would drop to 0, but the cut
+          # is gated on operator sign-off
+          # (see KNOWN_LIMITATIONS.md), so
+          # the count of 1 is the steady
+          # state for v0.8.31+ until the
+          # cut ships.
+          count=$(find backend/internal/agentgrpc/ -maxdepth 1 -name 'http_*.go' -type f | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "ERROR: expected exactly 1 http_*.go file in internal/agentgrpc/ (v0.8.29 baseline), found $count."
+            echo "Adding a new http_*.go file resurrects the deprecated transport; v0.8.32 deletes it."
+            find backend/internal/agentgrpc/ -maxdepth 1 -name 'http_*.go' -type f
+            exit 1
+          fi
+          echo "transport guard: 0 hits for 'agenthttp', $count http_*.go file in internal/agentgrpc/ (expected 1). OK."
+
+  # -----------------------------------------------------------------------
   # Ansible (ansible-lint on the deploy/ roles)
   # -----------------------------------------------------------------------
   ansible:
