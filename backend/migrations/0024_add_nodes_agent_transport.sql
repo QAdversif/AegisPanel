@@ -1,0 +1,115 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- +migrate Up
+--
+-- v0.8.31 -- per-node `agent_transport` column for the
+-- mTLS+gRPC migration telemetry.
+--
+-- # Why this migration
+--
+-- v0.8.29 ships the gRPC transport alongside HTTP+bearer
+-- (dual-stack); v0.8.30 wires mTLS; v0.8.32 cuts HTTP
+-- entirely. The cut is gated on the operator having
+-- rotated every node to the gRPC transport, but the
+-- v0.8.30 schema gives the panel no per-node signal
+-- for "is this node on HTTP or gRPC?" — the
+-- `AEGIS_AGENT_TRANSPORT` env var is process-wide and
+-- the per-node audit trail is the agent's stderr.
+--
+-- The v0.8.31 column is the operator's per-node source
+-- of truth:
+--
+--   - `GET /api/v1/nodes` returns
+--     `agent_transport: "http" | "grpc"` for every row.
+--   - `aegis admin node rotate-transport <uuid>` flips
+--     a node from `http` to `grpc` and writes an audit
+--     row (`node.transport.rotated`).
+--   - The deprecation warning header on
+--     `GET /api/v1/nodes` fires when at least one node
+--     is still on `http`, so the operator sees the
+--     migration backlog in their daily check.
+--
+-- The column is observability + audit only in v0.8.31.
+-- The transport pick at apply time is still process-wide
+-- via `AEGIS_AGENT_TRANSPORT` (a per-node resolver-driven
+-- pick is a v0.8.32 follow-up if the operator wants it;
+-- for v0.8.31 the CLI is the source of intent and the
+-- env var is the source of behaviour).
+--
+-- # Default
+--
+-- The migration backfills every pre-v0.8.31 node with
+-- `'http'`. The default matches the v0.8.30
+-- `AEGIS_AGENT_TRANSPORT` default, so the column never
+-- disagrees with the env var at the moment of the
+-- migration. New nodes installed via the v0.8.31
+-- provisioner write `'http'` (the bootstrap cert-push
+-- in v0.8.30 PR 2c runs first; the column flips to
+-- `'grpc'` when the operator runs the rotate-transport
+-- CLI). v0.8.32 drops the `'http'` default; the column
+-- becomes NOT NULL with a CHECK that only allows
+-- `'grpc'`.
+--
+-- # Schema
+--
+--   - `agent_transport` TEXT NOT NULL DEFAULT 'http'
+--     CHECK (agent_transport IN ('http', 'grpc')).
+--     The CHECK is the safety net for the v0.8.31
+--     `Service.RotateTransport` validator: a bug in
+--     the Go layer that passes `agent_transport='dual'`
+--     (a value the v0.8.29 `transport.go` rejects but
+--     future code might add) fails loudly at the SQL
+--     layer instead of corrupting the per-node state.
+--
+-- # Index
+--
+-- No dedicated index. The v0.8.31 deprecation-warning
+-- path runs `SELECT COUNT(*) FROM nodes WHERE
+-- agent_transport = 'http'` once per
+-- `GET /api/v1/nodes` call. The query plan on a 100-node
+-- fleet is a sequential scan over a 100-row table
+-- (sub-millisecond). A partial index
+-- `ON nodes (id) WHERE agent_transport = 'http'` is
+-- the v0.8.32 optimisation if the fleet grows past
+-- 1k nodes; until then the index would be a write
+-- tax without a read win.
+--
+-- # Downstream
+--
+-- - `internal/nodes/node.go` (PR 1) adds the
+--   `Node.AgentTransport` field (JSON tag
+--   `agent_transport`).
+-- - `internal/nodes/store.go` (PR 1) adds
+--   `Store.SetAgentTransport` + the MemoryStore impl.
+-- - `internal/nodes/pg_store.go` (PR 1) scans the new
+--   column in `nodeWithTagsSelect` and writes it in
+--   `insertNode` / `Update`.
+-- - `internal/nodes/service.go` (PR 1) adds
+--   `Service.RotateTransport` (validates the value,
+--   writes the column, fires the audit row).
+-- - `cmd/aegis/admin_node.go` (PR 2) wires
+--   `aegis admin node rotate-transport <uuid>`.
+-- - `internal/nodes/handler.go` (PR 2) adds the
+--   deprecation warning header on `GET /api/v1/nodes`.
+-- - `.github/workflows/ci.yml` (PR 2) adds the grep
+--   gate that fails the build on a new
+--   `http_transport.go` file outside the v0.8.29
+--   archive path.
+--
+-- # v0.8.31 dev path
+--
+-- The MemoryStore (default in dev) does not consume
+-- this migration. The migration runs only when the
+-- panel boots with `AEGIS_*_BACKEND=pg`; the dev path
+-- defaults to memory and skips the SQL entirely
+-- (the column defaults to `'http'` in Go land).
+
+BEGIN;
+
+ALTER TABLE nodes ADD COLUMN IF NOT EXISTS agent_transport TEXT NOT NULL DEFAULT 'http' CHECK (agent_transport IN ('http', 'grpc'));
+
+-- +migrate Down
+
+ALTER TABLE IF EXISTS nodes DROP COLUMN IF EXISTS agent_transport;
+
+COMMIT;
