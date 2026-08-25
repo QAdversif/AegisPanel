@@ -7,18 +7,16 @@ dialect = postgres
 # during the early-development phase. Tighten per-rule as the project
 # stabilises.
 
-# Phase 0 — only the bootstrap migration is in place, hand-written and
-# still being iterated on. Loosen rules that would block trivial merges
-# during the early-development phase. Tighten per-rule as the project
-# stabilises.
-
 # LT01 (whitespace alignment in CREATE TABLE) is stylistic and breaks
-# the moment a new column is added. LT05 (line length) raised to 120 —
-# SQL identifiers are long, reflowing every constraint onto multiple
-# lines hurts readability. LT07/08/09 (BEGIN/COMMIT, trailing blank
-# lines) are stylistic. Capitalisation.* are stylistic; we'll tighten
-# once we have an auto-fmt step.
-exclude_rules = LT01, LT05, LT07, LT08, LT09, capitalisation.keywords, capitalisation.identifiers, capitalisation.functions, capitalisation.literals, capitalisation.types
+# the moment a new column is added. LT02 (multi-line statement indent)
+# rejects the standard `CREATE TABLE foo (\n    col INT,\n);` form
+# that every Postgres migration uses; we don't want every PR to
+# touch unrelated migration files just to dedent. LT05 (line
+# length) raised to 120 — SQL identifiers are long, reflowing every
+# constraint onto multiple lines hurts readability. LT07/08/09
+# (BEGIN/COMMIT, trailing blank lines) are stylistic. Capitalisation.*
+# are stylistic; we'll tighten once we have an auto-fmt step.
+exclude_rules = LT01, LT02, LT05, LT07, LT08, LT09, capitalisation.keywords, capitalisation.identifiers, capitalisation.functions, capitalisation.literals, capitalisation.types
 max_line_length = 120
 
 # Allow trailing newline at EOF (sqlfluff's default; explicit for clarity).
