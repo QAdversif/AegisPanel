@@ -666,6 +666,34 @@ func (s *Service) WithSSHUser(user string) *Service {
 	return s
 }
 
+// WithAgentCA installs the v0.8.30 mTLS cert
+// bootstrap dependency. The interface is
+// `nodes.AgentCertIssuer` (this package defines
+// the consumer-side contract; the `agentca`
+// package is the producer and adapts via
+// `internal/app/agentca_adapter.go`).
+//
+// v0.8.30 PR 1c wires the setter; v0.8.30 PR 2
+// wires the consumer (the `nodes.Service.Provision`
+// path; today the `bootstrap` package's `Provision`
+// cannot import this package without a cycle
+// that is scheduled for v0.8.31).
+func (s *Service) WithAgentCA(ca AgentCertIssuer) *Service {
+	s.agentCA = ca
+	return s
+}
+
+// AgentCA returns the v0.8.30 mTLS cert issuer
+// installed via `WithAgentCA`, or `nil` if the
+// mTLS bootstrap is not wired. v0.8.30 PR 1c
+// exposes the getter; v0.8.30 PR 2 wires the
+// `bootstrap` package's `Provision` to call
+// `AgentCA().EnsureNodeCerts(...)` (today the
+// cycle blocks the call site).
+func (s *Service) AgentCA() AgentCertIssuer {
+	return s.agentCA
+}
+
 // keyFingerprintForLog was reserved for
 // future audit-row enrichment in the
 // v0.8.x bucket. Removed in v0.8.7 —

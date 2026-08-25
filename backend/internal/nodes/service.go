@@ -41,6 +41,15 @@ type Service struct {
 	sshClientFactory func(bootstrap.ClientConfig) (bootstrap.Client, error)
 	knownHosts       string
 	sshUser          string
+	// v0.8.30: mTLS cert issuer. Provision
+	// calls `EnsureNodeCerts(ctx, nodeID,
+	// addr)` before the SSH dial so the
+	// bootstrap installer can push the
+	// cert+key files to the node. Nil-safe
+	// (a nil issuer means "mTLS not wired";
+	// Provision falls back to bearer-only
+	// auth, which is the v0.8.29 default).
+	agentCA AgentCertIssuer
 }
 
 // NewService wires a Service around the given store. The clock

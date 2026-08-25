@@ -101,6 +101,14 @@ func (m *mockNodeProvider) SetAgentBearer(_ context.Context, id uuid.UUID, beare
 	return nil
 }
 
+// AgentCA is removed in v0.8.30 PR 1c; the
+// v0.8.30 PR 2 mTLS integration lands alongside
+// the bootstrap `Provision` refactor that lifts
+// the `bootstrap <-> nodes` import cycle (the
+// v0.8.31 work). The `nodes.Service` keeps its
+// own `WithAgentCA` + `AgentCA()` getter for
+// the v0.8.30 PR 2 caller.
+
 func (m *mockNodeProvider) SetSSHPrivateKeyCiphertext(_ context.Context, id uuid.UUID, ciphertext []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
