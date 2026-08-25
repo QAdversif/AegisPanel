@@ -54,6 +54,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
+	"github.com/QAdversif/AegisPanel/internal/agentca"
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/backups"
@@ -115,6 +116,14 @@ type App struct {
 	Backups          *backups.Service
 	Webhooks         *webhooks.Service
 	Bootstrap        *bootstrap.Service
+	// AgentCA is the v0.8.30 mTLS cert bootstrap
+	// service. Holds the panel's self-signed root
+	// CA + the per-node server + client certs.
+	// The Service is the only consumer of the
+	// Store (the BatchedApplier does not consume
+	// it directly; `nodes.Service.Provision`
+	// is the integration point).
+	AgentCA *agentca.Service
 
 	// Credentials is the Phase 2 multi-user
 	// sing-box render data model: the
@@ -255,6 +264,36 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		Env:     cfg.Env,
 	})
 	a.Nodes = nodes.NewService(nodesStore)
+
+	// 4b. AgentCA (v0.8.30 mTLS bootstrap). The
+	// Store is the same backend as the rest of
+	// the panel (`pg` / `memory`); the Service
+	// holds the root CA in memory after the
+	// first call to `EnsureRoot`. Nodes service
+	// consumes the Service via
+	// `nodes.Service.WithAgentCA(a.AgentCA)`
+	// (the WithXxx setter pattern matches the
+	// rest of the panel's DI; see `nodes.WithAgentCA`).
+	agentcaStore := MustBuild(pool, StoreBuilder[agentca.Store]{
+		Name:    "agentca",
+		Backend: cfg.AgentCABackend,
+		PgCtor:  func(p *pgxpool.Pool) agentca.Store { return agentca.NewPgStore(p) },
+		MemCtor: func() agentca.Store { return agentca.NewMemoryStore() },
+		Env:     cfg.Env,
+	})
+	a.AgentCA = agentca.NewService(agentcaStore)
+	defer func() { _ = a.AgentCA.Close() }()
+	// Wire the agentca Service into nodes.Service
+	// so `nodes.Service.Provision` (the v0.8.30
+	// mTLS bootstrap integration) can call
+	// `EnsureNodeCerts` before the SSH dial. The
+	// adapter is in `internal/app/agentca_adapter.go`
+	// because the `app` package is the only one that
+	// can import all three (agentca + bootstrap +
+	// nodes) without a cycle. The `nodes` and
+	// `bootstrap` packages form a peer pair (cycle);
+	// the adapter in `app` is the bridge.
+	a.Nodes.WithAgentCA(agentCAAdapter{svc: a.AgentCA})
 
 	// 5. Inbounds references nodes.
 	inboundsStore := MustBuild(pool, StoreBuilder[inbounds.Store]{

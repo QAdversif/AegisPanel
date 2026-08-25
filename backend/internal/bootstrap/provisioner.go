@@ -137,7 +137,7 @@ type NodeRow struct {
 	// SSHPrivateKeyCiphertext is the panel's
 	// persistent SSH private key for this node,
 	// sealed with the operator's age envelope.
-	// Empty bytes mean "no key yet" — the
+	// Empty bytes mean "no key yet" РІР‚вЂќ the
 	// provisioner treats empty as the signal to
 	// fall through to the operator-supplied
 	// password / key on the install path, and
@@ -270,7 +270,7 @@ func (s *Service) Provision(
 	// from the state machine's "reachable
 	// from online" set) because the policy
 	// question is "what is provisionable",
-	// not "what can we reach from here" — a
+	// not "what can we reach from here" РІР‚вЂќ a
 	// node that is already `online` is not
 	// provisionable (it is already installed),
 	// even though the state machine would let
@@ -302,7 +302,7 @@ func (s *Service) Provision(
 	//      decrypt it via the envelope and use
 	//      that PEM as the auth material. The
 	//      operator's request (key OR password)
-	//      is ignored on this path — the stored
+	//      is ignored on this path РІР‚вЂќ the stored
 	//      key wins. The post-install hook is
 	//      NOT registered because the key is
 	//      already in place on the node from
@@ -407,7 +407,7 @@ func (s *Service) Provision(
 	// bearer at every Apply (POST /v1/apply), not
 	// just at install time. We mint it in step 1
 	// (above) and only write it to the node here
-	// once the install has succeeded — if the
+	// once the install has succeeded РІР‚вЂќ if the
 	// install failed, there is no live agent to
 	// pair the bearer with, and a stale DB value
 	// would be a footgun. The Update on row.State
@@ -429,7 +429,7 @@ func (s *Service) Provision(
 	// bearer at every Apply (POST /v1/apply), not
 	// just at install time. We mint it in step 1
 	// (above) and only write it to the node here
-	// once the install has succeeded — if the
+	// once the install has succeeded РІР‚вЂќ if the
 	// install failed, there is no live agent to
 	// pair the bearer with, and a stale DB value
 	// would be a footgun. The Update on row.State
@@ -504,7 +504,7 @@ type ProvisionRequest struct {
 	// SSHPrivateKey is the operator's pasted
 	// private key (PEM). The provisioner
 	// passes it to the installer as-is.
-	// Mutually exclusive with SSHPassword —
+	// Mutually exclusive with SSHPassword РІР‚вЂќ
 	// the HTTP layer enforces the XOR.
 	SSHPrivateKey string
 	// SSHPassword is the operator's SSH login
@@ -589,7 +589,7 @@ func errString(err error) string {
 
 // isProvisionable reports whether the given
 // state is a legal start for a Provision
-// call. The set is {new, offline} — the two
+// call. The set is {new, offline} РІР‚вЂќ the two
 // states where the install workflow has
 // something to do. A node in `online` is
 // already installed (nothing to do);

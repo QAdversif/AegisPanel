@@ -79,6 +79,19 @@ type Config struct {
 	// "pg".
 	NodesBackend string `env:"AEGIS_NODES_BACKEND" envDefault:"memory"`
 
+	// AgentCABackend selects the persistence layer for the
+	// agentca service (v0.8.30 mTLS cert bootstrap).
+	// "memory" (default) keeps the root CA + per-node
+	// certs in RAM — dev only (a panel restart loses
+	// them). "pg" uses the PostgreSQL backend
+	// (PgStore) backed by the `agentca` + `nodes.mtls_*`
+	// columns (migration 0023). The mTLS handshake in
+	// v0.8.30 PR 2 requires the pg backend in prod
+	// (a panel restart without the certs on disk
+	// would re-issue on next Apply, which the agent's
+	// pinned trust store would reject).
+	AgentCABackend string `env:"AEGIS_AGENTCA_BACKEND" envDefault:"memory"`
+
 	// InboundsBackend selects the persistence layer for the
 	// inbounds service. "memory" (default) keeps inbounds
 	// in RAM — dev only. "pg" uses the PostgreSQL backend
@@ -455,5 +468,6 @@ func (c *Config) usesAnyPgBackend() bool {
 		c.WebhooksBackend == "pg" ||
 		c.PanelcfgBackend == "pg" ||
 		c.AuditsBackend == "pg" ||
-		c.CredentialsBackend == "pg"
+		c.CredentialsBackend == "pg" ||
+		c.AgentCABackend == "pg"
 }
