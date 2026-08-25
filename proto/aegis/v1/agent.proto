@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Aegis panel <-> node control plane (gRPC).
+//
+// This file is the canonical wire definition. The generated stubs land in
+// `backend/internal/agentv1pb/` and are imported by both the panel binary
+// (`github.com/QAdversif/AegisPanel/backend/cmd/aegis`) and the per-node
+// agent binary (`github.com/QAdversif/AegisPanel/backend/cmd/aegis-agent`).
+//
+// # Versioning
+//
+// Package `aegis.v1` is the v0.8.29+ wire. The HTTP+bearer path stays
+// live until v0.8.32 (cut release, see
+// `docs/superpowers/plans/2026-08-25-mtls-grpc-agent.md`). Pre-1.0
+// breaking changes are allowed in `v1` because the panel and the
+// agent are version-locked at install time (the agent reads
+// `AEGIS_AGENT_PANEL_VERSION` at boot and refuses to start if the
+// panel is older than the agent's expected minimum).
+//
+// Post-1.0 (out of scope here), breaking changes land in `aegis.v2`
+// and `v1` is supported for 1 release.
+//
+// # Why gRPC, not HTTP/2 + JSON
+//
+// The v0.4.0-b HTTP+bearer surface uses hand-rolled JSON encoders
+// that escape non-BMP runes as 5-hex-digit `"\u1F680"` instead of a
+// surrogate pair (closed in v0.8.28.6 #300, but the bug class is
+// permanently gated by switching to protobuf). gRPC also gives us:
+//   - mTLS without an extra reverse proxy
+//   - Generated stubs in any language (operator-side tooling)
+//   - `google.golang.org/grpc/status` for typed errors (replaces the
+//     v0.8.7 401 -> `nodes.Service.RefreshAgentBearer` retry path
+//     with `code = Unauthenticated` -> retry-once)
+//
+// # Auth (v0.8.30+)
+//
+// v0.8.29 ships without mTLS. The agent validates the same bearer
+// secret it uses on the HTTP path (read from `AEGIS_AGENT_BEARER`,
+// surfaced via gRPC metadata `authorization: Bearer <token>`) so the
+// sanity smoke in v0.8.29 catches wire bugs before cert provisioning
+// lands in v0.8.30. v0.8.30 replaces the bearer with mTLS; the
+// bearer path is removed in v0.8.32.
+
+syntax = "proto3";
+
+package aegis.v1;
+
+option go_package = "github.com/QAdversif/AegisPanel/internal/agentv1pb;aegisv1";
+
+// AegisAgent is the panel-to-node control plane. The methods mirror
+// the v0.4.0-b HTTP surface 1:1 so the v0.8.29 dual-stack transport
+// switch in `internal/agentgrpc` can pick the same underlying side
+// effects regardless of transport.
+//
+// Each method takes a `*Request` / `*Response` pair even when the
+// request body is empty (e.g. `HealthRequest`). This keeps
+// `google.api.http` annotations available post-1.0 without a
+// breaking wire change.
+service AegisAgent {
+  // Apply pushes a rendered sing-box config to the node. The agent
+  // writes the bytes to `AEGIS_AGENT_SINGBOX_CONFIG_PATH` (default
+  // `/etc/sing-box/config.json`) atomically and then runs
+  // `AEGIS_AGENT_SINGBOX_RELOAD_CMD` (default
+  // `systemctl reload sing-box`). The same side-effect order as
+  // `cmd/aegis-agent/apply.go` L48-58.
+  //
+  // Errors:
+  //   - `INVALID_ARGUMENT` — `config` is empty or larger than
+  //     `AEGIS_AGENT_APPLY_MAX_BYTES` (default 1 MiB).
+  //   - `INTERNAL` — atomic write failed or reload command exited
+  //     non-zero. The reload stderr is in the `google.rpc.Status.message`.
+  //   - `UNAUTHENTICATED` (v0.8.29 only) — bearer mismatch. The panel
+  //     retries once via `nodes.Service.RefreshAgentBearer`, then
+  //     surfaces the error. v0.8.30+ replaces this with mTLS.
+  rpc Apply(ApplyRequest) returns (ApplyResponse);
+
+  // Status returns the node's running state. Mirrors `GET /v1/status`
+  // on the HTTP surface.
+  //
+  // `state` is a free-form string today (`online` / `offline` /
+  // `draining` / `disabled` / `new`) because the agent's view of
+  // "state" is a copy of the panel's `nodes.state` column, not the
+  // source of truth. v1.0.0 will promote it to an enum.
+  rpc Status(StatusRequest) returns (StatusResponse);
+
+  // Stats returns per-user traffic counters when the agent has them
+  // populated. Empty until the sing-box clash-api integration lands
+  // (ARCHITECTURE.md §7.5). The panel tolerates an empty map.
+  rpc Stats(StatsRequest) returns (StatsResponse);
+
+  // Health is the liveness probe. Always reachable, even when the
+  // bearer is unset (the v0.4.0-b `insecure mode` for first-boot
+  // smoke). v0.8.30+ adds a separate unauthenticated `/healthz` HTTP
+  // path that dials into this RPC.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ApplyRequest is the panel's "write this and reload" payload.
+message ApplyRequest {
+  // The full rendered sing-box config (raw bytes). The agent does
+  // not parse it; the side-effect path is `os.WriteFile + exec`.
+  bytes config = 1;
+}
+
+// ApplyResponse is the agent's "wrote it and reloaded" ack.
+message ApplyResponse {
+  // `reloaded` is true when the reload command exited 0. When false,
+  // the new config is on disk but sing-box is running the old one;
+  // the panel surfaces this as a BatchedApplier retry candidate.
+  bool reloaded = 1;
+  // Wall-clock cost of the reload command, in milliseconds.
+  int64 reload_duration_ms = 2;
+  // The sing-box version that accepted the config (parsed from
+  // `sing-box version` output, or empty if sing-box is not on PATH).
+  // v0.8.29 returns empty; v0.8.30+ populates this.
+  string singbox_version = 3;
+}
+
+// StatusRequest is intentionally empty.
+message StatusRequest {}
+
+// StatusResponse is a snapshot of the node's runtime.
+message StatusResponse {
+  // The node state (see service comment).
+  string state = 1;
+  // The agent's own version (from `AEGIS_AGENT_VERSION`, set at
+  // `go build` time via `-ldflags "-X main.version=..."`).
+  string agent_version = 2;
+  // The sing-box version, if discoverable. Empty when the agent
+  // cannot shell out to `sing-box version` (e.g. before the
+  // install_singbox role has run).
+  string singbox_version = 3;
+  // Uptime in seconds since the agent process started.
+  int64 uptime_seconds = 4;
+}
+
+// StatsRequest is intentionally empty.
+message StatsRequest {}
+
+// StatsResponse is per-user traffic since the last agent restart.
+// The map is keyed by user UUID string. Empty when sing-box's
+// clash-api is not yet wired (v0.4.0-c scope).
+message StatsResponse {
+  map<string, UserTrafficStats> user_stats = 1;
+}
+
+// UserTrafficStats is a per-user byte counter pair.
+message UserTrafficStats {
+  int64 upload_bytes = 1;
+  int64 download_bytes = 2;
+}
+
+// HealthRequest is intentionally empty.
+message HealthRequest {}
+
+// HealthResponse is the agent's liveness answer.
+message HealthResponse {
+  // Uptime in seconds since the agent process started.
+  int64 uptime_seconds = 1;
+  // The agent's own version. Same source as
+  // `StatusResponse.agent_version`.
+  string agent_version = 2;
+}
