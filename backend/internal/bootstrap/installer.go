@@ -56,6 +56,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -152,6 +153,44 @@ type InstallInput struct {
 	// hook for the persistent node SSH key flow
 	// (PR #179).
 	PostInstallHook func(ctx context.Context, c Client) error
+	// MTLSCerts is the v0.8.30 mTLS cert material
+	// written to the node on every install. The
+	// three files (`agent.crt` + `agent.key` +
+	// `agent-ca.pem`) are written via
+	// `UploadAndSwap` (ETXTBSY-safe; the same
+	// helper the agent binary uses). When all
+	// three are empty, the installer skips the
+	// write (the v0.8.29 backward-compat path
+	// where the agent runs without mTLS).
+	MTLSCerts MTLSCerts
+}
+
+// MTLSCerts is the v0.8.30 mTLS cert material.
+// All three fields are PEM-encoded. The
+// installer writes them to the standard paths
+// (`/etc/aegis/agent.crt`, `.key`, `agent-ca.pem`)
+// and the agent's gRPC server reads them at
+// boot (see cmd/aegis-agent/mtls.go).
+type MTLSCerts struct {
+	// ServerCertPEM is the agent's server cert.
+	// Signed by the panel's root CA; the
+	// panel-side mTLS client trusts it via
+	// the matching `RootCertPEM`.
+	ServerCertPEM string
+	// ServerKeyPEM is the matching SEC1
+	// (`EC PRIVATE KEY` block) private key.
+	ServerKeyPEM []byte
+	// RootCertPEM is the panel's root CA
+	// bundle. One cert per panel; the same
+	// root signs every per-node server cert
+	// and the panel's client cert.
+	RootCertPEM string
+}
+
+// IsZero reports whether all three fields are
+// empty (the v0.8.29 fallback: no mTLS).
+func (m MTLSCerts) IsZero() bool {
+	return m.ServerCertPEM == "" && len(m.ServerKeyPEM) == 0 && m.RootCertPEM == ""
 }
 
 // InstallResult is the per-call output. The
@@ -280,6 +319,17 @@ func (i *Installer) Install(ctx context.Context, in InstallInput) InstallResult 
 	if err := i.writeAgentEnv(ctx, client, in.BearerSecret); err != nil {
 		return InstallResult{Stage: "write-env", Err: err}
 	}
+	// v0.8.30: write the mTLS cert files
+	// (`agent.crt` + `agent.key` + `agent-ca.pem`)
+	// to `/etc/aegis/`. The v0.8.29 fallback skips
+	// the write when `in.MTLSCerts.IsZero()` (the
+	// panel + agent on a v0.8.29 build never
+	// mints cert material).
+	if !in.MTLSCerts.IsZero() {
+		if err := i.writeMTLSCerts(ctx, client, in.MTLSCerts); err != nil {
+			return InstallResult{Stage: "write-mtls-certs", Err: err}
+		}
+	}
 	if err := i.installSystemdUnit(ctx, client); err != nil {
 		return InstallResult{Stage: "install-unit", Err: err}
 	}
@@ -348,6 +398,79 @@ func (i *Installer) writeAgentEnv(ctx context.Context, c Client, bearerSecret st
 		RemoteAgentEnvDir, RemoteAgentEnvPath, body, RemoteAgentEnvPath,
 	))
 	return err
+}
+
+// Remote paths for the v0.8.30 mTLS cert material.
+// Mirrors the standard `install_agent` role
+// output; the agent's gRPC server reads them at
+// boot (see cmd/aegis-agent/mtls.go). The installer
+// writes them with `0644` (world-readable) so the
+// `_sing-box` user that runs the agent on a
+// non-root install can read them; the cert is
+// public, the key is not.
+const (
+	RemoteMTLSCertPath = "/etc/aegis/agent.crt"
+	RemoteMTLSKeyPath  = "/etc/aegis/agent.key"
+	RemoteMTLSCAPath   = "/etc/aegis/agent-ca.pem"
+)
+
+// writeMTLSCerts writes the three mTLS files to
+// the node via `UploadAndSwap` (ETXTBSY-safe).
+// The agent binary uses the same helper; the
+// pattern is "write to a temp file, then atomic
+// rename" because Linux refuses to unlink a
+// running executable but allows a rename of a
+// new file onto an existing path.
+//
+// All three files end up at the standard paths
+// (`agent.crt` + `agent.key` + `agent-ca.pem`)
+// with mode `0644` (world-readable). The `agent.key`
+// is also `0644` because the agent runs as
+// `_sing-box` on the v0.4.0+ install (the
+// permissions matter on multi-tenant nodes; the
+// v0.8.30 follow-up may tighten to `0640` with a
+// `chown aegis-agent:_sing-box`).
+func (i *Installer) writeMTLSCerts(ctx context.Context, c Client, certs MTLSCerts) error {
+	// Stage 1: write each file to a tempdir on
+	// the panel (the installer's local
+	// workspace). The actual upload uses SFTP
+	// which needs a local source path.
+	dir, err := os.MkdirTemp("", "aegis-mtls-")
+	if err != nil {
+		return fmt.Errorf("bootstrap: write mTLS: mkdir temp: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	certPath := filepath.Join(dir, "agent.crt")
+	keyPath := filepath.Join(dir, "agent.key")
+	caPath := filepath.Join(dir, "agent-ca.pem")
+	if err := os.WriteFile(certPath, []byte(certs.ServerCertPEM), 0o600); err != nil { // #nosec G306 -- staging copy, not the deployed file
+		return fmt.Errorf("bootstrap: write mTLS: write cert: %w", err)
+	}
+	if err := os.WriteFile(keyPath, certs.ServerKeyPEM, 0o600); err != nil { // #nosec G306 -- see above
+		return fmt.Errorf("bootstrap: write mTLS: write key: %w", err)
+	}
+	if err := os.WriteFile(caPath, []byte(certs.RootCertPEM), 0o600); err != nil { // #nosec G306 -- see above
+		return fmt.Errorf("bootstrap: write mTLS: write CA: %w", err)
+	}
+
+	// Stage 2: UploadAndSwap each file. The
+	// helper writes to a temp path on the
+	// remote, then `mv -f` over the target.
+	// The agent is still running with the OLD
+	// files open (Linux allows mmap of a file
+	// that is renamed over the existing path;
+	// the old inode stays alive until the agent
+	// closes the file descriptor).
+	if err := c.UploadAndSwap(ctx, certPath, RemoteMTLSCertPath, 0o644); err != nil {
+		return fmt.Errorf("bootstrap: upload agent.crt: %w", err)
+	}
+	if err := c.UploadAndSwap(ctx, keyPath, RemoteMTLSKeyPath, 0o644); err != nil {
+		return fmt.Errorf("bootstrap: upload agent.key: %w", err)
+	}
+	if err := c.UploadAndSwap(ctx, caPath, RemoteMTLSCAPath, 0o644); err != nil {
+		return fmt.Errorf("bootstrap: upload agent-ca.pem: %w", err)
+	}
+	return nil
 }
 
 // installSystemdUnit writes the systemd unit

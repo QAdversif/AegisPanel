@@ -143,6 +143,15 @@ func (r *integrationNodeResolver) GetBearer(_ context.Context, _ uuid.UUID) (str
 func (r *integrationNodeResolver) Refresh(_ context.Context, _ uuid.UUID) (string, error) {
 	return r.bearer, nil
 }
+// LoadMTLS returns ErrMTLSNotConfigured so the
+// gRPC transport falls back to plaintext for the
+// integration test. v0.8.30 PR 2 added this method
+// to the agentgrpc.NodeResolver interface; the
+// integration test (which only exercises the HTTP
+// path) does not need real mTLS material.
+func (r *integrationNodeResolver) LoadMTLS(_ context.Context, _ uuid.UUID) ([]byte, []byte, []byte, error) {
+	return nil, nil, nil, agentgrpc.ErrMTLSNotConfigured
+}
 
 // TestIntegration_EndToEnd_RealPgCreateUserTriggersApply
 // is the headline integration test: the panel

@@ -581,6 +581,29 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		KnownHosts:  cfg.AgentKnownHosts,
 		SSHUser:     cfg.AgentSSHUser,
 		SSHPort:     cfg.AgentSSHPort,
+		// v0.8.30: mTLS cert issuer. The closure
+		// reads the per-node cert material from the
+		// `agentca.Service` (in memory after
+		// `EnsureNodeCerts`) and the root from
+		// `RootCertPEM()`. The bootstrap package
+		// cannot import the `agentca` package
+		// directly without a cycle, so the
+		// dependency inverts at boot.
+		MTLSCerts: func(ctx context.Context, nodeID uuid.UUID, addr string) (bootstrap.MTLSCerts, error) {
+			rootPEM, err := a.AgentCA.RootCertPEM()
+			if err != nil {
+				return bootstrap.MTLSCerts{}, fmt.Errorf("bootstrap: mint mTLS: root CA not yet provisioned: %w", err)
+			}
+			issued, err := a.AgentCA.EnsureNodeCerts(ctx, nodeID, addr)
+			if err != nil {
+				return bootstrap.MTLSCerts{}, fmt.Errorf("bootstrap: mint mTLS for node %s: %w", nodeID, err)
+			}
+			return bootstrap.MTLSCerts{
+				ServerCertPEM: issued.ServerCertPEM,
+				ServerKeyPEM:  issued.ServerKeyPEM,
+				RootCertPEM:   rootPEM,
+			}, nil
+		},
 	})
 
 	// 16. Backups. The store is always LocalStore

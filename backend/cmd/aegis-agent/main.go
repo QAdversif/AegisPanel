@@ -329,7 +329,7 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 // The deferred cancel propagates the shutdown signal to in-flight
 // HTTP requests via the request context and to the gRPC server via
 // the `grpc.Server.GracefulStop` path in `runGRPC`.
-func run(ctx context.Context, listenAddr, listenGRPC string) error {
+func run(ctx context.Context, listenAddr, listenGRPC string, paths mtlsPaths) error {
 	// Read the bearer secret once at start. The
 	// bootstrap install writes
 	// `/etc/aegis/agent.env` with
@@ -396,7 +396,7 @@ func run(ctx context.Context, listenAddr, listenGRPC string) error {
 	}()
 	grpcErrCh := make(chan error, 1)
 	go func() {
-		grpcErrCh <- runGRPC(ctx, listenGRPC)
+		grpcErrCh <- runGRPC(ctx, listenGRPC, paths)
 	}()
 	select {
 	case <-ctx.Done():
@@ -437,11 +437,21 @@ func main() {
 	// lands; the panel still SSH-tunnels).
 	listen := flag.String("listen", envOr("AEGIS_AGENT_LISTEN_ADDR", defaultListenAddr), "HTTP listen address (host:port)")
 	listenGRPC := flag.String("listen-grpc", envOr("AEGIS_AGENT_LISTEN_GRPC", defaultGRPCListenAddr), "gRPC listen address (host:port); empty disables gRPC")
+	// v0.8.30 mTLS paths. Defaults match the
+	// standard `install_agent` role output; an
+	// operator with a non-standard layout
+	// overrides the env vars. All three must be
+	// set (any empty value = plaintext fallback;
+	// see `runGRPC`'s transport selection).
+	mtlsCert := flag.String("mtls-cert", envOr("AEGIS_AGENT_MTLS_CERT", defaultMTLSCert), "agent server cert path (PEM, CERTIFICATE block); empty = plaintext fallback")
+	mtlsKey := flag.String("mtls-key", envOr("AEGIS_AGENT_MTLS_KEY", defaultMTLSKey), "agent server key path (PEM, EC PRIVATE KEY block); empty = plaintext fallback")
+	mtlsCA := flag.String("mtls-ca", envOr("AEGIS_AGENT_MTLS_CA", defaultMTLSCA), "trusted root CA bundle path (PEM, CERTIFICATE blocks); empty = plaintext fallback")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if err := run(ctx, *listen, *listenGRPC); err != nil {
+	paths := mtlsPaths{Cert: *mtlsCert, Key: *mtlsKey, CA: *mtlsCA}
+	if err := run(ctx, *listen, *listenGRPC, paths); err != nil {
 		log.Fatalf("aegis-agent: %v", err)
 	}
 }

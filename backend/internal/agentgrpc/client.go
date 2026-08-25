@@ -141,4 +141,14 @@ type NodeResolver interface {
 	// transport surfaces `ErrAgentStaleBearer` to the
 	// caller and stops retrying.
 	Refresh(ctx context.Context, nodeID uuid.UUID) (string, error)
+	// LoadMTLS returns the v0.8.30 mTLS material for
+	// `nodeID`: the panel's client cert + key + the
+	// root CA bundle. The gRPC transport uses these
+	// to dial the agent with mutual TLS. The method
+	// is OPTIONAL: a resolver that returns
+	// `ErrMTLSNotConfigured` (or any error) means
+	// "mTLS not wired for this node"; the gRPC
+	// transport falls back to the v0.8.29 plaintext
+	// path. The HTTP transport ignores this method.
+	LoadMTLS(ctx context.Context, nodeID uuid.UUID) (clientCert, clientKey, caBundle []byte, err error)
 }

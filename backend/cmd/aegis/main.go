@@ -788,3 +788,50 @@ func (r *agentgrpcNodeResolver) Refresh(ctx context.Context, id uuid.UUID) (stri
 	}
 	return out.Bearer, nil
 }
+
+// LoadMTLS implements agentgrpc.NodeResolver. v0.8.30
+// PR 2b: the panel reads the per-node mTLS material
+// from the `agentca.Service` (held in memory after
+// `nodes.Service.Provision` calls `EnsureNodeCerts`).
+// The lookup is a single map read + three `[]byte`
+// copies.
+//
+// `ErrMTLSNotConfigured` is returned when the
+// `agentca.Service` is nil (the v0.8.29 default; the
+// gRPC transport falls back to plaintext on this
+// error). v0.8.32 removes the fallback.
+func (r *agentgrpcNodeResolver) LoadMTLS(ctx context.Context, id uuid.UUID) (clientCert, clientKey, caBundle []byte, err error) {
+	ca := r.svc.AgentCA()
+	if ca == nil {
+		return nil, nil, nil, agentgrpc.ErrMTLSNotConfigured
+	}
+	// Root CA bundle: the panel's gRPC client uses
+	// this to verify the agent's server cert. The
+	// root is in memory after the first
+	// `EnsureRoot` call; `RootCertPEM` returns
+	// `ErrNotFound` until that happens (a panel
+	// that never provisioned a node cannot dial
+	// anything via mTLS).
+	rootPEM, rootErr := ca.RootCertPEM()
+	if rootErr != nil {
+		return nil, nil, nil, fmt.Errorf("agentgrpc: LoadMTLS: root CA not yet provisioned: %w", rootErr)
+	}
+	// Per-node certs. The `addr` is the listener
+	// address from the `nodes` row; the agentca
+	// Service is address-agnostic (it caches per
+	// nodeID).
+	n, lookupErr := r.svc.Get(ctx, id)
+	if lookupErr != nil {
+		return nil, nil, nil, fmt.Errorf("agentgrpc: LoadMTLS: lookup node %s: %w", id, lookupErr)
+	}
+	issued, ensureErr := ca.EnsureNodeCerts(ctx, id, n.Address)
+	if ensureErr != nil {
+		return nil, nil, nil, fmt.Errorf("agentgrpc: LoadMTLS: ensure certs for node %s: %w", id, ensureErr)
+	}
+	// The ServerCertPEM and rootPEM are strings;
+	// the ServerKeyPEM is already []byte. The
+	// `[]byte(string)` cast is the documented way
+	// to keep the interface's `[]byte` contract
+	// without paying for a copy.
+	return []byte(issued.ServerCertPEM), issued.ServerKeyPEM, []byte(rootPEM), nil
+}

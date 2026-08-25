@@ -54,6 +54,17 @@ func (a agentCAAdapter) EnsureNodeCerts(ctx context.Context, nodeID uuid.UUID, a
 	}, nil
 }
 
+// RootCertPEM forwards to the underlying
+// `*agentca.Service.RootCertPEM`. The adapter is
+// the only place the error is translated to the
+// `nodes.AgentCertIssuer` contract (no translation
+// today; the agentca error type is exported as
+// `agentca.ErrNotFound` and the call site compares
+// it).
+func (a agentCAAdapter) RootCertPEM() (string, error) {
+	return a.svc.RootCertPEM()
+}
+
 // Compile-time check that the adapter implements
 // the interface. A future refactor that breaks the
 // contract surfaces here at the package level.
