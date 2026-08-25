@@ -48,6 +48,7 @@ import (
 	// setup, subcommand dispatch (migrate / admin), singbox
 	// per-node BatchedApplier wiring, signal handling, and
 	// graceful shutdown.
+	"github.com/QAdversif/AegisPanel/internal/agentgrpc" // v0.8.29: panel-side transport package
 	"github.com/QAdversif/AegisPanel/internal/app"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/config"
@@ -613,15 +614,29 @@ func singboxWiring(
 	// /etc/aegis/agent.env); the bearer is the
 	// shared secret from the v0.4.0
 	// agent_bearer column.
-	resolver := &singboxNodeResolver{svc: a.Nodes}
+	//
+	// v0.8.29 (PR 3): the resolver now also satisfies
+	// `agentgrpc.NodeResolver` (ResolveAddr +
+	// GetBearer + Refresh). The v0.4.0-b
+	// `singbox.NodeResolver` (Resolve + RefreshBearer)
+	// is gone; the new shape is the only contract.
+	resolver := &agentgrpcNodeResolver{svc: a.Nodes}
 
-	// Shared HTTP client. The singbox package's
-	// newHTTPClient() sets a 30s per-request
-	// timeout; the BatchedApplier's window
-	// (default 20s) is the effective budget
-	// because the apply request carries the
-	// boot ctx (cancelled on shutdown).
-	p.Configure(resolver, singbox.NewHTTPClient())
+	// Construct the agent transport. v0.8.29 PR 3
+	// uses `agentgrpc.New(resolver)`; the env
+	// `AEGIS_AGENT_TRANSPORT` selects http (default)
+	// or grpc. The HTTP transport creates its own
+	// *http.Client with a 30s per-request timeout;
+	// the BatchedApplier's window (default 20s) is
+	// the effective budget because the apply
+	// request carries the boot ctx (cancelled on
+	// shutdown).
+	client, err := agentgrpc.New(resolver)
+	if err != nil {
+		return fmt.Errorf("singboxWiring: agentgrpc.New: %w", err)
+	}
+	p.Configure(client)
+	defer func() { _ = client.Close() }()
 
 	// Hand the applier map to the services that
 	// produce deltas. This must happen BEFORE the
@@ -704,56 +719,69 @@ func singboxWiring(
 	return nil
 }
 
-// singboxNodeResolver is the adapter from the panel's
-// nodes.Service to the singbox.NodeResolver interface.
-// Lives in main.go (not in the singbox package) so the
-// singbox package can stay free of any nodes import
-// (which would create a cycle once the user-management
-// layer pulls in both).
-type singboxNodeResolver struct {
+// agentgrpcNodeResolver is the adapter from the panel's
+// `nodes.Service` to the `agentgrpc.NodeResolver`
+// interface. Lives in main.go (not in the agentgrpc
+// package) so the agentgrpc package can stay free of
+// any nodes import (which would create a cycle once
+// the user-management layer pulls in both).
+//
+// v0.8.29 (PR 3): the v0.4.0-b `singbox.NodeResolver`
+// (Resolve + RefreshBearer) is gone; the new
+// `agentgrpc.NodeResolver` is the only contract the
+// singbox/Provider consumes.
+type agentgrpcNodeResolver struct {
 	svc *nodes.Service
 }
 
-// Resolve implements singbox.NodeResolver. The return
-// values are named so the gocritic `unnamedResult` check
-// is satisfied — the alternative (single-line `return
-// n.Address, n.AgentBearer, nil`) is technically fine
-// but flags the linter because the next reader cannot
-// see at a glance which string is which.
-func (r *singboxNodeResolver) Resolve(ctx context.Context, id uuid.UUID) (address, bearer string, err error) {
+// ResolveAddr implements agentgrpc.NodeResolver. The
+// return values are named so the gocritic
+// `unnamedResult` check is satisfied — the
+// alternative (single-line `return n.Address, nil`)
+// is technically fine but flags the linter because
+// the next reader cannot see at a glance which
+// string is which.
+func (r *agentgrpcNodeResolver) ResolveAddr(ctx context.Context, id uuid.UUID) (address string, err error) {
 	n, err := r.svc.Get(ctx, id)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	return n.Address, n.AgentBearer, nil
+	return n.Address, nil
 }
 
-// RefreshBearer implements singbox.NodeResolver
-// (v0.8.8). The method is a thin adapter over
+// GetBearer implements agentgrpc.NodeResolver.
+// Returns the panel's currently-stored bearer for
+// `id`. Today this is a single SQL `SELECT
+// agent_bearer FROM nodes WHERE id = $1`; the cost
+// is negligible.
+func (r *agentgrpcNodeResolver) GetBearer(ctx context.Context, id uuid.UUID) (bearer string, err error) {
+	n, err := r.svc.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return n.AgentBearer, nil
+}
+
+// Refresh implements agentgrpc.NodeResolver (the
+// 401/Unauthenticated retry path). The method is
+// a thin adapter over
 // `nodes.Service.RefreshAgentBearer` (the v0.8.7
-// operator-side refresh flow). The adapter is in
-// main.go (not in the singbox or nodes packages)
-// so the singbox package can stay free of any
-// import-time coupling to the nodes-package's
-// SSH factory / known_hosts / envelope — the
-// adapter is wired by main() with the same
-// dependencies the v0.8.7 wiring uses.
+// operator-side refresh flow).
 //
-// The auto-refresh fires when the singbox Apply
+// The auto-refresh fires when the agentgrpc Apply
 // path sees a 401 from the agent. The adapter
 // returns the new bearer (which the Service has
-// already written to `nodes.agent_bearer`) so
-// the Apply path can retry without a second
-// Resolve call when only the bearer changed.
+// already written to `nodes.agent_bearer`) so the
+// Apply path can retry without a second
+// ResolveAddr call when only the bearer changed.
 //
 // The audit row recorded by
-// `nodes.Service.RefreshAgentBearer` has an
-// empty `ActorID` (the BatchedApplier goroutine
-// has no `auth.Claims` in context). This
-// distinguishes auto-refresh from the v0.8.7
-// operator-initiated flow (which has a
-// non-empty `ActorID`).
-func (r *singboxNodeResolver) RefreshBearer(ctx context.Context, id uuid.UUID) (string, error) {
+// `nodes.Service.RefreshAgentBearer` has an empty
+// `ActorID` (the BatchedApplier goroutine has no
+// `auth.Claims` in context). This distinguishes
+// auto-refresh from the v0.8.7 operator-initiated
+// flow (which has a non-empty `ActorID`).
+func (r *agentgrpcNodeResolver) Refresh(ctx context.Context, id uuid.UUID) (string, error) {
 	out, err := r.svc.RefreshAgentBearer(ctx, id, nodes.RefreshBearerOptions{})
 	if err != nil {
 		return "", err

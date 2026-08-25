@@ -65,28 +65,21 @@ const ProviderVersion = "1.14.0-beta.2"
 const ProviderName = "sing-box"
 
 // Provider is the sing-box CoreProvider. v0.4.0-mvp-batched
-// adds two fields — nodes and client — that the panel
-// wires in via Configure() at boot. The zero value is
-// still safe for the Capabilities / Name / Version /
-// RenderConfig / ValidateConfig / Diff / ParseStatus /
-// ParseStats methods, but Apply() returns an error until
-// Configure has been called.
-type Provider struct {
-	// nodes resolves a node UUID to the panel-side
-	// (address, bearer) pair the agent /v1/apply endpoint
-	// expects. Set by Configure at boot.
-	nodes NodeResolver
-	// client is the HTTP client used for the agent POST.
-	// Defaults to a *http.Client with a 30-second timeout
-	// when Configure is not called; tests inject a fake
-	// (httptest.Server wrapped in *http.Client).
-	client httpClient
-}
+// added the `Apply` side-effect (POST rendered config to the
+// node's aegis-agent). v0.8.29 added the `client` field; the
+// HTTP/bearer transport moved into `internal/agentgrpc` so
+// the same Provider can use either HTTP+bearer (default) or
+// gRPC+bearer (opt-in via `AEGIS_AGENT_TRANSPORT=grpc`).
+//
+// The fields are declared in apply.go (the only file that
+// uses them); the rest of this file is the surface
+// capabilities + the registry init.
+type Provider = providerImpl
 
 // New returns a new sing-box provider. The package's init()
 // already registers one in the global registry, so main code
 // rarely needs to call this; tests do.
-func New() *Provider { return &Provider{} }
+func New() *Provider { return &providerImpl{} }
 
 // Name implements cores.CoreProvider.
 func (p *Provider) Name() string { return ProviderName }
