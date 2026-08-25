@@ -178,6 +178,16 @@ func (s *PgStore) Update(ctx context.Context, n *Node) error {
 
 	// The node row first. The unique index on name surfaces
 	// as a duplicate error we map to ErrDuplicate.
+	// v0.8.31: agent_transport is also written
+	// here. The Service.UpdateInput does not expose
+	// the field (the rotate-transport flow uses
+	// the dedicated SetAgentTransport method, not
+	// the generic Update path), so the value
+	// passes through unchanged from the row the
+	// Service fetched. The behaviour is a no-op
+	// for the rotate-transport flow (which does
+	// not call Update) and a pass-through for
+	// the rest of the panel.
 	const updateNode = `
 		UPDATE nodes SET
 			name = $2,
@@ -185,8 +195,20 @@ func (s *PgStore) Update(ctx context.Context, n *Node) error {
 			state = $4,
 			address = $5,
 			capacity_hint = $6,
+			agent_transport = $7,
 			updated_at = NOW()
 		WHERE id = $1`
+	// v0.8.31: defensive default. The Service.Update
+	// path never sees an empty AgentTransport
+	// (the Service.Create default and the SQL
+	// column default both write 'http'), but the
+	// Go-level guard is cheap and keeps the SQL
+	// CHECK from rejecting a NULLish value if a
+	// future refactor introduces a bug.
+	transport := n.AgentTransport
+	if transport == "" {
+		transport = AgentTransportHTTP
+	}
 	tag, err := tx.Exec(ctx, updateNode,
 		n.ID,
 		n.Name,
@@ -194,6 +216,7 @@ func (s *PgStore) Update(ctx context.Context, n *Node) error {
 		string(n.State),
 		n.Address,
 		n.CapacityHint,
+		transport,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -299,6 +322,33 @@ func (s *PgStore) SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, 
 	return nil
 }
 
+// SetAgentTransport updates only the
+// agent_transport column. v0.8.31: the
+// `aegis admin node rotate-transport` CLI
+// calls this to flip a node from "http" to
+// "grpc" without re-sending the rest of the
+// row. The Service.RotateTransport validator
+// rejects unknown values before the call
+// reaches the store; the SQL CHECK constraint
+// (migration 0024) is the safety net.
+//
+// Implemented as a single-column UPDATE for the
+// same reason as SetAgentBearer /
+// SetSSHPrivateKeyCiphertext (avoid the
+// round-trip-through-Service indirection).
+// Returns ErrNotFound if the id is unknown.
+func (s *PgStore) SetAgentTransport(ctx context.Context, id uuid.UUID, transport string) error {
+	const q = `UPDATE nodes SET agent_transport = $2, updated_at = NOW() WHERE id = $1`
+	tag, err := s.pool.Exec(ctx, q, id, transport)
+	if err != nil {
+		return fmt.Errorf("set agent transport: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // --- internal: insert helpers ------------------------------------------
 
 // insertNode writes the node row. ON CONFLICT (name) surfaces
@@ -307,8 +357,21 @@ func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 	const q = `
 		INSERT INTO nodes (
 			id, name, region, state, address, capacity_hint, agent_bearer,
-			ssh_private_key_ciphertext
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+			ssh_private_key_ciphertext, agent_transport
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	// v0.8.31: default the agent_transport to
+	// "http" if the caller left it empty. The
+	// SQL column also has DEFAULT 'http' (migration
+	// 0024) so the explicit value is belt-and-
+	// suspenders for the MemoryStore path which
+	// bypasses the column default. The Service
+	// path sets the field on Create (the same
+	// pattern as MemoryStore.Create) so the
+	// Go-side default is the one that fires.
+	transport := n.AgentTransport
+	if transport == "" {
+		transport = AgentTransportHTTP
+	}
 	_, err := tx.Exec(ctx, q,
 		n.ID,
 		n.Name,
@@ -322,6 +385,7 @@ func insertNode(ctx context.Context, tx pgx.Tx, n *Node) error {
 		// empty bytes, so we coerce nil to an empty
 		// slice to keep the contract explicit.
 		coalesceEmptyBytes(n.SSHPrivateKeyCiphertext),
+		transport,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -357,11 +421,19 @@ func insertNodeTag(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID, tag string)
 //
 // The `t.tag` column is NULL for the LEFT-JOIN row of a
 // node with no tags; scanNodeRow handles that case.
+//
+// v0.8.31: `n.agent_transport` is added to the
+// projection so the GET /api/v1/nodes handler can
+// surface the per-node value to the operator. The
+// column is NOT NULL (migration 0024), so the
+// LEFT-JOIN doesn't introduce a NULL on the nodes
+// side; the scan reads it as a plain string.
 const nodeWithTagsSelect = `
 	SELECT
 		n.id, n.name, n.region, n.state, n.address, n.capacity_hint,
 		n.agent_bearer,
 		n.ssh_private_key_ciphertext,
+		n.agent_transport,
 		n.created_at, n.updated_at,
 		t.tag
 	FROM nodes n
@@ -373,6 +445,12 @@ const nodeWithTagsSelect = `
 // Tags = nil in that case.
 //
 // Returns nil when the result set is empty.
+//
+// v0.8.31: the agent_transport column is scanned as a
+// plain string (the column is NOT NULL with a SQL
+// DEFAULT of 'http', so the scan never sees a NULL
+// here). The value is copied verbatim into
+// Node.AgentTransport.
 func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 	type key struct{ id uuid.UUID }
 	byID := make(map[key]*Node)
@@ -387,6 +465,7 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 			nCapacityHint            string
 			nAgentBearer             string
 			nSSHPrivateKeyCiphertext []byte
+			nAgentTransport          string
 			nCreatedAt               time.Time
 			nUpdatedAt               time.Time
 			tTag                     *string
@@ -395,6 +474,7 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 			&nID, &nName, &nRegion, &nState, &nAddress, &nCapacityHint,
 			&nAgentBearer,
 			&nSSHPrivateKeyCiphertext,
+			&nAgentTransport,
 			&nCreatedAt, &nUpdatedAt,
 			&tTag,
 		); err != nil {
@@ -413,6 +493,7 @@ func scanNodesWithTags(rows pgx.Rows) ([]*Node, error) {
 				CapacityHint:            nCapacityHint,
 				AgentBearer:             nAgentBearer,
 				SSHPrivateKeyCiphertext: nSSHPrivateKeyCiphertext,
+				AgentTransport:          nAgentTransport,
 				CreatedAt:               nCreatedAt,
 				UpdatedAt:               nUpdatedAt,
 			}

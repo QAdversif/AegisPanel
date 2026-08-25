@@ -288,6 +288,141 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// RotateTransport flips a node's agent_transport
+// between "http" and "grpc" (the v0.8.31 closed
+// set). The flow:
+//
+//  1. Validate the new value (closed set;
+//     any other value is a ValidationError).
+//  2. Read the current row (ErrNotFound if
+//     missing).
+//  3. No-op + return the current row if the
+//     value is already the target (idempotency
+//     for cron / remediation runs).
+//  4. Call store.SetAgentTransport (single
+//     column write; mirrors SetAgentBearer /
+//     SetSSHPrivateKeyCiphertext).
+//  5. Re-fetch the row to surface the
+//     post-rotation `updated_at`.
+//  6. Fire webhooks.EventNodeUpdated (the
+//     existing "node row changed" event; a
+//     dedicated EventNodeTransportRotated
+//     would inflate the webhook contract
+//     surface for a low-frequency change).
+//  7. Record the audit row
+//     `node.transport.rotated` with the
+//     previous + new transport in the After
+//     map and the full row in Before / After.
+//
+// # v0.8.31 scope
+//
+// The transport pick at apply time is still
+// process-wide via `AEGIS_AGENT_TRANSPORT` (a
+// per-node resolver-driven pick is a v0.8.32
+// follow-up). The column is observability +
+// audit; the rotate-transport flow is the
+// operator's source of intent. v0.8.32 will
+// read the column to drive the per-node
+// transport pick.
+//
+// # Errors
+//
+//   - ValidationError: transport is not in
+//     {"http", "grpc"}.
+//   - ErrNotFound: id is unknown.
+func (s *Service) RotateTransport(ctx context.Context, id uuid.UUID, newTransport string) (*Node, error) {
+	if id == uuid.Nil {
+		return nil, &ValidationError{Field: "id", Message: "must be a non-zero UUID"}
+	}
+	if err := validateAgentTransport(newTransport); err != nil {
+		return nil, err
+	}
+	// Read the current row. The `Before` snapshot
+	// in the audit row carries the pre-rotation
+	// transport; the post-rotation row is read
+	// from the store after the SetAgentTransport
+	// call so the `updated_at` reflects the write.
+	cur, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// v0.8.31 idempotency: a rotation to the
+	// node's current transport is a no-op. The
+	// audit log would otherwise fill with
+	// "rotated http -> http" entries on every
+	// operator check-in (the CLI is runnable on
+	// cron or as a remediation). The
+	// deprecation-warning header on
+	// GET /api/v1/nodes (PR 2) is the operator's
+	// signal that the migration is not done; the
+	// audit log is the record of the actual
+	// changes, not the "I checked again" runs.
+	if cur.AgentTransport == newTransport {
+		return cur, nil
+	}
+	prevTransport := cur.AgentTransport
+	if err := s.store.SetAgentTransport(ctx, id, newTransport); err != nil {
+		return nil, err
+	}
+	out, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// v0.7.x: the row changed. The existing
+	// EventNodeUpdated event is the cheapest
+	// signal — webhook subscribers that don't
+	// care about transport-rotation (the common
+	// case) can ignore the event; subscribers
+	// that do care filter on the After map.
+	webhooks.MustDispatch(ctx, s.webhooks, webhooks.EventNodeUpdated, out)
+	// v0.8.31 audit: action is the canonical
+	// `<resource>.<verb>` (past tense) shape.
+	// The `Before` snapshot is the full row so
+	// the audit log's `GetByID` path can
+	// reconstruct the pre-rotation state
+	// (transport + name + address + …); the
+	// `After` map is the operator-friendly
+	// summary. The transport value is in both
+	// the Before row and the After map; the
+	// redundancy is intentional — the audit
+	// row should be readable without joining
+	// the Before / After blobs.
+	audits.RecordFromContext(ctx, s.audits, audits.Entry{
+		Action:       "node.transport.rotated",
+		ResourceType: "node",
+		ResourceID:   id.String(),
+		Before:       cur,
+		After: map[string]any{
+			"node_name":              cur.Name,
+			"address":                cur.Address,
+			"agent_transport":        newTransport,
+			"agent_transport_prev":   prevTransport,
+		},
+	})
+	return out, nil
+}
+
+// validateAgentTransport is the v0.8.31 closed-set
+// gate. The store + the SQL CHECK constraint are
+// the safety nets; this function surfaces a
+// clear ValidationError to the CLI / HTTP layer
+// before either sees the value.
+//
+// Adding a new value here requires a migration
+// that re-aligns the SQL CHECK constraint (the
+// pg_store_state_check_test.go pattern is the
+// template for the same check on transport).
+func validateAgentTransport(t string) error {
+	switch t {
+	case AgentTransportHTTP, AgentTransportGRPC:
+		return nil
+	}
+	return &ValidationError{
+		Field:   "agent_transport",
+		Message: "must be one of: http, grpc",
+	}
+}
+
 // --- validation helpers --------------------------------------------------
 
 // maxNameLen is the longest name we will store. Matches the

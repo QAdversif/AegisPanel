@@ -95,6 +95,24 @@ type Node struct {
 	//
 	// v0.8.x: added in migration 0020.
 	SSHPrivateKeyCiphertext []byte `json:"-"`
+	// AgentTransport is the transport the panel uses
+	// for this node's BatchedApplier traffic. Closed
+	// set: "http" (the v0.4.0-b HTTP+bearer surface,
+	// deprecated in v0.8.31) or "grpc" (the v0.8.29
+	// gRPC surface, mTLS-wired in v0.8.30). The column
+	// is added in migration 0024; the default is
+	// "http" (matches the v0.8.30
+	// AEGIS_AGENT_TRANSPORT default so the migration
+	// never disagrees with the env var at the moment
+	// of the cut). The field is JSON-serialised
+	// because the v0.8.31 deprecation warning header
+	// on GET /api/v1/nodes reports the per-node
+	// value to the operator; v0.8.32 removes the
+	// "http" value entirely (the column is rewritten
+	// with a CHECK that only allows "grpc").
+	//
+	// v0.8.31: added in migration 0024.
+	AgentTransport string `json:"agent_transport"`
 	// Tags is a small set of free-form labels (e.g. "vless-reality",
 	// "shadowsocks-2022", "eu-west-1"). The agent reads them
 	// during apply to decide which inbounds to render.
