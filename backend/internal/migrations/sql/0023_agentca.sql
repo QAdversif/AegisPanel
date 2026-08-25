@@ -1,5 +1,20 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
+-- v0.8.32 follow-up: this file contains BOTH a `-- +migrate Up`
+-- section (lines ~98 onward) and a `-- +migrate Down` section
+-- (the rollback path, further below). The panel's migration
+-- runner (`internal/migrations/migrator.go:Up`) reads only
+-- the Up section per file; if you run this file directly
+-- via `psql -f`, BOTH sections execute -- which creates
+-- the schema and then immediately drops it. The fix in
+-- v0.8.31.1 (PR #316) was to make the panel ship the full
+-- migration set via `//go:embed` so the runner can apply
+-- the Up section without the host-side scp. Operators
+-- who still run the file directly MUST trim to the Up
+-- section first (everything from `-- +migrate Up` to
+-- `-- +migrate Down`) or the panel will crash on the
+-- next boot with "relation nodes does not exist".
+--
 -- +migrate Up
 --
 -- v0.8.30 -- agent CA (mTLS cert bootstrap) + per-node mTLS material.

@@ -166,6 +166,52 @@ func TestLoadMTLSConfig_Disabled(t *testing.T) {
 	if !strings.Contains(err.Error(), "mTLS disabled") {
 		t.Errorf("error should mention 'mTLS disabled': %q", err.Error())
 	}
+	// v0.8.32 follow-up: the error must point at the
+	// install-contract remediation, not just the
+	// state. The operator reading the journal needs
+	// to know the next step is either re-running the
+	// bootstrap installer or scp'ing the file.
+	if !strings.Contains(err.Error(), "bootstrap installer") {
+		t.Errorf("v0.8.32 follow-up: error should mention the install-contract remediation (bootstrap installer or env-var override), got: %q", err.Error())
+	}
+}
+
+// TestLoadMTLSConfig_MissingFile_HasInstallHint is the
+// v0.8.32 follow-up regression guard for the cert
+// load error. The agent's gRPC server in v0.8.30+
+// hard-fails when the cert file is missing (the
+// plaintext fallback was removed), so the error
+// message MUST include the install-contract hint
+// pointing the operator at `POST /api/v1/nodes/{id}/provision`
+// (the bootstrap installer that writes the three
+// files) or `scp` from the panel's agentca store.
+// Without the hint, the operator sees "read cert
+// /etc/aegis/agent.crt: no such file or directory"
+// and has to dig into the docs to figure out the
+// remediation.
+func TestLoadMTLSConfig_MissingFile_HasInstallHint(t *testing.T) {
+	dir := t.TempDir()
+	paths := mtlsPaths{
+		Cert: dir + "/nonexistent-agent.crt",
+		Key:  dir + "/nonexistent-agent.key",
+		CA:   dir + "/nonexistent-agent-ca.pem",
+	}
+	_, err := loadMTLSConfig(paths)
+	if err == nil {
+		t.Fatal("loadMTLSConfig with missing files should fail (v0.8.30+ removed plaintext fallback)")
+	}
+	msg := err.Error()
+	// The hint must be present, not just the raw
+	// read error. A "hint:" prefix is the convention
+	// used in the loadMTLSConfig return path.
+	if !strings.Contains(msg, "hint:") {
+		t.Errorf("error should include an install-contract hint (post-fix marker: 'hint:'), got: %q", msg)
+	}
+	// The hint names the remediation: bootstrap
+	// installer or scp from the agentca store.
+	if !strings.Contains(msg, "bootstrap installer") && !strings.Contains(msg, "scp") {
+		t.Errorf("error hint should mention 'bootstrap installer' or 'scp', got: %q", msg)
+	}
 }
 
 // TestLoadMTLSConfig_BadCertKeyPair pins the

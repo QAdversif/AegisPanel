@@ -208,6 +208,42 @@ crashed on `SELECT n.agent_transport FROM nodes` with
 the SQL files in the binary and (b) fail-loud-checks any
 host mount override, so the failure mode is now impossible.
 
+### `psql -f` direct-execute warning
+
+**Do not run the migration files directly via `psql -f`.**
+Each `00XX_*.sql` file in `backend/internal/migrations/sql/`
+contains BOTH a `-- +migrate Up` section (the schema
+creation) AND a `-- +migrate Down` section (the rollback
+path). The panel's migration runner
+(`internal/migrations/migrator.go:Up`) reads only the Up
+section per file; running the file directly with
+`psql -f` executes BOTH sections, which creates the
+schema and then immediately drops it. The result: the
+panel boots with the old schema, the next query against
+a new column crashes (`column n.agent_transport does not
+exist` or `relation nodes does not exist`).
+
+If you must apply a migration out-of-band (e.g. on a
+prod box where the panel can't boot), trim the file to
+the Up section first:
+
+```bash
+# Extract just the Up section to /tmp/0023_up.sql:
+sed -n '/-- +migrate Up/,/-- +migrate Down/p' \
+  /var/lib/aegis/migrations/0023_agentca.sql \
+  | sed '/-- +migrate Down/d' > /tmp/0023_up.sql
+
+# Then apply:
+docker exec -i aegis-postgres psql -U aegis -d aegis -v ON_ERROR_STOP=1 < /tmp/0023_up.sql
+```
+
+The cleanest path is still to let the panel's migrator
+do the work — restart the panel after pulling the new
+image and `migrations.Up` will apply the missing files
+from the embedded FS. The trim-and-apply dance above
+is only for the post-mortem scenario where the panel
+won't boot without the new schema already in place.
+
 ## Privacy
 
 The compose template in `tools/scripts/aegis-stack.yml` does **not** contain

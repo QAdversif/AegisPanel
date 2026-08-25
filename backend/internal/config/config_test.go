@@ -312,3 +312,137 @@ func (c *Config) setBackend(envVar, value string) {
 		c.CredentialsBackend = value
 	}
 }
+
+// TestValidate_WebhooksPg_MissingAgeRecipients_Reused
+// is the v0.8.32 follow-up regression guard for the
+// webhooks envelope setup. The v0.8.28.6 prod deploy
+// shipped with AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS
+// accidentally deleted from the env file. The panel
+// booted (the env-var absence did not surface as a
+// config error), the envelope builder returned
+// "identity file path is required for opening" on
+// the first webhook fire, and the operator had to
+// read the install contract to figure out what was
+// missing. The fix in v0.8.32 is to fail loud at
+// boot when the webhooks backend is pg and the
+// envelope env vars are incomplete.
+func TestValidate_WebhooksPg_MissingAgeRecipients_Reused(t *testing.T) {
+	setMinimumLoadEnv(t)
+	t.Setenv("AEGIS_ENV", "production")
+	unsetAllBackends(t)
+	t.Setenv("AEGIS_WEBHOOKS_BACKEND", "pg")
+	// No AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS or
+	// AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE set.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("config.Load: expected error (webhooks=pg without AGE recipients/key file), got nil")
+	}
+	msg := err.Error()
+	// The error must name the missing env var and
+	// point at the install contract, not just the
+	// missing field name.
+	if !strings.Contains(msg, "AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS") {
+		t.Errorf("error should name AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS, got: %q", msg)
+	}
+	if !strings.Contains(msg, "operator-install") {
+		t.Errorf("error should point at the install contract (operator-install.md), got: %q", msg)
+	}
+}
+
+// TestValidate_WebhooksPg_MissingAgeKeyFile_Reused
+// is the second half of the v0.8.32 follow-up webhooks
+// regression guard. Same install contract rationale as
+// TestValidate_WebhooksPg_MissingAgeRecipients_Reused:
+// the v0.8.28.6 prod env had the key-file line
+// deleted (only recipients survived). Catching it
+// here turns a 502 on the first webhook fire into a
+// loud config error at boot.
+func TestValidate_WebhooksPg_MissingAgeKeyFile_Reused(t *testing.T) {
+	setMinimumLoadEnv(t)
+	t.Setenv("AEGIS_ENV", "production")
+	unsetAllBackends(t)
+	t.Setenv("AEGIS_WEBHOOKS_BACKEND", "pg")
+	// Recipients set, key file missing.
+	// NOTE: the recipient below is a syntactically-valid but
+	// FAKE age public key (all-'a' payload after the age1
+	// prefix). Do NOT paste a real operator recipient here:
+	// gitleaks flags it under generic-api-key and the CI
+	// secret-scan gate blocks the PR (the 2026-08-25 PR #317
+	// incident). Real recipients live operator-side only.
+	t.Setenv("AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS", "age1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	// No AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("config.Load: expected error (webhooks=pg without AGE key file), got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE") {
+		t.Errorf("error should name AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE, got: %q", msg)
+	}
+	if !strings.Contains(msg, "/etc/aegis/age.key") {
+		t.Errorf("error should give the canonical key-file path as an example, got: %q", msg)
+	}
+}
+
+// TestValidate_NodeSideAgentBinary_Reused is the
+// v0.8.32 follow-up regression guard for the
+// install-contract path confusion. The v0.8.28 prod
+// env shipped `AEGIS_AGENT_BINARY=/usr/local/bin/aegis-agent`
+// (the NODE-side path, where the bootstrap installer
+// writes the binary). The install contract requires
+// the CONTAINER-side source (the panel reads the
+// binary from inside its own image at
+// `/app/bin/aegis-agent` and SFTPs it to the node).
+// Catching the node-side path here turns a silent
+// install failure (provision returns 502 with
+// "stat in.AgentSource: no such file or directory")
+// into a loud config error at boot.
+func TestValidate_NodeSideAgentBinary_Reused(t *testing.T) {
+	setMinimumLoadEnv(t)
+	t.Setenv("AEGIS_ENV", "production")
+	unsetAllBackends(t)
+	t.Setenv("AEGIS_AGENT_BINARY", "/usr/local/bin/aegis-agent")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("config.Load: expected error (node-side AEGIS_AGENT_BINARY), got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "NODE-side") {
+		t.Errorf("error should mention the node-side path explicitly, got: %q", msg)
+	}
+	if !strings.Contains(msg, "CONTAINER-side") && !strings.Contains(msg, "/app/bin/aegis-agent") {
+		t.Errorf("error should point at the container-side canonical path (/app/bin/aegis-agent), got: %q", msg)
+	}
+	if !strings.Contains(msg, "operator-install") {
+		t.Errorf("error should point at the install contract (operator-install.md), got: %q", msg)
+	}
+}
+
+// TestValidate_ContainerSideAgentBinary_Passes
+// confirms the positive case for the agent-binary
+// guard: the container-side path `/app/bin/aegis-agent`
+// (the canonical install-contract value) and the
+// default `./bin/aegis-agent` (relative, resolves to
+// /app/bin/aegis-agent under WORKDIR=/app) both
+// pass validate(). The test guards against a future
+// refactor that flips the equality check to a
+// substring or prefix match and accidentally
+// blocks the canonical values.
+func TestValidate_ContainerSideAgentBinary_Passes(t *testing.T) {
+	for _, path := range []string{"/app/bin/aegis-agent", "./bin/aegis-agent"} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			setMinimumLoadEnv(t)
+			t.Setenv("AEGIS_ENV", "production")
+			unsetAllBackends(t)
+			t.Setenv("AEGIS_AGENT_BINARY", path)
+
+			if _, err := Load(); err != nil {
+				t.Errorf("config.Load: canonical container-side path %q must pass, got: %v", path, err)
+			}
+		})
+	}
+}
