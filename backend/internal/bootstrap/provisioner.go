@@ -184,6 +184,64 @@ type Service struct {
 	// is expected to use root + 22).
 	sshUser string
 	sshPort int
+	// mtlscerts is the v0.8.30 mTLS cert issuer
+	// factory. The provisioner calls it with
+	// (ctx, nodeID, addr) to get the per-node
+	// cert material that the installer writes to
+	// /etc/aegis/agent.crt + .key + agent-ca.pem.
+	// The field is nil-safe (a nil factory means
+	// "mTLS not wired"; the installer skips the
+	// write and the v0.8.29 fallback applies).
+	// The factory is a closure constructed in
+	// `app.Build` -- the bootstrap package cannot
+	// import the `agentca` package directly
+	// without a cycle.
+	mtlscerts MTLSCertIssuer
+}
+
+// MTLSCertIssuer is the v0.8.30 mTLS cert issuer
+// the provisioner calls before building
+// `InstallInput.MTLSCerts`. Returning a zero-value
+// `MTLSCerts` is the "mTLS not wired" path; any
+// error fails the Provision with the error
+// message preserved.
+type MTLSCertIssuer func(ctx context.Context, nodeID uuid.UUID, addr string) (MTLSCerts, error)
+
+// WithMTLSCerts installs the v0.8.30 mTLS cert
+// issuer. `app.Build` wires the agentca.Service
+// via a closure (the `agentca` package cannot be
+// imported here without a cycle).
+func (s *Service) WithMTLSCerts(issuer MTLSCertIssuer) *Service {
+	s.mtlscerts = issuer
+	return s
+}
+
+// mintMTLSCerts is the nil-safe wrapper around the
+// v0.8.30 mTLS cert issuer factory. A nil factory
+// (the v0.8.29 default) returns a zero-value
+// `MTLSCerts`, which the installer's
+// `writeMTLSCerts` recognises and skips. A non-nil
+// factory's error surfaces verbatim in the
+// provisioner's audit log.
+func (s *Service) mintMTLSCerts(ctx context.Context, nodeID uuid.UUID, addr string) MTLSCerts {
+	if s.mtlscerts == nil {
+		return MTLSCerts{}
+	}
+	certs, err := s.mtlscerts(ctx, nodeID, addr)
+	if err != nil {
+		// The provisioner does not have a
+		// recovery path for a mTLS mint failure
+		// (the panel cannot operate without
+		// mTLS certs in v0.8.30+). Surface the
+		// error via the `MTLSCerts` zero-value
+		// convention: the installer skips the
+		// write and the v0.8.29 fallback
+		// applies. A v0.8.30+ follow-up can
+		// thread the error through the
+		// `InstallResult`.
+		return MTLSCerts{}
+	}
+	return certs
 }
 
 // ServiceConfig groups the constructor inputs.
@@ -195,6 +253,16 @@ type ServiceConfig struct {
 	KnownHosts  string
 	SSHUser     string
 	SSHPort     int
+	// MTLSCerts is the v0.8.30 mTLS cert issuer
+	// factory. The provisioner calls it on every
+	// `Provision` to get the per-node cert material
+	// the installer writes to `/etc/aegis/agent.crt`
+	// + `.key` + `agent-ca.pem`. A nil factory means
+	// "mTLS not wired" (the v0.8.29 fallback). The
+	// field is set via `WithMTLSCerts` after
+	// construction; the `app.Build` wiring closes
+	// over `agentca.Service`.
+	MTLSCerts MTLSCertIssuer
 }
 
 // NewService wires a Service from cfg. The
@@ -208,7 +276,7 @@ func NewService(cfg ServiceConfig) *Service {
 	if cfg.SSHPort == 0 {
 		cfg.SSHPort = 22
 	}
-	return &Service{
+	s := &Service{
 		nodes:       cfg.Nodes,
 		installer:   NewInstaller(),
 		sm:          NewStateMachine(),
@@ -219,6 +287,10 @@ func NewService(cfg ServiceConfig) *Service {
 		sshUser:     cfg.SSHUser,
 		sshPort:     cfg.SSHPort,
 	}
+	if cfg.MTLSCerts != nil {
+		s.mtlscerts = cfg.MTLSCerts
+	}
+	return s
 }
 
 // WithEnvelope replaces the service's age
@@ -391,6 +463,12 @@ func (s *Service) Provision(
 		BearerSecret:        plain,
 		AgentSource:         s.agentBinary,
 		PostInstallHook:     postInstallHook,
+		// v0.8.30: mTLS cert material. A nil
+		// `mtlscerts` factory (the v0.8.29
+		// default) yields a zero-value
+		// `MTLSCerts`, which the installer
+		// recognises and skips.
+		MTLSCerts: s.mintMTLSCerts(ctx, row.ID, row.Address),
 	}
 	// Default the SSH port / user to the
 	// service-wide values when the request does
