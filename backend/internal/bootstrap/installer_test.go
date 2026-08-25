@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // mockClient is a Client that records every call
@@ -26,7 +27,17 @@ type mockClient struct {
 	uploadErr     error
 	uploadSwapErr error
 
+	// runFunc, when non-nil, overrides runOut/runErr
+	// on a per-call basis. The int argument is the
+	// 0-based call index (so a test can return
+	// "activating" for the first N calls and
+	// "active" for the rest, simulating a slow
+	// systemd transition). When set, runOut/runErr
+	// are ignored.
+	runFunc func(callIndex int) (string, error)
+
 	connectCalled   bool
+	runCalls        int
 	runCmds         []string
 	uploadPaths     []string
 	uploadSwapPaths []string
@@ -43,6 +54,11 @@ func (m *mockClient) Run(_ context.Context, cmd string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runCmds = append(m.runCmds, cmd)
+	idx := m.runCalls
+	m.runCalls++
+	if m.runFunc != nil {
+		return m.runFunc(idx)
+	}
 	return m.runOut, m.runErr
 }
 
@@ -170,6 +186,17 @@ func TestInstaller_UploadFailure(t *testing.T) {
 // where the installer cares about the unit's
 // runtime state.
 func TestInstaller_VerifyFailure(t *testing.T) {
+	// v0.8.31.1 hotfix: the default verify deadline is
+	// 30s (was 5s). The test mocks `runOut` with
+	// "failed" so the verify loop never exits; we
+	// override the deadline to a sub-second value so
+	// this test does not take 30s. Production stays
+	// on the 30s default; only the test's wall time
+	// is short.
+	orig := verifyDeadline
+	verifyDeadline = 50 * time.Millisecond
+	defer func() { verifyDeadline = orig }()
+
 	mock := &mockClient{
 		runOut: "failed\n",
 	}
@@ -187,6 +214,80 @@ func TestInstaller_VerifyFailure(t *testing.T) {
 	}
 	if result.Stage != "verify" {
 		t.Errorf("Stage = %q, want verify", result.Stage)
+	}
+	// The deadline was 50ms; the loop polls every
+	// 200ms, so we expect at most 1-2 probes before
+	// the deadline expired. The mock records every
+	// Run call; assert it polled at least once (the
+	// loop didn't exit early) but didn't poll
+	// thousands of times (the deadline was honoured).
+	if got := len(mock.runCmds); got < 1 {
+		t.Errorf("expected at least 1 verify probe, got %d", got)
+	}
+	if got := len(mock.runCmds); got > 5 {
+		t.Errorf("verify deadline not honoured: expected <= 5 probes in 50ms, got %d (deadline was 50ms)", got)
+	}
+}
+
+// TestInstaller_VerifyAcceptsSlowAgent is the
+// v0.8.31.1 regression guard for the verify
+// deadline bump. The v0.8.30+ agent takes
+// longer than the v0.4.0 placeholder to come
+// up (mTLS cert load + gRPC listener bind on
+// :7001). Pre-fix 5s deadline was tuned for
+// the placeholder; the 5s loop would report
+// the FINAL state as `active` but fail because
+// the deadline expired. We simulate "slow but
+// eventually active" by having the mock return
+// "activating" for 3 calls (~600ms of polling)
+// then "active" on the 4th. With the pre-fix 5s
+// deadline, the test would still pass (600ms <
+// 5s); the test exists to lock in the
+// behaviour so a future refactor that drops
+// back to 5s (or that breaks the polling loop)
+// is caught.
+//
+// Note: we override verifyDeadline to a value
+// safely larger than 3 * 200ms = 600ms to keep
+// the test fast while still exercising the
+// multi-poll path.
+func TestInstaller_VerifyAcceptsSlowAgent(t *testing.T) {
+	orig := verifyDeadline
+	verifyDeadline = 2 * time.Second
+	defer func() { verifyDeadline = orig }()
+
+	mock := &mockClient{
+		runFunc: func(callIndex int) (string, error) {
+			if callIndex < 3 {
+				// systemd "activating" transient
+				// state — the verify loop
+				// continues to the next probe.
+				// (Note: we also need runErr ==
+				// nil so the verify check
+				// passes the `err == nil` gate.)
+				return "activating\n", nil
+			}
+			// 4th call: service is up.
+			return "active\n", nil
+		},
+	}
+	src := writeTempScript(t, "#!/bin/sh\nexit 0\n")
+
+	inst := &Installer{ClientFactory: func(InstallInput) (Client, error) { return mock, nil }}
+	result := inst.Install(context.Background(), InstallInput{
+		Address:      "10.0.0.1:22",
+		SSHUser:      "root",
+		BearerSecret: "0123",
+		AgentSource:  src,
+	})
+	if !result.OK {
+		t.Errorf("Install: result.OK = false on slow-but-eventually-active agent (stage=%q err=%v)", result.Stage, result.Err)
+	}
+	// The mock's `systemctl is-active` is the LAST
+	// call Install makes before declaring success.
+	// We expect 4 calls (3 activating + 1 active).
+	if got := len(mock.runCmds); got != 4 {
+		t.Errorf("expected 4 verify probes (3 activating + 1 active), got %d: %q", got, mock.runCmds)
 	}
 }
 
