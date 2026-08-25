@@ -23,6 +23,21 @@
 // `Up` call (the CREATE TABLE IF NOT EXISTS is the very
 // first statement the migrator runs).
 //
+// # Source resolution (v0.8.31.1 hotfix)
+//
+// The panel binary now `//go:embed`s the full set of SQL files
+// (see `embeddedMigrations` below). The host-mounted dir
+// passed as `dir` is treated as an operator override (the
+// hot-fix path): if it exists and is non-empty, the migrator
+// reads from it; otherwise it falls back to the embedded set.
+// A host mount that is non-empty but missing any embedded
+// migration fails loud — a partial override is almost always
+// an install-contract bug (operator scp'd some but not all
+// files after a release bump), not an intent, and silently
+// falling back would let the panel boot with a partial
+// schema and crash on the first query against a missing
+// column (the v0.8.30/31 chicken-and-egg we hit on prod 2026-08-25).
+//
 // The pure helpers (UpBodyOf, StripSQLLineComments, SplitSQL) are
 // exported so the integration test helper in `backend/testutil`
 // can re-use them. The Up entry point is what `cmd/aegis/main.go`
@@ -31,6 +46,7 @@ package migrations
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,6 +56,216 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// embeddedMigrations is the v0.8.31.1 hotfix canonical migration
+// set, baked into the panel binary at compile time via
+// //go:embed. The host-mounted dir at `dir` is an optional
+// operator override (hot-fix path); if it's empty or absent,
+// the migrator reads from this FS. The hotfix surfaces in two
+// ways: (1) the v0.8.30/31 mTLS migration files (0023_agentca
+// + 0024_add_nodes_agent_transport) are part of this embed,
+// so a fresh v0.8.30+ install now applies them automatically
+// without the operator having to scp them into the host
+// mount; (2) the host-mount-as-override semantic is gated
+// by a fail-loud completeness check, so a partial override
+// can't silently leave the schema out of sync with the
+// binary's expectation.
+//
+//go:embed all:sql/*.sql
+var embeddedMigrations embed.FS
+
+// Up applies every `*.sql` file in the resolved source in
+// lexical order, each inside its own pgx transaction. Only
+// the Up half of each goose-style file is applied — see
+// UpBodyOf for the slicing rules.
+//
+// # Source resolution
+//
+//  1. If `dir` is non-empty and the directory exists with at
+//     least one `*.sql` file, treat it as the operator
+//     override path. Every embedded migration must also be
+//     present in the override — a partial override is an
+//     error, not a fallback (see package doc).
+//  2. Otherwise (dir empty, missing, or has no `.sql` files),
+//     read from the embedded FS (`sql/*.sql`).
+//
+// Idempotency: the first call to Up creates the
+// `schema_migrations` table. Every subsequent call (or
+// re-run) reads the table and skips files whose names
+// are already present. A migration file is applied
+// once and only once per database; the apply +
+// record are wrapped in a single transaction so a
+// crash mid-apply does not leave a half-applied
+// migration in the table.
+//
+// `pool` is the *pgxpool.Pool that the rest of the runtime will
+// use; this is the same handle the caller is expected to keep open
+// for the application's lifetime. We do not open a sibling
+// `*sql.DB` connection the way the old goose-based code did —
+// the pgx stdlib adapter does not honour multi-statement
+// transactions (BEGIN; ... COMMIT;) and is therefore useless for
+// our migration files.
+func Up(ctx context.Context, pool *pgxpool.Pool, dir string) error {
+	readFile, names, err := resolveSource(dir)
+	if err != nil {
+		return err
+	}
+
+	// Bootstrap the tracking table on every call. The
+	// CREATE TABLE IF NOT EXISTS makes this a
+	// no-op after the first call.
+	if err := ensureSchemaMigrationsTable(ctx, pool); err != nil {
+		return err
+	}
+	applied, err := appliedMigrations(ctx, pool)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		if _, ok := applied[name]; ok {
+			// Already applied. Skip without
+			// re-running. A future refactor may
+			// add a `--force` flag for the
+			// "I edited a past migration by
+			// hand, please re-apply" path; for
+			// now the convention is "never edit a
+			// merged migration, write a new
+			// one instead".
+			continue
+		}
+		raw, err := readFile(name)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", name, err)
+		}
+		if err := applyOne(ctx, pool, name, raw); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, pool, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveSource picks the migration source for Up: the
+// host-mounted dir if present and complete, otherwise the
+// embedded FS. The fail-loud completeness check refuses a
+// partial override (a host mount that has SOME but not all
+// migrations present in the embed) — silently falling back
+// would let the panel boot with a partial schema and crash
+// on the first query against a missing column, the same
+// failure mode that the v0.8.30/31 mTLS chicken-and-egg hit
+// on prod 2026-08-25.
+//
+// The returned readFile closure reads a single file by name
+// from whichever source was selected. The returned names
+// list is the canonical migration set in lexical order.
+func resolveSource(dir string) (readFile func(name string) (string, error), names []string, err error) {
+	// Host-mounted dir (operator override path). The dir
+	// may not exist (e.g. operator removed the volume
+	// from the compose) — that's a clean signal to use
+	// the embed, not an error. A present-but-unreadable
+	// dir is a real error and we surface it.
+	var dirEntries []os.DirEntry
+	if dir != "" {
+		var readErr error
+		dirEntries, readErr = os.ReadDir(dir)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, nil, fmt.Errorf("read migrations dir %q: %w", dir, readErr)
+		}
+	}
+
+	// Try the host dir first: if it has any .sql files,
+	// it's the operator's override intent. We then
+	// validate the override is COMPLETE (every embedded
+	// migration is present in the override) — a partial
+	// override fails loud.
+	if len(dirEntries) > 0 {
+		var hostNames []string
+		for _, e := range dirEntries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+				hostNames = append(hostNames, e.Name())
+			}
+		}
+		if len(hostNames) > 0 {
+			embeddedNames, err := readEmbeddedNames()
+			if err != nil {
+				return nil, nil, fmt.Errorf("read embedded migrations for validation: %w", err)
+			}
+			if missing := setDiff(embeddedNames, hostNames); len(missing) > 0 {
+				return nil, nil, fmt.Errorf(
+					"migrations dir %q is incomplete: missing %v "+
+						"(the panel binary ships these via embed.FS; "+
+						"see docs/operator-install.md \u00a7migrations \u2014 "+
+						"either remove the host mount to use embedded, or "+
+						"copy the missing files into the mount)",
+					dir, missing,
+				)
+			}
+			// Override accepted. Use the host dir's
+			// files in lexical order.
+			readFile := func(name string) (string, error) {
+				data, rerr := os.ReadFile(filepath.Join(dir, name))
+				if rerr != nil {
+					return "", rerr
+				}
+				return string(data), nil
+			}
+			sort.Strings(hostNames)
+			return readFile, hostNames, nil
+		}
+	}
+
+	// No host mount (or empty): use the embedded FS.
+	embeddedNames, err := readEmbeddedNames()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	readFile = func(name string) (string, error) {
+		data, rerr := embeddedMigrations.ReadFile("sql/" + name)
+		if rerr != nil {
+			return "", rerr
+		}
+		return string(data), nil
+	}
+	return readFile, embeddedNames, nil
+}
+
+// readEmbeddedNames lists the .sql files in the embedded
+// sql/ directory in lexical order. The result is the
+// canonical migration set the panel binary was built with.
+func readEmbeddedNames() ([]string, error) {
+	entries, err := embeddedMigrations.ReadDir("sql")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// setDiff returns the elements of `a` that are not present
+// in `b`. The result is in the same (unsorted) order as `a`.
+// Used by resolveSource to fail loud on a partial override.
+func setDiff(a, b []string) []string {
+	setB := make(map[string]struct{}, len(b))
+	for _, n := range b {
+		setB[n] = struct{}{}
+	}
+	var missing []string
+	for _, n := range a {
+		if _, ok := setB[n]; !ok {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
 
 // schemaMigrationsDDL is the bootstrap statement for the
 // `schema_migrations` tracking table. We inline it (rather
@@ -99,79 +325,6 @@ func recordMigration(ctx context.Context, pool *pgxpool.Pool, name string) error
 	)
 	if err != nil {
 		return fmt.Errorf("record migration %s: %w", name, err)
-	}
-	return nil
-}
-
-// Up applies every `*.sql` file under `dir` in lexical order, each
-// inside its own pgx transaction. Only the Up half of each
-// goose-style file is applied — see UpBodyOf for the slicing
-// rules.
-//
-// Idempotency: the first call to Up creates the
-// `schema_migrations` table. Every subsequent call (or
-// re-run) reads the table and skips files whose names
-// are already present. A migration file is applied
-// once and only once per database; the apply +
-// record are wrapped in a single transaction so a
-// crash mid-apply does not leave a half-applied
-// migration in the table.
-//
-// `pool` is the *pgxpool.Pool that the rest of the runtime will
-// use; this is the same handle the caller is expected to keep open
-// for the application's lifetime. We do not open a sibling
-// `*sql.DB` connection the way the old goose-based code did —
-// the pgx stdlib adapter does not honour multi-statement
-// transactions (BEGIN; ... COMMIT;) and is therefore useless for
-// our migration files.
-func Up(ctx context.Context, pool *pgxpool.Pool, dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("read migrations dir %q: %w", dir, err)
-	}
-
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
-
-	// Bootstrap the tracking table on every call. The
-	// CREATE TABLE IF NOT EXISTS makes this a
-	// no-op after the first call.
-	if err := ensureSchemaMigrationsTable(ctx, pool); err != nil {
-		return err
-	}
-	applied, err := appliedMigrations(ctx, pool)
-	if err != nil {
-		return err
-	}
-
-	for _, name := range names {
-		if _, ok := applied[name]; ok {
-			// Already applied. Skip without
-			// re-running. A future refactor may
-			// add a `--force` flag for the
-			// "I edited a past migration by
-			// hand, please re-apply" path; for
-			// now the convention is "never edit a
-			// merged migration, write a new
-			// one instead".
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return fmt.Errorf("read %s: %w", name, err)
-		}
-		if err := applyOne(ctx, pool, name, string(raw)); err != nil {
-			return err
-		}
-		if err := recordMigration(ctx, pool, name); err != nil {
-			return err
-		}
 	}
 	return nil
 }
