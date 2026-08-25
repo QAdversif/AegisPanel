@@ -1281,6 +1281,129 @@ from the memory backend (it was already gone).
    cost" of the silent misconfig — captured
    here so future readers can find it.
 
+## v0.8.31 — currently open (the mTLS+gRPC migration)
+
+v0.8.29 introduced the gRPC control plane
+alongside the v0.4.0-b HTTP+bearer surface
+(dual-stack). v0.8.30 wired mTLS end-to-end
+(self-signed root CA in the `agentca` table,
+per-node server certs, panel-side client certs,
+`RequireAndVerifyClientCert` on the agent, mTLS
+dial on the panel). v0.8.31 ships the operator-
+facing surface for the migration: the
+`agent_transport` column, the
+`aegis admin node rotate-transport` CLI, the
+`GET /api/v1/nodes` deprecation-warning header,
+and the CI grep gate that fails the build on a
+new `http_transport.go` file outside the v0.8.29
+archive path.
+
+The v0.8.32 cut removes the HTTP+bearer path
+entirely. The cut is gated on three conditions
+(all must hold before v0.8.32 ships):
+
+1. `GET /api/v1/nodes` shows 0% `transport=http`
+   in prod for at least 1 release.
+2. Telemetry confirms 0% HTTP at peak hour for
+   7 days.
+3. Operator sign-off.
+
+The v0.8.31 release is the operator's window to
+migrate. The runbook is in
+`docs/operator-guide.md` §"mTLS+gRPC migration
+(v0.8.31)" — a five-step flow that takes a
+single-node install from the v0.8.30 dual-stack
+default to a clean v0.8.32 cutover.
+
+### `agent_transport=http` deprecation window — observability, v0.8.32 cut
+
+The v0.8.30 dual-stack default is `http` (the
+v0.4.0-b HTTP+bearer surface). The v0.8.31
+release adds the `nodes.agent_transport` column
+(migration 0024) + the `aegis admin node
+rotate-transport` CLI to flip nodes from
+`http` to `grpc`. The `GET /api/v1/nodes`
+endpoint carries three headers when at least
+one node is on `http`:
+
+- `Deprecation: true` (RFC 8594).
+- `X-Aegis-Deprecation-Notice: <text>` — the
+  exact remediation command.
+- `X-Aegis-Deprecation-Sunset: v0.8.32` — the
+  release that removes the `http` value from
+  the column's `CHECK` constraint.
+
+**Operator action**: run
+`aegis admin node rotate-transport --filter transport=http`
+on the panel host. The CLI is idempotent (a
+no-op rotation does not write the column or
+emit an audit row) and is safe on cron. The
+audit log records each actual rotation as
+`node.transport.rotated`; the daily
+`GET /api/v1/nodes` check is the operator's
+"is the migration done?" signal.
+
+**Why a per-node column** (vs a global
+`AEGIS_AGENT_TRANSPORT` env): a global env
+is process-wide and gives the operator no
+per-node signal. The column is the per-node
+source of truth that v0.8.32 will use to
+drive the per-node transport pick (today, at
+v0.8.31, the transport pick at apply time is
+still process-wide via the env var; the column
+is observability + audit only).
+
+### Bootstrap `<-> nodes` import cycle — observed in v0.8.30 PR 1c, will be lifted in v0.8.31 follow-up
+
+The v0.8.30 PR 1c commit notes a pre-existing
+`bootstrap <-> nodes` import cycle that forced
+the agentca wiring to live in `internal/app`
+as a bridge. v0.8.31 surfaces the same cycle
+in the `Service.Provision` integration (the
+nodes-side caller of `agentca.EnsureNodeCerts`
+is a bootstrap-package method that the
+`bootstrap` package cannot import). v0.8.31
+follow-up lifts the cycle by extracting the
+shared cert material to a `pkg/middleware`
+package that both sides import; the v0.8.32
+cutover (which removes the HTTP transport
+entirely) lands the cleaner topology. The
+current bridge-in-app shape is correct but
+not minimal.
+
+### Per-node mTLS server key stored as plaintext DER — v0.8.31 follow-up
+
+The v0.8.30 PR 1c migration
+(`backend/migrations/0023_agentca.sql`) added
+`nodes.mtls_server_key_ciphertext` as a
+plaintext-DER column with a `_ciphertext`
+suffix reserved for the v0.8.31 envelope pass.
+The current release stores the private key
+plaintext (the SQL column is BYTEA, not
+encrypted at rest). The v0.8.31 follow-up
+adds the envelope pass via the existing
+`internal/crypto/envelope` API
+(`AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS` +
+`AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE`) so the
+column carries the age-sealed ciphertext, not
+the raw DER. The pre-v0.8.31 panel cannot
+read the column either way (the column is
+v0.8.30+) so the change is forward-only.
+
+### Pre-v0.8.31 panel + v0.8.31 agent version skew — v0.8.30 documented, v0.8.31 still applies
+
+A pre-v0.8.31 panel (e.g. the v0.8.30
+production deploy) does not have the
+`agent_transport` column. Per the v0.8.30
+release notes (`docs/superpowers/plans/2026-08-25-mtls-grpc-agent.md`
+§"Open risks" #3), the column miss falls back
+to the v0.4.0-b HTTP+bearer default. After
+the v0.8.31 release the panel ships the
+column, so the skew resolves itself on the
+next panel upgrade. The operator does not
+need to take any action — the v0.8.30→v0.8.31
+upgrade is the unblock.
+
 ## v0.9.1 — currently open (7 Tier 1 #3 follow-up items)
 
 v0.8.28 closed the Tier 1 #3 batch but parked 7

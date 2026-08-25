@@ -254,6 +254,43 @@ type updateRequest struct {
 
 // --- handlers -----------------------------------------------------------
 
+// handleList returns every node. The HTTP response
+// is a JSON object with a `nodes` array; the array
+// is always non-nil so the frontend can iterate
+// without a guard.
+//
+// # v0.8.31 deprecation warning
+//
+// When at least one node is on
+// `agent_transport=http`, the response carries
+// three headers pointing the operator at the
+// v0.8.32 cut:
+//
+//   - `Deprecation: true` (RFC 8594 — the
+//     canonical "this surface is going away"
+//     signal that any HTTP client / proxy
+//     understands out of the box).
+//   - `X-Aegis-Deprecation-Notice: <text>` — the
+//     operator-facing message with the exact
+//     remediation command.
+//   - `X-Aegis-Deprecation-Sunset: v0.8.32` — the
+//     release that will remove the `http`
+//     value.
+//
+// The headers fire when ANY node is on `http`,
+// not when ALL nodes are. The operator's daily
+// `GET /api/v1/nodes` check is the v0.8.31
+// migration signal: as long as a single node is
+// still on http, the headers are set, and the
+// header disappears the moment the migration is
+// complete. The body still includes the per-node
+// `agent_transport` so the operator's existing
+// tooling does not need to learn the header.
+//
+// The check is O(n) but the fleet is small (a
+// 100-node install is the upper end; a partial
+// index for the >1k case lands in v0.8.32 if the
+// operator asks for it).
 func (s *Service) handleList() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodes, err := s.List(r.Context())
@@ -265,6 +302,14 @@ func (s *Service) handleList() http.HandlerFunc {
 		// frontend can iterate without a guard.
 		if nodes == nil {
 			nodes = []*Node{}
+		}
+		for _, n := range nodes {
+			if n.AgentTransport == AgentTransportHTTP {
+				w.Header().Set("Deprecation", "true")
+				w.Header().Set("X-Aegis-Deprecation-Notice", "agent_transport=http is deprecated; rotate to grpc before v0.8.32 (aegis admin node rotate-transport --filter transport=http)")
+				w.Header().Set("X-Aegis-Deprecation-Sunset", "v0.8.32")
+				break
+			}
 		}
 		httpjson.WriteJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
 	}
