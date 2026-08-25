@@ -83,6 +83,14 @@ func TestPgStore_Create_RoundTrip(t *testing.T) {
 	if got.CapacityHint != "1 Gbps" {
 		t.Errorf("capacity_hint = %q, want %q", got.CapacityHint, "1 Gbps")
 	}
+	// v0.8.31: the new agent_transport column
+	// (migration 0024) defaults to 'http' on
+	// insert; the round-trip must preserve that
+	// default. The fixture does not set the
+	// field, so the value is the column DEFAULT.
+	if got.AgentTransport != AgentTransportHTTP {
+		t.Errorf("agent_transport = %q, want %q (column DEFAULT)", got.AgentTransport, AgentTransportHTTP)
+	}
 	if len(got.Tags) != 2 {
 		t.Fatalf("tags = %d, want 2", len(got.Tags))
 	}
@@ -322,6 +330,74 @@ func TestPgStore_Delete_NotFound(t *testing.T) {
 	pool := testutil.MustNewPool(t)
 	store := NewPgStore(pool)
 	err := store.Delete(context.Background(), uuid.New())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// --- SetAgentTransport (v0.8.31) ---------------------------------------
+
+// TestPgStore_SetAgentTransport_OK is the v0.8.31
+// happy-path: a freshly created node defaults to
+// 'http' (the column DEFAULT + the Go-side default
+// in insertNode); SetAgentTransport flips it to
+// 'grpc'; the read-back returns 'grpc'. The
+// dedicated single-column UPDATE is the same shape
+// as SetAgentBearer / SetSSHPrivateKeyCiphertext,
+// so the test follows that pattern.
+func TestPgStore_SetAgentTransport_OK(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	f := newNodeFixture(t)
+	ctx := context.Background()
+	if err := store.Create(ctx, f.node); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Sanity: fresh nodes are on 'http' (the
+	// v0.8.31 default).
+	pre, err := store.GetByID(ctx, f.node.ID)
+	if err != nil {
+		t.Fatalf("pre GetByID: %v", err)
+	}
+	if pre.AgentTransport != AgentTransportHTTP {
+		t.Fatalf("pre AgentTransport = %q, want %q", pre.AgentTransport, AgentTransportHTTP)
+	}
+
+	if err := store.SetAgentTransport(ctx, f.node.ID, AgentTransportGRPC); err != nil {
+		t.Fatalf("SetAgentTransport: %v", err)
+	}
+	post, err := store.GetByID(ctx, f.node.ID)
+	if err != nil {
+		t.Fatalf("post GetByID: %v", err)
+	}
+	if post.AgentTransport != AgentTransportGRPC {
+		t.Fatalf("post AgentTransport = %q, want %q", post.AgentTransport, AgentTransportGRPC)
+	}
+	// v0.8.31 follow-the-pattern: the
+	// single-column UPDATE bumps `updated_at`.
+	// The original Create stamped UpdatedAt at
+	// T0; the SetAgentTransport call must
+	// produce a strictly-later UpdatedAt. The
+	// pg NOW() resolution is microsecond, so a
+	// single time.Sleep isn't needed — the two
+	// SQL statements run on the same connection
+	// but the wall-clock gap is enough for the
+	// inequality to hold.
+	if !post.UpdatedAt.After(pre.UpdatedAt) {
+		t.Fatalf("UpdatedAt should be bumped: pre=%v post=%v", pre.UpdatedAt, post.UpdatedAt)
+	}
+}
+
+// TestPgStore_SetAgentTransport_NotFound is the
+// v0.8.31 ErrNotFound shape: an unknown id is
+// surfaced so the Service layer can map it to 404
+// (the same mapping the rest of the v0.8.x
+// single-column setters use).
+func TestPgStore_SetAgentTransport_NotFound(t *testing.T) {
+	pool := testutil.MustNewPool(t)
+	store := NewPgStore(pool)
+	err := store.SetAgentTransport(context.Background(), uuid.New(), AgentTransportGRPC)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}

@@ -56,6 +56,18 @@ type Store interface {
 	// ciphertext clears the column. Returns ErrNotFound
 	// if the id is unknown.
 	SetSSHPrivateKeyCiphertext(ctx context.Context, id uuid.UUID, ciphertext []byte) error
+	// SetAgentTransport updates only the
+	// agent_transport column. v0.8.31 added this
+	// as a dedicated method so the
+	// `aegis admin node rotate-transport` CLI (and
+	// the future admin UI button) can flip a single
+	// node from "http" to "grpc" without re-sending
+	// the rest of the row. The value MUST be one of
+	// `AgentTransportHTTP` or `AgentTransportGRPC`;
+	// the Service.RotateTransport validator rejects
+	// any other value before the Store sees it.
+	// Returns ErrNotFound if the id is unknown.
+	SetAgentTransport(ctx context.Context, id uuid.UUID, transport string) error
 }
 
 // ErrNotFound is returned by Store implementations when the
@@ -66,6 +78,30 @@ var ErrNotFound = errors.New("nodes: not found")
 // ErrDuplicate is returned when a Create would violate the
 // unique constraint on Name.
 var ErrDuplicate = errors.New("nodes: duplicate name")
+
+// AgentTransport values. The closed set is enforced by
+// the `nodes_agent_transport_check` constraint installed
+// in migration 0024; the Go-side constants are the
+// mirror so the Service.RotateTransport validator and
+// the CLI's input parser share one source of truth.
+// Adding a new value here requires a migration that
+// re-aligns the SQL CHECK constraint; the
+// `pg_store_state_check_test.go` regression-guard
+// pattern (for the `nodes_state_check` constraint) is
+// the template for the same check on transport.
+const (
+	// AgentTransportHTTP is the v0.4.0-b HTTP+bearer
+	// surface. Deprecated in v0.8.31; removed in
+	// v0.8.32. Operators run `aegis admin node
+	// rotate-transport <uuid>` to flip a node to
+	// AgentTransportGRPC once the agent has the
+	// v0.8.30 mTLS material on disk.
+	AgentTransportHTTP = "http"
+	// AgentTransportGRPC is the v0.8.29 gRPC
+	// surface. mTLS-wired in v0.8.30. The only
+	// valid value in v0.8.32+.
+	AgentTransportGRPC = "grpc"
+)
 
 // ErrInvalid is returned by the Service layer when input validation
 // fails. The wrapped error includes the offending field.
@@ -119,6 +155,19 @@ func (s *MemoryStore) Create(_ context.Context, n *Node) error {
 	}
 	if n.ID == uuid.Nil {
 		return fmt.Errorf("create: zero id")
+	}
+	// v0.8.31: default the agent_transport to
+	// "http" to mirror the SQL column DEFAULT
+	// (migration 0024). The Service.Create path
+	// never sets the field explicitly; the
+	// dedicated SetAgentTransport is the only
+	// writer. The default here keeps the
+	// MemoryStore and PgStore on the same
+	// "freshly-created node is on http" baseline
+	// so the rotate-transport CLI starts from a
+	// known state.
+	if n.AgentTransport == "" {
+		n.AgentTransport = AgentTransportHTTP
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -285,6 +334,32 @@ func (s *MemoryStore) SetSSHPrivateKeyCiphertext(_ context.Context, id uuid.UUID
 		ciphertext = []byte{}
 	}
 	clone.SSHPrivateKeyCiphertext = ciphertext
+	clone.UpdatedAt = s.now().UTC()
+	s.byID[id] = clone
+	return nil
+}
+
+// SetAgentTransport updates the agent_transport
+// field of an existing node. v0.8.31: the
+// rotate-transport CLI calls this with either
+// AgentTransportHTTP or AgentTransportGRPC; the
+// Service.RotateTransport validator already
+// rejects unknown values, so the store trusts
+// the input. The dedicated method mirrors
+// SetAgentBearer / SetSSHPrivateKeyCiphertext:
+// the CLI does not need to read the rest of
+// the row, and the dedicated column write
+// avoids the round-trip-through-Service
+// indirection.
+func (s *MemoryStore) SetAgentTransport(_ context.Context, id uuid.UUID, transport string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.byID[id]
+	if !ok {
+		return fmt.Errorf("id %s: %w", id, ErrNotFound)
+	}
+	clone := cloneNode(existing)
+	clone.AgentTransport = transport
 	clone.UpdatedAt = s.now().UTC()
 	s.byID[id] = clone
 	return nil
