@@ -66,6 +66,24 @@ func NewService(store Store) *Service {
 // persisted without going through the Service).
 func (s *Service) Store() Store { return s.store }
 
+// RootCertPEM returns the panel's root CA cert as
+// PEM. v0.8.30 PR 2b: the panel's gRPC client
+// uses the root to verify the agent's server
+// cert (the agent presents a cert signed by this
+// root). The root is in memory after the first
+// `EnsureRoot` call; calling `RootCertPEM` before
+// the root is loaded returns `ErrNotFound` so the
+// caller can decide between "mTLS not wired
+// (ErrMTLSNotConfigured)" and "store miss".
+func (s *Service) RootCertPEM() (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cachedRoot == nil {
+		return "", ErrNotFound
+	}
+	return s.cachedRoot.RootCertPEM(), nil
+}
+
 // EnsureRoot returns the panel's root CA, generating
 // + persisting a new one on first call. The result
 // is cached in memory; the v0.8.31 rotation CLI

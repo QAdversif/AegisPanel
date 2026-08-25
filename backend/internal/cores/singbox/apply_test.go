@@ -82,6 +82,17 @@ func (f *fakeNodeResolver) Refresh(_ context.Context, _ uuid.UUID) (string, erro
 	return f.refreshedBearer, nil
 }
 
+// LoadMTLS implements agentgrpc.NodeResolver.
+// v0.8.30 PR 2b: the gRPC transport loads the
+// per-node mTLS material on every dial. The HTTP
+// transport (which the singbox apply tests cover)
+// never calls LoadMTLS; the fake returns
+// `ErrMTLSNotConfigured` so the gRPC fallback path
+// (plaintext) is the test default.
+func (f *fakeNodeResolver) LoadMTLS(_ context.Context, _ uuid.UUID) ([]byte, []byte, []byte, error) {
+	return nil, nil, nil, agentgrpc.ErrMTLSNotConfigured
+}
+
 // TestApply_HappyPath verifies the v0.8.29 transport-
 // switch happy path: the Provider's Apply POSTs the
 // rendered config via the agentgrpc.Client and the

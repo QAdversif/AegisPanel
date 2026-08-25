@@ -55,4 +55,11 @@ type IssuedNodeCerts struct {
 // `internal/app/agentca_adapter.go`).
 type AgentCertIssuer interface {
 	EnsureNodeCerts(ctx context.Context, nodeID uuid.UUID, addr string) (*IssuedNodeCerts, error)
+	// RootCertPEM returns the panel's root CA cert as
+	// PEM. The v0.8.30 PR 2b mTLS client uses this
+	// to verify the agent's server cert. Returns
+	// `agentca.ErrNotFound` when no root has been
+	// generated yet (the panel that has not
+	// provisioned any nodes).
+	RootCertPEM() (string, error)
 }
