@@ -381,7 +381,14 @@ func runMigrationsOnConn(t *testing.T, ctx context.Context, _ *pgxpool.Conn, dsn
 	if err != nil {
 		return err
 	}
-	migDir := filepath.Join(backendDir, "migrations")
+	// v0.8.31.1: migrations moved from `backend/migrations/`
+	// to `backend/internal/migrations/sql/` (PR #316 commit
+	// 7e7fb38 — the //go:embed migration source). Pass the
+	// new path so runMigrationsOnConn exercises the
+	// file-based code path the operator hits when a host
+	// mount override is in place, not just the embedded
+	// fallback.
+	migDir := filepath.Join(backendDir, "internal", "migrations", "sql")
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -395,8 +402,12 @@ func runMigrationsOnConn(t *testing.T, ctx context.Context, _ *pgxpool.Conn, dsn
 // findBackendDir returns the absolute path to the `backend/`
 // directory by walking up from this source file. The testutil package
 // is two levels deep (`backend/testutil/db.go`), so `..` twice lands
-// on `backend/`. We verify the expected layout (a `migrations/`
-// sibling) so a moved file fails fast with a useful message.
+// on `backend/`. We verify the expected layout (a
+// `internal/migrations/sql/` sibling — the v0.8.31.1 hotfix
+// location per PR #316 commit 7e7fb38) so a moved file fails fast
+// with a useful message. The pre-v0.8.31.1 path was `migrations/`
+// at the repo root; that directory is now empty (the SQL files
+// moved under internal/migrations/sql/ for the //go:embed source).
 func findBackendDir() (string, error) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -404,8 +415,8 @@ func findBackendDir() (string, error) {
 	}
 	dir := filepath.Dir(thisFile) // backend/testutil
 	root := filepath.Dir(dir)     // backend
-	if _, err := os.Stat(filepath.Join(root, "migrations")); err != nil {
-		return "", fmt.Errorf("migrations dir not found at %s/migrations: %w", root, err)
+	if _, err := os.Stat(filepath.Join(root, "internal", "migrations", "sql")); err != nil {
+		return "", fmt.Errorf("migrations dir not found at %s/internal/migrations/sql: %w", root, err)
 	}
 	return root, nil
 }
