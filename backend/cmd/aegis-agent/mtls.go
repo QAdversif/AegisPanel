@@ -142,7 +142,14 @@ func (p mtlsPaths) mtlsEnabled() bool {
 // only safe default.
 func loadMTLSConfig(paths mtlsPaths) (*tls.Config, error) {
 	if !paths.mtlsEnabled() {
-		return nil, errors.New("aegis-agent: mTLS disabled (one or more of cert/key/CA paths is empty)")
+		// v0.8.30+: the v0.8.29 plaintext-fallback
+		// branch is removed. An empty path is a
+		// config bug (the operator must have set
+		// the env var to ""), not a valid posture
+		// — surface a clear error so the operator
+		// knows to re-provision rather than silently
+		// running the gRPC server without auth.
+		return nil, errors.New("aegis-agent: mTLS disabled (one or more of cert/key/CA paths is empty) — re-run the panel's bootstrap installer or set the AEGIS_AGENT_MTLS_CERT/KEY/CA env vars to the canonical paths; v0.8.29 plaintext-fallback is removed")
 	}
 
 	// Read the three PEM files. A missing file
@@ -150,14 +157,17 @@ func loadMTLSConfig(paths mtlsPaths) (*tls.Config, error) {
 	// not run the bootstrap installer, or the
 	// installer wrote the files to a different
 	// path (the env var override path is the
-	// documented escape hatch).
+	// documented escape hatch). The error
+	// message names the specific file that
+	// could not be read so the operator does not
+	// have to dig into the journal to find it.
 	certPEM, err := os.ReadFile(paths.Cert)
 	if err != nil {
-		return nil, fmt.Errorf("aegis-agent: read cert %q: %w", paths.Cert, err)
+		return nil, fmt.Errorf("aegis-agent: read cert %q: %w (hint: the certs ship from the panel's bootstrap installer; re-run POST /api/v1/nodes/{id}/provision or scp the file from the panel's internal/agentca store)", paths.Cert, err)
 	}
 	keyPEM, err := os.ReadFile(paths.Key)
 	if err != nil {
-		return nil, fmt.Errorf("aegis-agent: read key %q: %w", paths.Key, err)
+		return nil, fmt.Errorf("aegis-agent: read key %q: %w (hint: the certs ship from the panel's bootstrap installer; re-run POST /api/v1/nodes/{id}/provision or scp the file from the panel's internal/agentca store)", paths.Key, err)
 	}
 	caPEM, err := os.ReadFile(paths.CA)
 	if err != nil {

@@ -445,6 +445,54 @@ func (c *Config) validate() error {
 				"(set AEGIS_ENV=production or AEGIS_ENV=staging to confirm logging intent; " +
 				"a memory-only dev install does not need this flag)")
 	}
+	// v0.8.32 follow-up: the v0.8.28.6 prod deploy
+	// shipped with `AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE`
+	// accidentally deleted from the env file
+	// (only `AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS`
+	// survived). The panel booted, the envelope
+	// builder returned "identity file path is
+	// required for opening" on the first webhook
+	// call, and the operator had to read the
+	// install contract to figure out what was
+	// missing. Catch the missing env var here so
+	// the failure is loud and synchronous at boot,
+	// not a 502 on the first webhook fire.
+	if c.WebhooksBackend == "pg" {
+		if len(c.WebhooksSecretAgeRecipients) == 0 {
+			return fmt.Errorf(
+				"AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS must be set when AEGIS_WEBHOOKS_BACKEND=pg " +
+					"(one or more age1... recipient lines, comma-separated; the env file at " +
+					"/tmp/aegis-v0.8.31.1.env ships the canonical example — see " +
+					"docs/operator-install.md §env)")
+		}
+		if c.WebhooksSecretAgeKeyFile == "" {
+			return fmt.Errorf(
+				"AEGIS_WEBHOOKS_SECRET_AGE_KEY_FILE must be set when AEGIS_WEBHOOKS_BACKEND=pg " +
+					"(path to the operator's age identity file, e.g. /etc/aegis/age.key; " +
+					"see docs/operator-install.md §env for the install contract)")
+		}
+	}
+	// v0.8.32 follow-up: the v0.8.28 prod env
+	// shipped `AEGIS_AGENT_BINARY=/usr/local/bin/aegis-agent`
+	// (the NODE-side path, where the bootstrap
+	// installer writes the binary). The install
+	// contract requires the CONTAINER-side path
+	// (the panel reads the binary from inside its
+	// own image at `/app/bin/aegis-agent` and
+	// SFTPs it to the node). Catching this at boot
+	// turns a silent install failure (provision
+	// returns 502 with "stat in.AgentSource: no
+	// such file or directory") into a loud
+	// config error.
+	if c.AgentBinaryPath == "/usr/local/bin/aegis-agent" {
+		return fmt.Errorf(
+			"AEGIS_AGENT_BINARY=%q is the NODE-side path (where the bootstrap installer writes the binary); "+
+				"the install contract requires the CONTAINER-side source — e.g. /app/bin/aegis-agent "+
+				"(the panel image bundles the binary at /app/bin/aegis-agent; SFTPs it to the node on provision). "+
+				"See docs/operator-install.md §env.",
+			c.AgentBinaryPath,
+		)
+	}
 	return nil
 }
 

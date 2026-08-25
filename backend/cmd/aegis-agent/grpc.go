@@ -121,15 +121,21 @@ func bearerFromMetadataValue(v string) string {
 // `Shutdown` path uses.
 //
 // v0.8.30: the gRPC server's transport is selected at boot:
-//   - `mtlsPaths.mtlsEnabled() == true` → mTLS (the v0.8.32 default)
-//   - `mtlsPaths.mtlsEnabled() == false` → plaintext (v0.8.29 default;
-//     the v0.8.30+ panel can dial over HTTP+bearer for nodes that
-//     have not been re-provisioned yet)
+//   - `mtlsPaths.mtlsEnabled() == true` → mTLS (the only valid
+//     posture in v0.8.30+; the agent refuses to start
+//     the gRPC server without all three files present at boot).
+//   - `mtlsPaths.mtlsEnabled() == false` → loadMTLSConfig
+//     returns an error. The v0.8.29 plaintext fallback
+//     was a transitional aid for the in-place upgrade
+//     window; v0.8.30+ removed it. A panel-side
+//     `AEGIS_AGENT_MTLS_*=""` override now surfaces as a
+//     loud error pointing at the install contract
+//     (see `loadMTLSConfig` in mtls.go).
 //
-// The fallback is a transitional aid; v0.8.32 removes the
-// plaintext branch entirely. The operator opts in to mTLS by
-// writing the three cert files to the standard paths (or
-// overriding the env vars).
+// The operator opts in to mTLS by re-running the panel's
+// bootstrap installer (which writes the three files via
+// SFTP) or by `scp`-ing the files from the panel's
+// `internal/agentca` store to the canonical paths.
 func runGRPC(ctx context.Context, addr string, paths mtlsPaths) error {
 	if addr == "" {
 		// Operator opted out of gRPC by exporting
@@ -147,10 +153,12 @@ func runGRPC(ctx context.Context, addr string, paths mtlsPaths) error {
 
 	// Transport selection. The cert+key+CA files
 	// are written by the bootstrap installer in
-	// v0.8.30; a v0.8.29 (or earlier) installer
-	// leaves the paths empty and the gRPC server
-	// falls back to plaintext (the v0.8.29
-	// bearer-only path).
+	// v0.8.30+; a v0.8.29 (or earlier) installer
+	// left the paths empty and the gRPC server
+	// fell back to plaintext (the v0.8.29
+	// bearer-only path). The plaintext fallback
+	// is removed in v0.8.30+: the agent refuses
+	// to start the gRPC server without the certs.
 	var credsOpt grpc.ServerOption
 	if paths.mtlsEnabled() {
 		cfg, err := loadMTLSConfig(paths)

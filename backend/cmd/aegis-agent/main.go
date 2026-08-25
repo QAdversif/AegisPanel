@@ -437,15 +437,21 @@ func main() {
 	// lands; the panel still SSH-tunnels).
 	listen := flag.String("listen", envOr("AEGIS_AGENT_LISTEN_ADDR", defaultListenAddr), "HTTP listen address (host:port)")
 	listenGRPC := flag.String("listen-grpc", envOr("AEGIS_AGENT_LISTEN_GRPC", defaultGRPCListenAddr), "gRPC listen address (host:port); empty disables gRPC")
-	// v0.8.30 mTLS paths. Defaults match the
-	// standard `install_agent` role output; an
-	// operator with a non-standard layout
-	// overrides the env vars. All three must be
-	// set (any empty value = plaintext fallback;
-	// see `runGRPC`'s transport selection).
-	mtlsCert := flag.String("mtls-cert", envOr("AEGIS_AGENT_MTLS_CERT", defaultMTLSCert), "agent server cert path (PEM, CERTIFICATE block); empty = plaintext fallback")
-	mtlsKey := flag.String("mtls-key", envOr("AEGIS_AGENT_MTLS_KEY", defaultMTLSKey), "agent server key path (PEM, EC PRIVATE KEY block); empty = plaintext fallback")
-	mtlsCA := flag.String("mtls-ca", envOr("AEGIS_AGENT_MTLS_CA", defaultMTLSCA), "trusted root CA bundle path (PEM, CERTIFICATE blocks); empty = plaintext fallback")
+	// v0.8.30+ mTLS paths. Defaults match the standard
+	// `install_agent` role output. The agent
+	// refuses to start the gRPC server without all
+	// three files present at boot — the v0.8.29
+	// "empty path = plaintext fallback" behaviour is
+	// removed. If the files are missing, the agent
+	// exits with a load error and the operator must
+	// either re-run the panel's bootstrap installer
+	// (which writes the three files via SFTP) or
+	// scp them to the canonical paths manually.
+	// Override paths with `AEGIS_AGENT_MTLS_CERT/KEY/CA`
+	// env vars if the certs live somewhere else.
+	mtlsCert := flag.String("mtls-cert", envOr("AEGIS_AGENT_MTLS_CERT", defaultMTLSCert), "agent server cert path (PEM, CERTIFICATE block); REQUIRED in v0.8.30+ — agent refuses to start the gRPC server if the file is missing")
+	mtlsKey := flag.String("mtls-key", envOr("AEGIS_AGENT_MTLS_KEY", defaultMTLSKey), "agent server key path (PEM, EC PRIVATE KEY block); REQUIRED in v0.8.30+ — agent refuses to start the gRPC server if the file is missing")
+	mtlsCA := flag.String("mtls-ca", envOr("AEGIS_AGENT_MTLS_CA", defaultMTLSCA), "trusted root CA bundle path (PEM, CERTIFICATE blocks); REQUIRED in v0.8.30+ — agent refuses to start the gRPC server if the file is missing")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
