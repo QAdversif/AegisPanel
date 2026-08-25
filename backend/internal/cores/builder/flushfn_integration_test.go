@@ -51,6 +51,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/QAdversif/AegisPanel/internal/agentgrpc"
 	"github.com/QAdversif/AegisPanel/internal/cores"
 	"github.com/QAdversif/AegisPanel/internal/cores/singbox"
 	"github.com/QAdversif/AegisPanel/internal/inbounds"
@@ -107,41 +108,39 @@ func (a *integrationFakeAgent) snapshot() []integrationAppliedPayload {
 	return out
 }
 
-// hostPortFromURL is shared with the smoke test
-// via a tiny re-declaration here to keep the
-// integration build free of the smoke test's
-// build-less symbols.
-func integrationHostPort(t *testing.T, u string) string {
-	t.Helper()
-	const scheme = "http://"
-	if len(u) < len(scheme) || u[:len(scheme)] != scheme {
-		t.Fatalf("expected %q to start with %q", u, scheme)
-	}
-	return u[len(scheme):]
+// integrationStubResolver was removed in v0.8.29
+// (PR 3 — panel-side agentgrpc transport): the
+// v0.8.29 refactor collapsed the
+// `Provider.Configure(resolver, httpClient)` two-
+// argument surface into
+// `Provider.Configure(agentgrpc.Client)` so the
+// transport package owns the resolver+client
+// wiring in one place. The integration test now
+// builds an `agentgrpc.Client` via
+// `agentgrpc.NewTestClient(srv, integrationNodeResolver)`
+// where `integrationNodeResolver` is the
+// minimum-viable `agentgrpc.NodeResolver` below.
+
+// integrationNodeResolver is the minimum-viable
+// `agentgrpc.NodeResolver` the integration test
+// needs: every node id resolves to the same fake
+// agent (the test only ever has one node), and the
+// bearer is the fixture value the test asserts on.
+// `Refresh` is a no-op (the fake agent never returns
+// 401, so the BatchedApplier never enters the
+// auto-refresh path).
+type integrationNodeResolver struct {
+	addr   string
+	bearer string
 }
 
-// stubResolver is the singbox.NodeResolver the
-// integration test wires into Provider.Configure.
-// Every node id resolves to the same fake agent;
-// the test only ever has one node so the shared
-// address is correct.
-type integrationStubResolver struct {
-	hostPort string
-	bearer   string
+func (r *integrationNodeResolver) ResolveAddr(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.addr, nil
 }
-
-func (r *integrationStubResolver) Resolve(_ context.Context, _ uuid.UUID) (string, string, error) {
-	return r.hostPort, r.bearer, nil
+func (r *integrationNodeResolver) GetBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
 }
-
-// RefreshBearer is a no-op for the integration
-// test: the fake agent never returns 401, so the
-// BatchedApplier never enters the auto-refresh
-// retry path. Returning the same bearer keeps
-// `singbox.NodeResolver` satisfied without
-// making the test async or pulling the SSH
-// fixture into the integration scope.
-func (r *integrationStubResolver) RefreshBearer(_ context.Context, _ uuid.UUID) (string, error) {
+func (r *integrationNodeResolver) Refresh(_ context.Context, _ uuid.UUID) (string, error) {
 	return r.bearer, nil
 }
 
@@ -181,10 +180,21 @@ func TestIntegration_EndToEnd_RealPgCreateUserTriggersApply(t *testing.T) {
 	srv := httptest.NewServer(agent.handler())
 	defer srv.Close()
 	provider := singbox.New()
-	provider.Configure(&integrationStubResolver{
-		hostPort: integrationHostPort(t, srv.URL),
-		bearer:   "integration-bearer-fixture-aaaaaaaaa",
-	}, singbox.NewHTTPClient())
+	// v0.8.29 PR 3 collapsed Provider.Configure to
+	// take a single `agentgrpc.Client`. The
+	// `integrationNodeResolver` supplies the
+	// fixture bearer the test asserts on at the
+	// bottom of this file (line ~256:
+	// `Authorization = "Bearer "+wantBearer`).
+	client, teardown := agentgrpc.NewTestClient(
+		srv,
+		&integrationNodeResolver{
+			addr:   strings.TrimPrefix(srv.URL, "http://"),
+			bearer: "integration-bearer-fixture-aaaaaaaaa",
+		},
+	)
+	defer teardown()
+	provider.Configure(client)
 
 	// 3. Seed node + inbound.
 	nodeID := uuid.New()
