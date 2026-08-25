@@ -116,11 +116,33 @@ func (a *integrationFakeAgent) snapshot() []integrationAppliedPayload {
 // `Provider.Configure(agentgrpc.Client)` so the
 // transport package owns the resolver+client
 // wiring in one place. The integration test now
-// uses `agentgrpc.NewTestClient(srv, nil)` directly
-// — the fake agent at the top of this file does
-// not validate the bearer header (it just records
-// the Authorization value into the snapshot), so
-// the default nil resolver is sufficient.
+// builds an `agentgrpc.Client` via
+// `agentgrpc.NewTestClient(srv, integrationNodeResolver)`
+// where `integrationNodeResolver` is the
+// minimum-viable `agentgrpc.NodeResolver` below.
+
+// integrationNodeResolver is the minimum-viable
+// `agentgrpc.NodeResolver` the integration test
+// needs: every node id resolves to the same fake
+// agent (the test only ever has one node), and the
+// bearer is the fixture value the test asserts on.
+// `Refresh` is a no-op (the fake agent never returns
+// 401, so the BatchedApplier never enters the
+// auto-refresh path).
+type integrationNodeResolver struct {
+	addr   string
+	bearer string
+}
+
+func (r *integrationNodeResolver) ResolveAddr(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.addr, nil
+}
+func (r *integrationNodeResolver) GetBearer(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
+}
+func (r *integrationNodeResolver) Refresh(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.bearer, nil
+}
 
 // TestIntegration_EndToEnd_RealPgCreateUserTriggersApply
 // is the headline integration test: the panel
@@ -159,13 +181,18 @@ func TestIntegration_EndToEnd_RealPgCreateUserTriggersApply(t *testing.T) {
 	defer srv.Close()
 	provider := singbox.New()
 	// v0.8.29 PR 3 collapsed Provider.Configure to
-	// take a single `agentgrpc.Client`; the
-	// `agentgrpc.NewTestClient(srv, nil)` helper
-	// builds an httpTransport-backed Client that
-	// talks to the fake agent at srv.URL. The nil
-	// resolver is fine here because the fake
-	// agent does not validate the bearer header.
-	client, teardown := agentgrpc.NewTestClient(srv, nil)
+	// take a single `agentgrpc.Client`. The
+	// `integrationNodeResolver` supplies the
+	// fixture bearer the test asserts on at the
+	// bottom of this file (line ~256:
+	// `Authorization = "Bearer "+wantBearer`).
+	client, teardown := agentgrpc.NewTestClient(
+		srv,
+		&integrationNodeResolver{
+			addr:   strings.TrimPrefix(srv.URL, "http://"),
+			bearer: "integration-bearer-fixture-aaaaaaaaa",
+		},
+	)
 	defer teardown()
 	provider.Configure(client)
 
