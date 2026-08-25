@@ -82,6 +82,15 @@ func (r *defaultTestResolver) Refresh(_ context.Context, _ uuid.UUID) (string, e
 	return "", nil
 }
 
+// LoadMTLS returns ErrMTLSNotConfigured so the
+// gRPC transport falls back to plaintext (the
+// v0.8.29 test path). Tests that want to exercise
+// the mTLS path wrap their own resolver around
+// the defaultTestResolver and override LoadMTLS.
+func (r *defaultTestResolver) LoadMTLS(_ context.Context, _ uuid.UUID) (cert, key, ca []byte, err error) {
+	return nil, nil, nil, ErrMTLSNotConfigured
+}
+
 // testServerResolver wraps a caller's resolver so the
 // production httpTransport talks to the test server
 // regardless of what `ResolveAddr` returns. Tests that
@@ -116,6 +125,15 @@ func (r *testServerResolver) GetBearer(ctx context.Context, id uuid.UUID) (strin
 
 func (r *testServerResolver) Refresh(ctx context.Context, id uuid.UUID) (string, error) {
 	return r.inner.Refresh(ctx, id)
+}
+
+// LoadMTLS forwards to the inner resolver so tests
+// that wrap a real resolver (the agentca-backed one)
+// get the real mTLS material; tests that wrap the
+// defaultTestResolver get the
+// `ErrMTLSNotConfigured` fallback.
+func (r *testServerResolver) LoadMTLS(ctx context.Context, id uuid.UUID) (cert, key, ca []byte, err error) {
+	return r.inner.LoadMTLS(ctx, id)
 }
 
 // Compile-time check that `*httpTransport` (the

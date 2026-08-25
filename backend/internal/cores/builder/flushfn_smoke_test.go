@@ -133,6 +133,15 @@ func (r *stubResolver) Refresh(_ context.Context, _ uuid.UUID) (string, error) {
 	return r.bearer, nil
 }
 
+// LoadMTLS returns ErrMTLSNotConfigured so the
+// gRPC transport falls back to plaintext. v0.8.30
+// PR 2b: the mTLS path lands in v0.8.30 PR 2c
+// (bootstrap cert-push); the smoke test runs
+// against the HTTP+bearer transport.
+func (r *stubResolver) LoadMTLS(_ context.Context, _ uuid.UUID) ([]byte, []byte, []byte, error) {
+	return nil, nil, nil, agentgrpc.ErrMTLSNotConfigured
+}
+
 // hostPortFromURL extracts the host:port from a
 // httptest.Server URL (which is of the form
 // "http://127.0.0.1:57124"). Stripping the

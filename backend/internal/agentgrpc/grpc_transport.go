@@ -12,6 +12,7 @@ package agentgrpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,15 +77,41 @@ func (t *grpcTransport) Close() error {
 }
 
 // dialAgent opens a one-shot `*grpc.ClientConn` for the
-// given agent address. v0.8.30 swaps the credentials.
+// given agent address. v0.8.30 swaps the credentials
+// to mTLS when the resolver returns a non-empty
+// `LoadMTLS` material; the v0.8.29 plaintext fallback
+// is used when the resolver returns `ErrMTLSNotConfigured`.
 //
 // `grpc.NewClient` is lazy; the first call (in `Apply`)
 // triggers the actual dial. The dialTimeout caps how
 // long that dial may take; the Apply call itself
 // (which uses callTimeout) is a separate budget.
-func (t *grpcTransport) dialAgent(ctx context.Context, addr string) (*grpc.ClientConn, error) {
+func (t *grpcTransport) dialAgent(ctx context.Context, nodeID uuid.UUID, addr string) (*grpc.ClientConn, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
+	// Transport selection. v0.8.30 PR 2b: try mTLS
+	// first; fall back to plaintext on
+	// `ErrMTLSNotConfigured`. Any other mTLS error
+	// is a hard error (a corrupted cert file
+	// should not silently downgrade to plaintext
+	// -- the operator would never know).
+	creds := grpc.WithTransportCredentials(insecure.NewCredentials())
+	mat := resolveMTLS(ctx, t.resolver, nodeID)
+	switch {
+	case mat.Err == nil:
+		cfg, err := loadClientTLS(mat)
+		if err != nil {
+			return nil, fmt.Errorf("agentgrpc: dial %s: load mTLS: %w", addr, err)
+		}
+		creds = grpc.WithTransportCredentials(newClientTLSCreds(cfg))
+	case errors.Is(mat.Err, ErrMTLSNotConfigured):
+		// Plaintext fallback. Removed in v0.8.32.
+	default:
+		// Real error (corrupt cert, store miss,
+		// etc.). Surface to the caller rather than
+		// silently fall back to plaintext.
+		return nil, fmt.Errorf("agentgrpc: dial %s: load mTLS material: %w", addr, mat.Err)
+	}
 	// `grpc.WithBlock` is deprecated in gRPC v1.66+
 	// in favour of `Connect` + `WaitForStateChange`.
 	// We use the deprecated option here because the
@@ -99,7 +126,7 @@ func (t *grpcTransport) dialAgent(ctx context.Context, addr string) (*grpc.Clien
 	// wait.
 	conn, err := grpc.NewClient(
 		"passthrough://"+addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		creds,
 		grpc.WithBlock(), //nolint:staticcheck // see comment above
 	)
 	if err != nil {
@@ -133,7 +160,7 @@ func (t *grpcTransport) Apply(ctx context.Context, nodeID uuid.UUID, cfg []byte)
 	if addr == "" {
 		return fmt.Errorf("agentgrpc: node %s: empty address", nodeID)
 	}
-	conn, err := t.dialAgent(callCtx, addr)
+	conn, err := t.dialAgent(callCtx, nodeID, addr)
 	if err != nil {
 		return err
 	}
@@ -182,7 +209,7 @@ func (t *grpcTransport) Status(ctx context.Context, nodeID uuid.UUID) (StatusRes
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("agentgrpc: resolve node %s: %w", nodeID, err)
 	}
-	conn, err := t.dialAgent(callCtx, addr)
+	conn, err := t.dialAgent(callCtx, nodeID, addr)
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -212,7 +239,7 @@ func (t *grpcTransport) Stats(ctx context.Context, nodeID uuid.UUID) (StatsResul
 	if err != nil {
 		return StatsResult{}, fmt.Errorf("agentgrpc: resolve node %s: %w", nodeID, err)
 	}
-	conn, err := t.dialAgent(callCtx, addr)
+	conn, err := t.dialAgent(callCtx, nodeID, addr)
 	if err != nil {
 		return StatsResult{}, err
 	}
@@ -246,7 +273,7 @@ func (t *grpcTransport) Health(ctx context.Context, nodeID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("agentgrpc: resolve node %s: %w", nodeID, err)
 	}
-	conn, err := t.dialAgent(callCtx, addr)
+	conn, err := t.dialAgent(callCtx, nodeID, addr)
 	if err != nil {
 		return err
 	}
