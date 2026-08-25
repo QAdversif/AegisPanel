@@ -31,6 +31,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -118,7 +119,18 @@ func bearerFromMetadataValue(v string) string {
 // `errCh` (see `main.go`). On shutdown, `grpc.Server.GracefulStop`
 // drains in-flight RPCs with the same 10-second budget the HTTP
 // `Shutdown` path uses.
-func runGRPC(ctx context.Context, addr string) error {
+//
+// v0.8.30: the gRPC server's transport is selected at boot:
+//   - `mtlsPaths.mtlsEnabled() == true` → mTLS (the v0.8.32 default)
+//   - `mtlsPaths.mtlsEnabled() == false` → plaintext (v0.8.29 default;
+//     the v0.8.30+ panel can dial over HTTP+bearer for nodes that
+//     have not been re-provisioned yet)
+//
+// The fallback is a transitional aid; v0.8.32 removes the
+// plaintext branch entirely. The operator opts in to mTLS by
+// writing the three cert files to the standard paths (or
+// overriding the env vars).
+func runGRPC(ctx context.Context, addr string, paths mtlsPaths) error {
 	if addr == "" {
 		// Operator opted out of gRPC by exporting
 		// `AEGIS_AGENT_LISTEN_GRPC=""`. The HTTP path
@@ -133,11 +145,43 @@ func runGRPC(ctx context.Context, addr string) error {
 		return err
 	}
 
+	// Transport selection. The cert+key+CA files
+	// are written by the bootstrap installer in
+	// v0.8.30; a v0.8.29 (or earlier) installer
+	// leaves the paths empty and the gRPC server
+	// falls back to plaintext (the v0.8.29
+	// bearer-only path).
+	var credsOpt grpc.ServerOption
+	if paths.mtlsEnabled() {
+		cfg, err := loadMTLSConfig(paths)
+		if err != nil {
+			// Missing / corrupted cert files are
+			// a hard error: the operator either
+			// has not run the bootstrap installer
+			// (which the v0.8.30+ plan does on
+			// every provision) or the operator
+			// overrode the env var to a wrong
+			// path. Silently falling back to
+			// plaintext would let the panel dial
+			// succeed and the TLS handshake fail
+			// (the panel's mTLS client dials with
+			// the new root CA; the agent's plaintext
+			// gRPC rejects the connection with
+			// "unimplemented" or "transport
+			// closed"). The hard error is
+			// friendlier.
+			return fmt.Errorf("aegis-agent: gRPC mTLS required but load failed: %w", err)
+		}
+		credsOpt = newMTLSServerOption(cfg)
+		log.Printf("aegis-agent gRPC mTLS enabled (cert=%s, ca=%s)", paths.Cert, paths.CA)
+	} else {
+		// v0.8.29 fallback. Removed in v0.8.32.
+		credsOpt = grpc.Creds(insecure.NewCredentials())
+		log.Printf("aegis-agent gRPC plaintext (mTLS disabled; v0.8.29 backward-compat path)")
+	}
+
 	srv := grpc.NewServer(
-		// v0.8.29 keeps plaintext; v0.8.30 swaps
-		// this for `credentials.NewTLS(...)` once
-		// the cert bootstrap lands.
-		grpc.Creds(insecure.NewCredentials()),
+		credsOpt,
 		grpc.UnaryInterceptor(bearerUnaryInterceptor()),
 		grpc.ConnectionTimeout(5*time.Second),
 	)
