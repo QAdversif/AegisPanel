@@ -174,15 +174,29 @@ const adapterSpy = vi.fn((config: AxiosRequestConfig) => {
   // `AxiosResponse<..., ..., { headers: AxiosRequestHeaders }, ...>`
   // type AxiosError expects in its
   // `response?: AxiosResponse<...>` parameter.
+  //
+  // v0.8.32.2 (#301): the test adapter honours a
+  // per-fixture `responseType` override so the
+  // success-path interceptor branch can be exercised
+  // for non-JSON response types. We merge the
+  // override into `config.responseType` so the
+  // response interceptor's skip-list check sees the
+  // value the call site set; the spread keeps the
+  // cast narrow (only `responseType` is added; the
+  // rest of `config` stays as `InternalAxiosRequestConfig`
+  // so the type system is happy).
+  const cfgWithType: InternalAxiosRequestConfig = {
+    ...(config as InternalAxiosRequestConfig),
+    responseType:
+      next.responseType ??
+      (config as { responseType?: string }).responseType,
+  }
   const response = {
     status: next.status,
     data: next.data,
     statusText: '',
     headers: {},
-    config: {
-      ...(config as InternalAxiosRequestConfig),
-      responseType: next.responseType ?? (config as { responseType?: string }).responseType,
-    },
+    config: cfgWithType,
   }
   const validateStatus = config.validateStatus ?? ((s: number) => s >= 200 && s < 300)
   if (next.status === 0 || !validateStatus(next.status)) {
