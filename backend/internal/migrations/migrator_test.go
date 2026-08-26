@@ -66,6 +66,122 @@ COMMIT;
 	}
 }
 
+// TestUpBodyOf_IgnoresMarkerInDocstring is the v0.8.32.1
+// regression guard. Pre-fix UpBodyOf used `strings.Index` for
+// the literal `-- +migrate Up` substring, which would happily
+// match a back-quoted reference inside a docstring and return
+// a slice of just the docstring comments. The fix is to require
+// the marker to be on its own line (see upMarkerLine). This
+// test covers a file where the marker appears ONLY inside a
+// docstring — the parser must treat that as "no marker" and
+// return the whole file, exactly as the pre-existing
+// TestUpBodyOf_NoMarkers_ReturnsWholeFile does.
+//
+// This mirrors the pre-fix failure mode in 0023_agentca.sql
+// and 0024_add_nodes_agent_transport.sql, which had a header
+// docstring of the form:
+//
+//	-- this file contains BOTH a '-- +migrate Up'
+//	-- section (lines ~107 onward) and a
+//	-- '-- +migrate Down' section (the rollback
+//	-- path, further below).
+//
+// Pre-fix, the parser grabbed the docstring "marker" and
+// returned a 7-line slice of just comments, dropping the real
+// ALTER TABLE on line 122. Post-fix, the parser ignores the
+// docstring and returns the whole file (no real marker exists).
+func TestUpBodyOf_IgnoresMarkerInDocstring(t *testing.T) {
+	in := "-- SPDX-License-Identifier: AGPL-3.0-or-later\n" +
+		"--\n" +
+		"-- v0.8.32 follow-up: this file contains BOTH a '-- +migrate Up'\n" +
+		"-- section (lines ~107 onward) and a '-- +migrate Down'\n" +
+		"-- section (the rollback path, further below).\n" +
+		"\n" +
+		"BEGIN;\n" +
+		"\n" +
+		"ALTER TABLE nodes ADD COLUMN agent_transport TEXT;\n" +
+		"\n" +
+		"COMMIT;\n"
+	got := UpBodyOf(in)
+	if !strings.Contains(got, "ALTER TABLE nodes") {
+		t.Fatalf("Up body should still contain the real SQL when only the docstring mentions the marker; got %q", got)
+	}
+	if !strings.HasPrefix(got, "-- SPDX-License-Identifier:") {
+		t.Fatalf("Up body should be the whole file (no real marker exists), got prefix %q", firstLine(got))
+	}
+}
+
+// TestUpBodyOf_RealMarkerAfterDocstringShadow is the
+// other half of the v0.8.32.1 regression guard. A file
+// that has the marker text inside a docstring AND a real
+// marker later must slice from the REAL marker, not the
+// docstring shadow. Pre-fix, the parser returned the
+// docstring slice and the real `ALTER TABLE` was dropped
+// from the apply. Post-fix, the parser skips the
+// docstring occurrence and slices from the real marker.
+func TestUpBodyOf_RealMarkerAfterDocstringShadow(t *testing.T) {
+	in := "-- SPDX-License-Identifier: AGPL-3.0-or-later\n" +
+		"--\n" +
+		"-- This file has a '-- +migrate Up' marker docstring on line 3\n" +
+		"-- that must NOT count. The real marker is further down.\n" +
+		"\n" +
+		"BEGIN;\n" +
+		"\n" +
+		"-- +migrate Up\n" +
+		"ALTER TABLE nodes ADD COLUMN agent_transport TEXT;\n" +
+		"\n" +
+		"-- +migrate Down\n" +
+		"ALTER TABLE nodes DROP COLUMN agent_transport;\n" +
+		"\n" +
+		"COMMIT;\n"
+	got := UpBodyOf(in)
+	if !strings.Contains(got, "ALTER TABLE nodes ADD COLUMN") {
+		t.Fatalf("Up body missing the real ALTER TABLE; docstring shadow ate the slice: %q", got)
+	}
+	if strings.Contains(got, "DROP COLUMN") {
+		t.Fatalf("Down body leaked into Up: %q", got)
+	}
+	if !strings.HasPrefix(got, "-- +migrate Up") {
+		t.Fatalf("Up body should start at the REAL marker, not the docstring; got prefix %q", firstLine(got))
+	}
+	// A body that started at the docstring would include
+	// the prose about the marker; assert the body does
+	// not carry the docstring forward.
+	if strings.Contains(got, "must NOT count") {
+		t.Fatalf("Up body still starts at the docstring; marker detection is not line-anchored")
+	}
+}
+
+// TestDownBodyOf_IgnoresMarkerInDocstring is the Down
+// half of the v0.8.32.1 regression guard. The docstring
+// has a back-quoted `-- +migrate Down` reference; the
+// real Down marker is further down. Pre-fix, DownBodyOf
+// returned the docstring slice (no real SQL) and Down
+// would be a no-op. Post-fix, DownBodyOf returns the
+// real Down section.
+func TestDownBodyOf_IgnoresMarkerInDocstring(t *testing.T) {
+	in := "-- SPDX-License-Identifier: AGPL-3.0-or-later\n" +
+		"--\n" +
+		"-- This file has a '-- +migrate Down' marker docstring on\n" +
+		"-- line 3 that must NOT count.\n" +
+		"\n" +
+		"-- +migrate Up\n" +
+		"SELECT 1;\n" +
+		"\n" +
+		"-- +migrate Down\n" +
+		"SELECT 2;\n"
+	down := DownBodyOf(in)
+	if !strings.Contains(down, "SELECT 2") {
+		t.Fatalf("Down body missing the real SELECT 2; docstring shadow ate the slice: %q", down)
+	}
+	if strings.Contains(down, "SELECT 1") {
+		t.Fatalf("Up body leaked into Down: %q", down)
+	}
+	if !strings.HasPrefix(down, "-- +migrate Down") {
+		t.Fatalf("Down body should start at the REAL marker; got prefix %q", firstLine(down))
+	}
+}
+
 func TestDownBodyOf_FullRoundTrip(t *testing.T) {
 	// Up and Down should be complementary slices — the Up
 	// body plus the Down body equals the markers-onward
