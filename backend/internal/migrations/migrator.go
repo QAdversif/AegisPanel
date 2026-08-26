@@ -55,6 +55,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -94,10 +95,22 @@ var embeddedMigrations embed.FS
 // `schema_migrations` table. Every subsequent call (or
 // re-run) reads the table and skips files whose names
 // are already present. A migration file is applied
-// once and only once per database; the apply +
-// record are wrapped in a single transaction so a
-// crash mid-apply does not leave a half-applied
-// migration in the table.
+// once and only once per database.
+//
+// v0.8.32.2 (#306): the apply and the journal
+// INSERT are now wrapped in a single transaction.
+// The previous implementation split them across
+// `applyBody` (which self-committed) and a separate
+// `recordMigration(pool, ...)` Exec. A crash
+// between the two left the schema applied and the
+// journal empty; re-boot then re-applied the
+// migration, which is non-idempotent for any
+// `CREATE TABLE` / `ADD CONSTRAINT` / `DROP
+// CONSTRAINT` operation. The unified transaction
+// makes the journal and the schema commit
+// atomically — the pre-fix docstring claimed
+// "single transaction" but the code split them; the
+// new shape actually delivers it.
 //
 // `pool` is the *pgxpool.Pool that the rest of the runtime will
 // use; this is the same handle the caller is expected to keep open
@@ -139,11 +152,16 @@ func Up(ctx context.Context, pool *pgxpool.Pool, dir string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}
-		if err := applyOne(ctx, pool, name, raw); err != nil {
+		tx, err := applyOne(ctx, pool, name, raw)
+		if err != nil {
 			return err
 		}
-		if err := recordMigration(ctx, pool, name); err != nil {
+		if err := recordMigrationInTx(ctx, tx, name); err != nil {
+			_ = tx.Rollback(ctx)
 			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit %s: %w", name, err)
 		}
 	}
 	return nil
@@ -314,13 +332,27 @@ func appliedMigrations(ctx context.Context, pool *pgxpool.Pool) (map[string]stru
 	return out, nil
 }
 
-// recordMigration inserts the migration name into
-// `schema_migrations` after a successful apply. The
-// ON CONFLICT DO NOTHING makes the insert itself
-// idempotent (a re-apply of the same migration does
-// not duplicate the row).
-func recordMigration(ctx context.Context, pool *pgxpool.Pool, name string) error {
-	_, err := pool.Exec(ctx,
+// recordMigrationInTx inserts the migration name
+// into `schema_migrations` inside the caller's
+// transaction. Used by `Up` so the INSERT and the
+// DDL share the same transaction; a crash between
+// the two leaves the schema at its pre-state and
+// the journal empty, so re-boot re-applies the
+// migration (idempotent DDL).
+//
+// v0.8.32.2 (#306): the previous implementation
+// `recordMigration(pool, ...)` issued the INSERT
+// as a separate `pool.Exec` after `applyBody`
+// committed. The docstring claimed "single
+// transaction" but the code split them — a crash
+// between apply and record left the schema applied
+// and the journal empty, which then fails on re-boot
+// when the migration is non-idempotent (CREATE TABLE,
+// DROP CONSTRAINT, etc.). The Tx-bound version is
+// the same pattern as `applyBody` (line 376) and
+// keeps the journal atomic with the schema change.
+func recordMigrationInTx(ctx context.Context, tx pgx.Tx, name string) error {
+	_, err := tx.Exec(ctx,
 		`INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`,
 		name, time.Now().UTC(),
 	)
@@ -330,9 +362,40 @@ func recordMigration(ctx context.Context, pool *pgxpool.Pool, name string) error
 	return nil
 }
 
-// applyOne is the per-file wrapper used by Up. It pulls the Up
-// body out of `raw` and hands it to applyBody.
-func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
+// unrecordMigrationInTx removes the journal row
+// for `name` inside the caller's transaction. Used
+// by `Down` so the DELETE and the rollback DDL
+// share the same transaction; a crash between the
+// two leaves the schema rolled back and the journal
+// still holding the row, which then fails on re-boot
+// with a "migration already applied" skip — a
+// different but equally hard-to-diagnose ops
+// failure (the schema is at the new state but the
+// panel's view of the journal says the old state is
+// canonical, so subsequent re-runs of `Up` skip
+// needed migrations).
+//
+// v0.8.32.2 (#306): pre-fix, `Down` never deleted
+// the journal row. A `down → up` sequence would
+// roll the schema back, leave the journal unchanged,
+// and then permanently skip the migration on the
+// next `up` (Up checks the applied-map at the top
+// of the loop). The fix wraps the DELETE in the
+// same transaction as the rollback DDL.
+func unrecordMigrationInTx(ctx context.Context, tx pgx.Tx, name string) error {
+	_, err := tx.Exec(ctx, `DELETE FROM schema_migrations WHERE name = $1`, name)
+	if err != nil {
+		return fmt.Errorf("unrecord migration %s: %w", name, err)
+	}
+	return nil
+}
+
+// applyOne is the per-file wrapper used by Up. It pulls
+// the Up body out of `raw` and hands it to
+// applyBody. Returns the open Tx so the caller can
+// record the migration in the same transaction
+// (see #306 for the atomic-apply rationale).
+func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) (pgx.Tx, error) {
 	return applyBody(ctx, pool, name, UpBodyOf(raw))
 }
 
@@ -349,6 +412,18 @@ func applyOne(ctx context.Context, pool *pgxpool.Pool, name, raw string) error {
 // responsibility. The current Aegis migration files write
 // DROP TABLE statements in the correct reverse-dependency
 // order, so a single Down per file is enough.
+//
+// v0.8.32.2 (#306): the journal row is now removed
+// in the same transaction as the rollback DDL.
+// Pre-fix, the journal row was left in place; a
+// `down → up` sequence therefore rolled the schema
+// back, left the journal saying the migration was
+// still applied, and the next `up` permanently
+// skipped the migration (Up checks the applied-map
+// at the top of the loop). The fix wraps the
+// `unrecordMigrationInTx` DELETE in the same Tx
+// the rollback DDL ran in, so a crash between the
+// two rolls the journal back too.
 func Down(ctx context.Context, pool *pgxpool.Pool, dir, target string) error {
 	if target == "" {
 		return fmt.Errorf("down: target file is required")
@@ -361,28 +436,44 @@ func Down(ctx context.Context, pool *pgxpool.Pool, dir, target string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	return applyBody(ctx, pool, target, DownBodyOf(string(raw)))
+	tx, err := applyBody(ctx, pool, target, DownBodyOf(string(raw)))
+	if err != nil {
+		return err
+	}
+	if err := unrecordMigrationInTx(ctx, tx, target); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit %s (down): %w", target, err)
+	}
+	return nil
 }
 
-// applyBody is the shared execution path for Up and Down. It
-// runs every statement in `body` inside a single pgx Tx,
-// skipping comments and empty lines. If a statement fails the
-// Tx is rolled back, the file is left in its pre-state, and we
-// return an error that includes the failing statement's first
-// line for triage.
-func applyBody(ctx context.Context, pool *pgxpool.Pool, name, body string) error {
+// applyBody runs every statement in `body` inside a
+// single pgx Tx, skipping comments and empty lines. It
+// returns the open Tx to the caller so a journal
+// update (record for Up, unrecord for Down) can be
+// included in the same transaction. The caller is
+// responsible for committing or rolling back the
+// Tx. The body itself never commits.
+//
+// v0.8.32.2 (#306): the previous applyBody
+// self-committed the Tx and the caller ran a
+// separate `recordMigration(pool, ...)` Exec
+// afterwards. The two-step commit split meant a
+// crash between apply and record left the schema
+// applied but the journal empty. The new
+// open-Tx-and-return shape lets the journal update
+// share the same Tx as the schema change; the
+// caller's Commit is the single point of failure.
+func applyBody(ctx context.Context, pool *pgxpool.Pool, name, body string) (pgx.Tx, error) {
 	cleaned := StripSQLLineComments(body)
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx for %s: %w", name, err)
+		return nil, fmt.Errorf("begin tx for %s: %w", name, err)
 	}
-	defer func() {
-		// Rollback is a no-op after a successful Commit, so this
-		// is safe to leave attached to every path including the
-		// happy one.
-		_ = tx.Rollback(ctx)
-	}()
 
 	for _, stmt := range SplitSQL(cleaned) {
 		trimmed := strings.TrimSpace(stmt)
@@ -391,14 +482,12 @@ func applyBody(ctx context.Context, pool *pgxpool.Pool, name, body string) error
 		}
 		if _, err := tx.Exec(ctx, trimmed); err != nil {
 			preview := firstLine(trimmed)
-			return fmt.Errorf("apply %s (stmt %q): %w", name, preview, err)
+			_ = tx.Rollback(ctx)
+			return nil, fmt.Errorf("apply %s (stmt %q): %w", name, preview, err)
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit %s: %w", name, err)
-	}
-	return nil
+	return tx, nil
 }
 
 // UpBodyOf extracts the Up body of a goose-style migration file.
