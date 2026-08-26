@@ -227,4 +227,90 @@ describe('HostEditDialog', () => {
     )
     expect(wrapper.emitted('updated')).toBeUndefined()
   })
+
+  // v0.8.32.2 (#304) regression guard: the edit
+  // dialog's submit must preserve every endpoint
+  // field that the dialog does not display. Pre-fix,
+  // the form's PUT payload only carried 5 fields
+  // (nodeId, inboundId, weight, address, port) and
+  // the backend's wholesale-replace semantic wiped
+  // every other field on every save. This test
+  // submits a host whose endpoint carries the full
+  // v0.7.x shape (sni, host, path, downloadHostId,
+  // protocol, id) and asserts the updateHost call's
+  // payload retains every one of those keys, even
+  // though the dialog only shows the 5 editable
+  // fields.
+  it('preserves non-editable endpoint fields (sni, host, path, downloadHostId, protocol, id) across save (#304)', async () => {
+    const fullEndpointId = '880e8400-e29b-41d4-a716-446655440099'
+    const downloadHostId = '880e8400-e29b-41d4-a716-446655440123'
+    const hostWithFullEndpoint: Host = {
+      ...testHost,
+      endpoints: [
+        {
+          id: fullEndpointId,
+          nodeId: testNode.id,
+          inboundId: testInbound.id,
+          protocol: 'vless',
+          weight: 1,
+          // The non-editable fields the dialog never
+          // shows but the backend stores per endpoint.
+          sni: ['cdn.example.com', 'cdn2.example.com'],
+          host: ['example.com'],
+          path: '/secretpath',
+          downloadHostId,
+        },
+      ],
+    }
+    vi.mocked(updateHost).mockResolvedValue(hostWithFullEndpoint)
+    const wrapper = mount(HostEditDialog, {
+      props: {
+        open: true,
+        host: hostWithFullEndpoint,
+        nodes: [testNode],
+        inboundsByNode: { [testNode.id]: [testInbound] },
+        loadInboundsForNode: loadInbounds,
+      },
+      global: { plugins: [makeI18n()], stubs: uiStubs },
+    })
+    await nextTick()
+    await flushPromises()
+    const formEl = wrapper.find('form').element as HTMLFormElement
+    formEl.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(
+      () => {
+        expect(updateHost).toHaveBeenCalled()
+      },
+      { timeout: 1000 },
+    )
+    const payload = vi.mocked(updateHost).mock.calls[0]?.[1] as {
+      endpoints?: Array<{
+        nodeId: string
+        inboundId: string
+        weight: number
+        protocol?: string
+        id?: string
+        sni?: string[]
+        host?: string[]
+        path?: string
+        downloadHostId?: string
+      }>
+    }
+    expect(payload.endpoints).toBeDefined()
+    expect(payload.endpoints).toHaveLength(1)
+    const ep = payload.endpoints![0]
+    // The 5 editable fields come from the row.
+    expect(ep.nodeId).toBe(testNode.id)
+    expect(ep.inboundId).toBe(testInbound.id)
+    expect(ep.weight).toBe(1)
+    // The non-editable fields survive the round-trip
+    // — this is the v0.8.32.2 fix. Pre-fix, all 5
+    // of the lines below were `undefined`.
+    expect(ep.id).toBe(fullEndpointId)
+    expect(ep.protocol).toBe('vless')
+    expect(ep.sni).toEqual(['cdn.example.com', 'cdn2.example.com'])
+    expect(ep.host).toEqual(['example.com'])
+    expect(ep.path).toBe('/secretpath')
+    expect(ep.downloadHostId).toBe(downloadHostId)
+  })
 })

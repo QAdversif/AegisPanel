@@ -57,6 +57,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/credentials"
 	"github.com/QAdversif/AegisPanel/internal/hosts"
@@ -229,6 +230,22 @@ func (s *Service) precomputeUserCreds(ctx context.Context, u *User) map[uuid.UUI
 		// down would prevent every user from
 		// fetching their sub URL — wrong
 		// failure mode for a transient blip.
+		//
+		// v0.8.32.2 (#303): the comment promised
+		// "log + return empty" but the log call
+		// was missing — every silent fallback was
+		// indistinguishable from "user has no
+		// per-inbound creds" in the operator
+		// log, so a transient pg error hid as a
+		// legitimate Phase-1-fallback. Surface
+		// the error with the user ID so the
+		// operator can spot pg / network blips
+		// vs legitimate Phase-1 renders.
+		log.Warn().
+			Err(err).
+			Str("user_id", u.ID.String()).
+			Str("path", "precomputeUserCreds").
+			Msg("subscription: per-user creds load failed; falling back to params-based render (Phase 1)")
 		return nil
 	}
 	if len(creds) == 0 {

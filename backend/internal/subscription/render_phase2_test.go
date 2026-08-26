@@ -21,6 +21,7 @@ package subscription
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"sync"
@@ -307,5 +308,105 @@ func TestRender_ConcurrentUsers_NoCrossLeak(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Error(err)
+	}
+}
+
+// TestRenderBase64_Phase2_UsesUserCredential is the
+// v0.8.32.2 (#303) regression guard for the base64
+// subscription render path. The HTML subscription page
+// (the one operators hand to users) renders URIs through
+// RenderBase64 and then base64-encodes the joined string
+// for the QR code / sub URL. Pre-fix, RenderBase64
+// ignored the per-user credential map and every user's
+// base64 carried the shared operator UUID/password from
+// `inbounds.params`. The per-user credential was wired
+// in v0.7.x (PR #167/#168/#198) but only the sing-box
+// and clash renderers consumed it — the base64 path
+// silently regressed to Phase 1 single-credential
+// behaviour. A per-user revocation therefore never
+// cut off a user's base64 access; the revoked user
+// kept getting the common secret.
+//
+// The test seeds the user with a credential on the
+// single VLESS inbound, calls RenderBase64, base64-
+// decodes the result, and asserts the URI's `uuid`
+// query parameter is the per-user credential (not the
+// operator's `aaaa` uuid from inbounds.params).
+// Pre-fix: the uri carries `00000000-...-aaa` and the
+// test fails. Post-fix: the uri carries the user's
+// own credential and the test passes.
+func TestRenderBase64_Phase2_UsesUserCredential(t *testing.T) {
+	svc, eps, u, inbID := phase2Fixture(t)
+	credsSvc := credentials.NewService(credentials.NewMemoryStore())
+	const userUUIDValue = "phase2-b64-uuid-11111111-aaaaaaaaaaaaaa"
+	if _, err := credsSvc.Create(context.Background(), u.ID, inbID, userUUIDValue); err != nil {
+		t.Fatalf("seed user credential: %v", err)
+	}
+	svc.WithCreds(credsSvc)
+
+	out, err := svc.RenderBase64(context.Background(), u, eps)
+	if err != nil {
+		t.Fatalf("RenderBase64: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("RenderBase64 returned empty body; expected a base64 of the URI list")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(out))
+	if err != nil {
+		t.Fatalf("base64.StdEncoding.DecodeString: %v (output: %q)", err, string(out))
+	}
+	body := string(decoded)
+	if !strings.Contains(body, userUUIDValue) {
+		t.Errorf("RenderBase64 output does not contain the per-user credential uuid; per-user lookup broken (#303):\n%s", body)
+	}
+	// The operator's params-based uuid ends in `aaa`
+	// (see phase2Fixture). A render that fell back to
+	// params would surface that suffix. We assert the
+	// output does NOT contain the operator uuid as a
+	// belt-and-braces check — the base64 path must be
+	// strictly Phase 2 when a per-user credential exists.
+	if strings.Contains(body, "00000000-0000-0000-0000-000000000aaa") {
+		t.Errorf("RenderBase64 output carries the operator's params-based uuid; per-user cred not honoured:\n%s", body)
+	}
+}
+
+// TestRenderBase64_Phase2_OtherUserCredNotLeaked is the
+// cross-user isolation guard for the base64 render path.
+// Two users share an inbound; user A has a credential,
+// user B does not. RenderBase64 for user B must NOT
+// include user A's credential. Pre-fix, both users
+// saw the same operator uuid (params), so the test
+// was implicitly OK. Post-fix, user B's render uses
+// the params fallback (which is the correct Phase 1
+// path for a user who has not been issued a per-
+// inbound credential) and the test continues to pass;
+// if a future refactor accidentally starts cross-
+// threading creds from other users into B's render,
+// the test catches it.
+func TestRenderBase64_Phase2_OtherUserCredNotLeaked(t *testing.T) {
+	svc, eps, uA, inbID := phase2Fixture(t)
+	credsSvc := credentials.NewService(credentials.NewMemoryStore())
+	const userACredValue = "phase2-b64-leak-uuid-22222222-bbbbbbbb"
+	if _, err := credsSvc.Create(context.Background(), uA.ID, inbID, userACredValue); err != nil {
+		t.Fatalf("seed user A credential: %v", err)
+	}
+	svc.WithCreds(credsSvc)
+	uB := &User{
+		ID:       uuid.MustParse("50000000-0000-0000-0000-000000000099"),
+		Username: "bob",
+		Status:   UserStatusActive,
+		ExpireAt: uA.ExpireAt,
+	}
+	out, err := svc.RenderBase64(context.Background(), uB, eps)
+	if err != nil {
+		t.Fatalf("RenderBase64: %v", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(out))
+	if err != nil {
+		t.Fatalf("base64.StdEncoding.DecodeString: %v (output: %q)", err, string(out))
+	}
+	body := string(decoded)
+	if strings.Contains(body, userACredValue) {
+		t.Errorf("RenderBase64 for user B contains user A's credential — cross-user auth boundary leak:\n%s", body)
 	}
 }
