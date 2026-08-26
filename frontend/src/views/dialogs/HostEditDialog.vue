@@ -166,6 +166,28 @@ function blankEditValues(): EditFormValues {
   }
 }
 
+// v0.8.32.2 (#304): the round-trip used to be
+// `endpointToRow` → `rowToEndpoint` with the row
+// holding only the 5 fields the dialog displays
+// (nodeId, inboundId, weight, address, port). The
+// non-editable fields (sni, host, path,
+// downloadHostId, protocol, id) live in
+// `current.endpoints` (the host prop) and the merge
+// in `toUpdatePayload` is what stitches them back in.
+// Keeping `_orig` on the row would have been the
+// obvious place, but the Zod schema for the row
+// strips non-editable keys on validation — the
+// merge needs to happen at the `current` level, not
+// the row level. `endpointToRow` and `rowToEndpoint`
+// stay narrow: row ↔ editable keys only.
+type EndpointRowEditable = {
+  nodeId: string
+  inboundId: string
+  weight: number
+  addressText: string
+  portText: string
+}
+
 function hostToEditValues(host: Host): EditFormValues {
   return {
     remark: host.remark,
@@ -180,13 +202,7 @@ function hostToEditValues(host: Host): EditFormValues {
   }
 }
 
-function endpointToRow(e: Endpoint): {
-  nodeId: string
-  inboundId: string
-  weight: number
-  addressText: string
-  portText: string
-} {
+function endpointToRow(e: Endpoint): EndpointRowEditable {
   return {
     nodeId: e.nodeId,
     inboundId: e.inboundId,
@@ -196,23 +212,21 @@ function endpointToRow(e: Endpoint): {
   }
 }
 
-function rowToEndpoint(row: {
-  nodeId: string
-  inboundId: string
-  weight: number
-  addressText: string
-  portText: string
-}): {
-  nodeId: string
-  inboundId: string
-  weight: number
-  address?: string[]
-  port?: number
-} {
+// rowToEndpoint returns only the 5 editable fields.
+// The non-editable fields (sni, host, path,
+// downloadHostId, protocol, id) are merged in by
+// `toUpdatePayload` from the host prop. This split
+// keeps the round-trip honest: every field that the
+// dialog does not display stays under the dialog's
+// control of "the value the host prop had when the
+// dialog opened", not "the value the row had after
+// Zod parsed the form state" (which strips them).
+function rowToEndpoint(row: EndpointRowEditable): Omit<Endpoint, 'protocol'> {
   const out: {
     nodeId: string
     inboundId: string
     weight: number
+    id?: string
     address?: string[]
     port?: number
   } = {
@@ -263,7 +277,61 @@ function toUpdatePayload(v: EditFormValues, current: Host) {
   // opened the edit dialog — the operator expects
   // "what I see is what gets saved" for the bundle.
   // The same is true for the balancer block.
-  changed.endpoints = v.endpoints ? v.endpoints.map(rowToEndpoint) : current.endpoints
+  //
+  // v0.8.32.2 (#304): the previous implementation
+  // was `v.endpoints.map(rowToEndpoint)`, which only
+  // carried the 5 fields the dialog displays
+  // (nodeId, inboundId, weight, address, port). The
+  // backend's wholesale-replace-of-endpoints semantic
+  // then wiped every other field — `sni`, `host`,
+  // `path`, `downloadHostId`, `protocol`, `id` — on
+  // every save. The dialog has no UI for those keys
+  // (they are advanced overrides the operator sets
+  // via the create dialog or a separate admin
+  // surface) and the edit form should not destroy
+  // them.
+  //
+  // The Zod-parsed `v.endpoints` only carries the 5
+  // editable keys, so we cannot read the original
+  // non-editable keys from `v`. We merge them in from
+  // `current.endpoints` (the host prop), keyed by
+  // endpoint `id` when present, falling back to the
+  // positional index when the user has not yet saved
+  // a new endpoint (an in-flight add that has no
+  // server-side id). New endpoints (no matching id
+  // in `current.endpoints`) get the default empty
+  // shape — the backend will mint the id on save.
+  if (v.endpoints) {
+    changed.endpoints = v.endpoints.map((row, idx) => {
+      const editable = rowToEndpoint(row)
+      // Find the original endpoint for the merge. We
+      // try `id` first (the stable key the backend
+      // mints) and fall back to the position in
+      // `current.endpoints` when the row has no id
+      // (e.g. a freshly-added endpoint that the
+      // operator has not yet saved).
+      const orig =
+        (editable.id !== undefined &&
+          current.endpoints.find((e) => e.id === editable.id)) ||
+        current.endpoints[idx]
+      if (!orig) return editable
+      // Merge: every field from the original that is
+      // NOT one of the 5 editable keys, plus every
+      // editable key from the row. The non-editable
+      // keys survive the round-trip. We also restore
+      // `protocol` from the original — the dialog has
+      // no UI for it but the inbound's protocol is the
+      // source of truth and the row's `protocol` field
+      // is informational only.
+      return {
+        ...orig,
+        ...editable,
+        protocol: orig.protocol,
+      }
+    })
+  } else {
+    changed.endpoints = current.endpoints
+  }
   if (current.type === 'balancer' || v.type === 'balancer') {
     if (v.balancerStrategy) {
       changed.balancer = { strategy: v.balancerStrategy }

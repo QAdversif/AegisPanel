@@ -117,10 +117,23 @@ func (s *Service) newRenderContext(u *User) *RenderContext {
 // nil error; an empty subscription is a valid
 // subscription (the user is entitled to no hosts, so
 // we serve them no hosts).
-func (s *Service) RenderBase64(_ context.Context, u *User, eps []ResolvedEndpoint) (out []byte, err error) {
+func (s *Service) RenderBase64(ctx context.Context, u *User, eps []ResolvedEndpoint) (out []byte, err error) {
 	if len(eps) == 0 {
 		return []byte{}, nil
 	}
+	// v0.8.32.2 (#303): thread the per-(user, inbound)
+	// credential map through the base64 render path the
+	// same way RenderSingbox / RenderClash do. Pre-fix,
+	// base64 ignored the per-user creds and every user
+	// got the shared operator UUID/password from
+	// `inbounds.params`. The HTML subscription page
+	// steers users to the base64 URL via the QR code,
+	// so a per-user revocation never actually cut
+	// access — the revoked user kept getting the common
+	// secret. Fail-soft on the load (already in
+	// precomputeUserCreds) preserves the Phase 1 path
+	// for users who have no per-inbound credential yet.
+	userCreds := s.precomputeUserCreds(ctx, u)
 	// Build the per-fetch RenderContext and apply it
 	// to every endpoint before sorting / rendering.
 	// A nil `u` is the test-friendly baseline: the
@@ -148,7 +161,7 @@ func (s *Service) RenderBase64(_ context.Context, u *User, eps []ResolvedEndpoin
 	})
 	var lines []string
 	for _, ep := range eps {
-		uri, err := renderEndpointURI(ep)
+		uri, err := renderEndpointURI(ep, userCredFor(userCreds, ep.Inbound.ID))
 		if err != nil {
 			// A single unrenderable endpoint
 			// should not poison the whole
@@ -169,19 +182,29 @@ func (s *Service) RenderBase64(_ context.Context, u *User, eps []ResolvedEndpoin
 
 // renderEndpointURI is the per-protocol URI builder.
 // Unknown protocols are returned as errors so the
-// caller (RenderBase64) can skip them.
-func renderEndpointURI(ep ResolvedEndpoint) (uri string, err error) {
+// caller (RenderBase64) can skip them. `userCred` is
+// the per-(user, inbound) credential from the Phase 2
+// multi-user table; when non-empty, the per-protocol
+// renderers use it as the protocol auth material
+// (e.g. VLESS uuid, Hysteria2 / Trojan password)
+// instead of `inbounds.params["uuid" | "password"]`.
+// An empty `userCred` is the Phase 1 fallback path
+// (params-based single-credential).
+func renderEndpointURI(ep ResolvedEndpoint, userCred string) (uri string, err error) {
 	displayName := displayName(ep.Host)
 	address, port := effectiveAddress(ep)
 	switch ep.Inbound.Protocol {
 	case inbounds.ProtocolVLESS:
-		return renderVLESS(ep, address, port, displayName)
+		return renderVLESS(ep, address, port, displayName, userCred)
 	case inbounds.ProtocolHysteria2:
-		return renderHysteria2(ep, address, port, displayName)
+		return renderHysteria2(ep, address, port, displayName, userCred)
 	case inbounds.ProtocolShadowsocks:
+		// Shadowsocks is single-password by protocol
+		// design; the per-user cred is ignored. The
+		// builder still uses params["password"].
 		return renderShadowsocks(ep, address, port, displayName)
 	case inbounds.ProtocolTrojan:
-		return renderTrojan(ep, address, port, displayName)
+		return renderTrojan(ep, address, port, displayName, userCred)
 	default:
 		return "", fmt.Errorf("unknown protocol: %s", ep.Inbound.Protocol)
 	}
@@ -218,8 +241,21 @@ func displayName(h *hosts.Host) string {
 
 // --- per-protocol renderers --------------------------------
 
-func renderVLESS(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
-	uuidStr := paramString(ep.Inbound.Params, "uuid")
+// renderVLESS produces a VLESS URI for one endpoint.
+//
+// Phase 1 (v0.7.2 path, when `userCred` is empty): the
+// URI's `uuid` is `inbounds.params["uuid"]` (the operator's
+// single credential). Phase 2 (v0.7.x multi-user): when
+// `userCred` is non-empty, the URI's `uuid` is the
+// per-(user, inbound) credential from
+// `user_inbound_credentials`. A per-user revocation
+// therefore cuts off the user's base64 sub (the pre-fix
+// bug — see #303).
+func renderVLESS(ep ResolvedEndpoint, addr string, port int, name, userCred string) (uri string, err error) {
+	uuidStr := userCred
+	if uuidStr == "" {
+		uuidStr = paramString(ep.Inbound.Params, "uuid")
+	}
 	if uuidStr == "" {
 		return "", errors.New("vless: missing params.uuid")
 	}
@@ -252,8 +288,16 @@ func renderVLESS(ep ResolvedEndpoint, addr string, port int, name string) (uri s
 	return "vless://" + uuidStr + "@" + addr + ":" + itoa(port) + "?" + q.Encode() + "#" + url.PathEscape(name), nil
 }
 
-func renderHysteria2(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
-	password := paramString(ep.Inbound.Params, "password")
+// renderHysteria2 produces a Hysteria2 URI for one
+// endpoint. Phase 1 (v0.7.2, `userCred` empty): the
+// password is `inbounds.params["password"]`. Phase 2
+// (v0.7.x multi-user, `userCred` non-empty): the
+// password is the per-(user, inbound) credential.
+func renderHysteria2(ep ResolvedEndpoint, addr string, port int, name, userCred string) (uri string, err error) {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	if password == "" {
 		return "", errors.New("hysteria2: missing params.password")
 	}
@@ -280,8 +324,14 @@ func renderShadowsocks(ep ResolvedEndpoint, addr string, port int, name string) 
 	return "ss://" + userinfo + "@" + addr + ":" + itoa(port) + "#" + url.PathEscape(name), nil
 }
 
-func renderTrojan(ep ResolvedEndpoint, addr string, port int, name string) (uri string, err error) {
-	password := paramString(ep.Inbound.Params, "password")
+// renderTrojan produces a Trojan URI for one endpoint.
+// Phase 1 / Phase 2 split mirrors renderHysteria2
+// (see comment there).
+func renderTrojan(ep ResolvedEndpoint, addr string, port int, name, userCred string) (uri string, err error) {
+	password := userCred
+	if password == "" {
+		password = paramString(ep.Inbound.Params, "password")
+	}
 	if password == "" {
 		return "", errors.New("trojan: missing params.password")
 	}
