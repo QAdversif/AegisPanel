@@ -283,9 +283,15 @@ func recreateDatabaseOnConn(ctx context.Context, conn *pgxpool.Conn, dbName stri
 			// points at `postgres`).
 			if err := probeNewDatabase(ctx, dbName, maxBackoff); err == nil {
 				return nil
-			} else {
-				lastErr = fmt.Errorf("create-then-probe: %w", err)
 			}
+			// revive indent-error-flow: the
+			// if block ends with a return, so
+			// drop the `else` and outdent the
+			// body to keep the early-return
+			// shape flat (a 1-line else + 1-line
+			// assignment does not earn the
+			// `else` keyword).
+			lastErr = fmt.Errorf("create-then-probe: %w", err)
 		}
 		// Linear backoff with cap. 200, 200, 400,
 		// 400, 800, 800, 1600, 1600, ... up to

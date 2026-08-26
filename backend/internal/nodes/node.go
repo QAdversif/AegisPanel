@@ -98,7 +98,7 @@ type Node struct {
 	// AgentTransport is the transport the panel uses
 	// for this node's BatchedApplier traffic. Closed
 	// set: "http" (the v0.4.0-b HTTP+bearer surface,
-	// deprecated in v0.8.31) or "grpc" (the v0.8.29
+	// removed in v0.8.32) or "grpc" (the v0.8.29
 	// gRPC surface, mTLS-wired in v0.8.30). The column
 	// is added in migration 0024; the default is
 	// "http" (matches the v0.8.30

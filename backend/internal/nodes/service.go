@@ -393,10 +393,10 @@ func (s *Service) RotateTransport(ctx context.Context, id uuid.UUID, newTranspor
 		ResourceID:   id.String(),
 		Before:       cur,
 		After: map[string]any{
-			"node_name":              cur.Name,
-			"address":                cur.Address,
-			"agent_transport":        newTransport,
-			"agent_transport_prev":   prevTransport,
+			"node_name":            cur.Name,
+			"address":              cur.Address,
+			"agent_transport":      newTransport,
+			"agent_transport_prev": prevTransport,
 		},
 	})
 	return out, nil

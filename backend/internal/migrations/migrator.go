@@ -487,14 +487,21 @@ func upDownBodyOf(raw string, up bool) string {
 		// itself so error messages that surface a
 		// failing statement also surface a useful
 		// line of context.
-		if downLoc == nil || downLoc[0] < upLoc[0] {
+		//
+		// gocritic weakCond: FindStringIndex returns
+		// a nil []int when the regex does not match.
+		// The `len(downLoc) == 0` form is the
+		// explicit-empty-slice form and silences the
+		// "nil check may not be enough, check for len"
+		// warning.
+		if len(downLoc) == 0 || downLoc[0] < upLoc[0] {
 			return raw[upLoc[0]:]
 		}
 		return raw[upLoc[0]:downLoc[0]]
 	}
 
 	// Down slice.
-	if downLoc == nil {
+	if len(downLoc) == 0 {
 		return ""
 	}
 	return raw[downLoc[0]:]
