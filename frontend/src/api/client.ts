@@ -228,7 +228,25 @@ api.interceptors.response.use(
     // v0.8.13 backwards-compat shim), so the camelized
     // LoginResponse no longer has a `refreshToken` key.
     if (response.data && typeof response.data === 'object') {
-      response.data = camelizeKeys(response.data)
+      // v0.8.32.2 (#301): bail out for non-JSON response
+      // types. `responseType: 'blob'` (used by the backup
+      // download flow in `api/services/backups.ts:115`)
+      // is a `Blob` instance at runtime, not a plain
+      // object; `typeof blob === 'object'` is true, so
+      // the pre-fix code would happily call
+      // `camelizeKeys(blob)` and return a plain `{}`
+      // (Blob has no enumerable own properties). The
+      // caller then did `URL.createObjectURL({})` and
+      // the browser threw "Invalid URL" — the
+      // download never started. The skip list also
+      // covers `'arraybuffer'` and `'stream'` for the
+      // same reason; neither is an enumerable-object
+      // payload, and treating them as one would corrupt
+      // the bytes before the call site sees them.
+      const rtype = response.config?.responseType
+      if (rtype !== 'blob' && rtype !== 'arraybuffer' && rtype !== 'stream') {
+        response.data = camelizeKeys(response.data)
+      }
     }
     return response
   },
