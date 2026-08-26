@@ -151,6 +151,7 @@ type App struct {
 	BatchedAppliers map[uuid.UUID]*cores.BatchedApplier
 
 	webhooksWorkerCancel  context.CancelFunc
+	backupsWorkerCancel   context.CancelFunc
 	batchedApplierCancels map[uuid.UUID]context.CancelFunc
 }
 
@@ -644,11 +645,55 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 			AllowUIRestore: cfg.BackupsAllowUIRestore,
 			RetentionDays:  cfg.BackupsRetentionDays,
 			MaxCount:       cfg.BackupsMaxCount,
+			BackupsCron:    cfg.BackupsCron,
 		},
 		backupsStore, pool,
 	)
 	a.Backups.WithWebhooks(a.Webhooks)
 	a.Backups.WithAudits(a.Audits)
+
+	// 16b. Backups scheduler. The cron expression is
+	//      read from `AEGIS_BACKUPS_CRON` (env) via
+	//      `cfg.BackupsCron` (already on the Config
+	//      struct). Empty = manual-only mode (the
+	//      operator can still trigger backups via
+	//      `POST /api/v1/backups` and the admin UI;
+	//      the cron is also re-loadable at runtime via
+	//      `a.Backups.ReloadCron(...)`). The cron
+	//      field was wired in v0.9.x but never plumbed
+	//      here, so the in-process scheduler was dead
+	//      code at runtime (#302). Pre-fix, the
+	//      "scheduled backups never fire" path was
+	//      only documented in KNOWN_LIMITATIONS
+	//      v0.9.1 #1 - this fix closes the gap.
+	//
+	//      The goroutine is the same pattern as the
+	//      webhook retry worker (step 11) - a child
+	//      context that we cancel in Close so the
+	//      ticker stops on shutdown. ParseCron errors
+	//      fail loud (the panel refuses to start with
+	//      a malformed schedule) - silent fallback
+	//      would leave the operator without a
+	//      diagnostic when their backup window misses.
+	if cfg.BackupsCron != "" {
+		schedCtx, schedCancel := context.WithCancel(ctx)
+		if _, parseErr := backups.ParseCron(cfg.BackupsCron); parseErr != nil {
+			schedCancel()
+			return nil, fmt.Errorf("backups: invalid AEGIS_BACKUPS_CRON=%q: %w", cfg.BackupsCron, parseErr)
+		}
+		a.backupsWorkerCancel = schedCancel
+		go func() {
+			defer schedCancel()
+			if runErr := a.Backups.Run(schedCtx, cfg.BackupsCron); runErr != nil {
+				log.Error().Err(runErr).Msg("backups: scheduler exited")
+			}
+		}()
+		logger.Info().
+			Str("cron", cfg.BackupsCron).
+			Msg("backups: scheduler started")
+	} else {
+		logger.Info().Msg("backups: scheduler DISABLED (AEGIS_BACKUPS_CRON is empty); manual triggers only")
+	}
 	logger.Info().
 		Str("dir", cfg.BackupsDir).
 		Int("retention_days", cfg.BackupsRetentionDays).
@@ -815,6 +860,10 @@ func (a *App) Close() {
 	if a.webhooksWorkerCancel != nil {
 		a.webhooksWorkerCancel()
 		a.webhooksWorkerCancel = nil
+	}
+	if a.backupsWorkerCancel != nil {
+		a.backupsWorkerCancel()
+		a.backupsWorkerCancel = nil
 	}
 	// BatchedApplier goroutines: cancel each per-
 	// applier context so Run() drains and returns.

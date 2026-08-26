@@ -327,11 +327,23 @@ func (s *scheduler) maybeFire(ctx context.Context, now time.Time) {
 	minute := now.Truncate(time.Minute)
 	s.mu.Lock()
 	last := s.last
+	// v0.8.32.2 (#302): the cron field is swapped
+	// by ReloadCron under s.mu (see Run and
+	// ReloadCron) - reads here MUST hold the same
+	// lock or -race trips. Pre-fix the read was
+	// outside the lock; the run was a one-shot
+	// (the operator never set AEGIS_BACKUPS_CRON
+	// in prod, so the goroutine never started) so
+	// the race never triggered in the field, but
+	// the moment the scheduler starts running
+	// (which is what this PR also does) the race
+	// becomes a -race-detected data race.
+	cron := s.cron
 	s.mu.Unlock()
 	if !minute.After(last) {
 		return
 	}
-	if !s.cron.matches(now) {
+	if !cron.matches(now) {
 		// Update last anyway so we don't spin.
 		s.mu.Lock()
 		s.last = minute
