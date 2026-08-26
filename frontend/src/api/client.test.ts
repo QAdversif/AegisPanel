@@ -185,11 +185,18 @@ const adapterSpy = vi.fn((config: AxiosRequestConfig) => {
   // cast narrow (only `responseType` is added; the
   // rest of `config` stays as `InternalAxiosRequestConfig`
   // so the type system is happy).
+  //
+  // `InternalAxiosRequestConfig.responseType` is the
+  // literal union `ResponseType = 'arraybuffer' |
+  // 'blob' | 'document' | 'json' | 'text' | 'stream'`,
+  // so a plain `as string` cast is too wide. We
+  // narrow through a typed local that the merge
+  // can satisfy without `as any`.
+  type ResponseType = 'arraybuffer' | 'blob' | 'document' | 'json' | 'text' | 'stream'
+  const sourceType = next.responseType as ResponseType | undefined
   const cfgWithType: InternalAxiosRequestConfig = {
     ...(config as InternalAxiosRequestConfig),
-    responseType:
-      next.responseType ??
-      (config as { responseType?: string }).responseType,
+    responseType: sourceType ?? (config as InternalAxiosRequestConfig).responseType,
   }
   const response = {
     status: next.status,
