@@ -488,8 +488,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf(
 			"AEGIS_AGENT_BINARY=%q is the NODE-side path (where the bootstrap installer writes the binary); "+
 				"the install contract requires the CONTAINER-side source — e.g. /app/bin/aegis-agent "+
-				"(the panel image bundles the binary at /app/bin/aegis-agent; SFTPs it to the node on provision). "+
-				"See docs/operator-install.md §env.",
+				"(the panel image bundles the binary at /app/bin/aegis-agent; SFTPs it to the node on provision) "+
+				"see docs/operator-install.md §env",
 			c.AgentBinaryPath,
 		)
 	}

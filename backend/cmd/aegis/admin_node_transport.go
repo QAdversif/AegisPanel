@@ -284,7 +284,14 @@ func rotateOne(ctx context.Context, svc *nodes.Service, id uuid.UUID, to string,
 		return
 	}
 	if dryRun {
-		fmt.Fprintf(w, "would rotate %s (%s) %s -> %s\n", id, cur.Name, cur.AgentTransport, to)
+		// errcheck: a write error to a CLI output
+		// stream is operator-visible but not
+		// actionable at this layer (the stream
+		// is the caller's). Discard the error
+		// so the linter is happy without
+		// changing the dry-run path's
+		// behaviour.
+		_, _ = fmt.Fprintf(w, "would rotate %s (%s) %s -> %s\n", id, cur.Name, cur.AgentTransport, to)
 		return
 	}
 	if _, err := svc.RotateTransport(ctx, id, to); err != nil {

@@ -50,6 +50,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -431,6 +432,33 @@ func DownBodyOf(raw string) string {
 	return upDownBodyOf(raw, false)
 }
 
+// upMarkerLine / downMarkerLine are line-anchored regexes
+// that match the canonical goose `-- +migrate Up` /
+// `-- +migrate Down` markers. They are line-anchored (the
+// `(?m)^[ \t]*--[ \t]*\+migrate Up[ \t]*$` form) on purpose:
+// a bare `strings.Index` for the literal `-- +migrate Up`
+// substring would happily match a back-quoted reference
+// inside a docstring (e.g. `-- this file has a `-- +migrate
+// Up` section`), which would then make UpBodyOf return a
+// slice of just the docstring comments and silently drop
+// the real SQL that follows the actual marker. The
+// 2026-08-25 v0.8.32.1 production-incident lesson: keep
+// marker detection to whole lines so docstring prose can
+// never shadow the real marker.
+//
+// The leading/trailing character classes are `[ \t]*`
+// (space + tab only), NOT `\s*`: Go's `\s` includes `\n`,
+// and a greedy `\s*$` would happily eat the line's trailing
+// newline and the next-line content, defeating the
+// line-anchored check. `[ \t]*` keeps the match to
+// horizontal whitespace on the SAME line as the marker.
+// The marker text itself is fixed (we do not accept
+// `-- +migrate UpNoSpace` or other variants).
+var (
+	upMarkerLine   = regexp.MustCompile(`(?m)^[ \t]*--[ \t]*\+migrate Up[ \t]*$`)
+	downMarkerLine = regexp.MustCompile(`(?m)^[ \t]*--[ \t]*\+migrate Down[ \t]*$`)
+)
+
 // upDownBodyOf is the shared implementation. `up` is true for
 // the leading half (Up marker onward, stop at Down marker or
 // EOF) and false for the trailing half (Down marker onward).
@@ -438,31 +466,45 @@ func DownBodyOf(raw string) string {
 // marker logic ever changes (e.g. to honour
 // `-- +migrate StatementBegin` for multi-statement files), the
 // change is made in one place.
+//
+// Markers must be on their own line (see upMarkerLine /
+// downMarkerLine for the precise regex). A marker that
+// appears inside a comment — e.g. a docstring explaining
+// the file layout — is intentionally NOT a marker, so
+// authors can write `-- this file ships both an Up and a
+// Down section` without confusing the parser.
 func upDownBodyOf(raw string, up bool) string {
-	const upMarker = "-- +migrate Up"
-	const downMarker = "-- +migrate Down"
-
-	upIdx := strings.Index(raw, upMarker)
-	downIdx := strings.Index(raw, downMarker)
+	upLoc := upMarkerLine.FindStringIndex(raw)
+	downLoc := downMarkerLine.FindStringIndex(raw)
 
 	if up {
-		if upIdx < 0 {
+		if upLoc == nil {
 			return raw
 		}
-		// Stop at the Down marker if present, otherwise
-		// return to end of file. The slice keeps the
-		// Up marker comment itself.
-		if downIdx < 0 || downIdx < upIdx {
-			return raw[upIdx:]
+		// Stop at the Down marker if present and after
+		// the Up marker, otherwise return to end of
+		// file. The slice keeps the Up marker line
+		// itself so error messages that surface a
+		// failing statement also surface a useful
+		// line of context.
+		//
+		// gocritic weakCond: FindStringIndex returns
+		// a nil []int when the regex does not match.
+		// The `len(downLoc) == 0` form is the
+		// explicit-empty-slice form and silences the
+		// "nil check may not be enough, check for len"
+		// warning.
+		if len(downLoc) == 0 || downLoc[0] < upLoc[0] {
+			return raw[upLoc[0]:]
 		}
-		return raw[upIdx:downIdx]
+		return raw[upLoc[0]:downLoc[0]]
 	}
 
 	// Down slice.
-	if downIdx < 0 {
+	if len(downLoc) == 0 {
 		return ""
 	}
-	return raw[downIdx:]
+	return raw[downLoc[0]:]
 }
 
 // StripSQLLineComments removes any `-- ...` line from `s`. It does

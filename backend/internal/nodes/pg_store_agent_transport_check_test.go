@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //go:build integration
+
 //
 // Regression guard for the Go `nodes.AgentTransport`
 // closed set ↔ `nodes_agent_transport_check` CHECK

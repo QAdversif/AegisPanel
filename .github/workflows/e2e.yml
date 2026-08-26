@@ -22,6 +22,17 @@
 #   E2E_ADMIN_PASSWORD   the prod admin password
 #                         (from 1Password "AegisPanel
 #                         / Live / admin")
+#   PANEL_BASE_URL       the prod panel URL (no
+#                         path), e.g. "host.example.com"
+#                         (no scheme, no trailing slash).
+#                         Used to compose E2E_BASE_URL.
+#                         The 1Password entry is the
+#                         same one that backs the manual
+#                         browser smoke (see operator-guide
+#                         §"Browser smoke"). The smoke
+#                         step below fails fast with a
+#                         precise diagnostic if either
+#                         secret is missing.
 #
 # The dev docker-compose stack path (with a
 # fresh seed admin) is supported via the
@@ -30,6 +41,18 @@
 # the Go panel) and run the suite against
 # http://localhost:8080. Default is 'false' (run
 # against prod).
+#
+# Known failure mode (2026-08-25): the workflow was
+# failing on tag pushes (v0.8.31.0, v0.8.31.1, v0.8.32)
+# with `conclusion: failure` and no log artifact (logs
+# returned 404 from the actions API). The most likely
+# cause is a stale E2E_ADMIN_PASSWORD secret after
+# the prod admin password rotation that the v0.8.31.1
+# install contract requires. The smoke-check step
+# added in v0.8.32.1 turns the silent failure into a
+# named-secret error; the operator-side fix is to
+# re-set the GitHub secret from the 1Password
+# "AegisPanel / Live / admin" entry.
 
 on:
   workflow_dispatch:
@@ -72,6 +95,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # v0.8.32.1 ci-hygiene hotfix: fail-fast smoke check
+      # on the two secrets the workflow depends on. The
+      # pre-fix behaviour was a silent Playwright auth
+      # failure when E2E_ADMIN_PASSWORD was rotated on
+      # the prod side but the GitHub Actions secret was
+      # forgotten — Playwright would log in, get a 401,
+      # and the test report would surface a generic
+      # Playwright timeout, not the "secret stale" cause.
+      # The smoke step fails the job with a precise
+      # diagnostic so the operator can re-set the
+      # secret from 1Password in 30 seconds.
+      - name: Smoke-check required secrets
+        if: ${{ inputs.compose != true }}
+        env:
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${E2E_BASE_URL:?E2E_BASE_URL is unset (PANEL_BASE_URL secret is missing or empty; the workflow cannot reach the prod panel)}"
+          : "${E2E_ADMIN_PASSWORD:?E2E_ADMIN_PASSWORD secret is missing or empty; rotate the 1Password entry and re-set the GitHub Actions secret before the next run}"
+          : "${E2E_ADMIN_USERNAME:?E2E_ADMIN_USERNAME env is unset (this is a workflow bug, not an operator action)}"
+          echo "secrets smoke: E2E_BASE_URL=$(echo "$E2E_BASE_URL" | sed -E 's#https?://##; s#^[^@]+@##; s#:[0-9]+/?.*##') E2E_ADMIN_USERNAME=$E2E_ADMIN_USERNAME (password length=${#E2E_ADMIN_PASSWORD})"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

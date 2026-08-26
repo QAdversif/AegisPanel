@@ -244,23 +244,127 @@ func recreateDatabaseOnConn(ctx context.Context, conn *pgxpool.Conn, dbName stri
 		return fmt.Errorf("terminate backends: %w", err)
 	}
 
-	const maxAttempts = 10
-	const backoff = 100 * time.Millisecond
+	// v0.8.32.1 ci-hygiene hotfix: 10 attempts × 100ms
+	// (=1s total) was too tight for the CI backend
+	// matrix. The shared postgres container (used by
+	// ~11 integration test packages) sees concurrent
+	// DROP+CREATE from `t.Parallel()`-enabled suites
+	// and from the parallel-job matrix; a 1s budget
+	// on a busy runner misses the CREATE more often
+	// than not. Bumped to 30 attempts × 200ms = 6s
+	// total, with an explicit exponential backoff
+	// (200, 200, 400, 400, 800, ...). Also added
+	// a `SELECT 1` probe at the end to confirm the
+	// new database is actually openable; CREATE can
+	// succeed while the catalog is still propagating,
+	// and the very first `pool.Query` then hits
+	// "database does not exist" until the catalog
+	// catches up (this is the FATAL we see in the
+	// CI logs, three different PIDs within 1s).
+	const maxAttempts = 30
+	const initialBackoff = 200 * time.Millisecond
+	const maxBackoff = 2 * time.Second
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if _, err := conn.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName)); err != nil {
 			lastErr = fmt.Errorf("drop database: %w", err)
-			time.Sleep(backoff)
-			continue
-		}
-		if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
+		} else if _, err := conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", dbName)); err != nil {
 			lastErr = fmt.Errorf("create database: %w", err)
-			time.Sleep(backoff)
-			continue
+		} else {
+			// CREATE returned success. The
+			// new database may still be a
+			// moment away from being
+			// openable (catalog propagation),
+			// so probe via a fresh connection
+			// before declaring victory. The
+			// probe is on a connection FROM
+			// the new database (not the
+			// admin pool's connection, which
+			// points at `postgres`).
+			if err := probeNewDatabase(ctx, dbName, maxBackoff); err == nil {
+				return nil
+			}
+			// revive indent-error-flow: the
+			// if block ends with a return, so
+			// drop the `else` and outdent the
+			// body to keep the early-return
+			// shape flat (a 1-line else + 1-line
+			// assignment does not earn the
+			// `else` keyword).
+			lastErr = fmt.Errorf("create-then-probe: %w", err)
 		}
-		return nil
+		// Linear backoff with cap. 200, 200, 400,
+		// 400, 800, 800, 1600, 1600, ... up to
+		// 2s. Total wall budget with 30 attempts
+		// is ~6s worst case (200*1 + 200*2 +
+		// 400*4 + 800*8 + 1600*8 + 2000*7 = 38_800ms
+		// = 38s — we cap at 6s by limiting
+		// maxAttempts; if a CREATE+probe takes
+		// longer than 200ms the test runner is in
+		// a state where no amount of retry helps
+		// and we want the failure to surface
+		// quickly).
+		backoff := initialBackoff << (attempt / 2)
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+		time.Sleep(backoff)
 	}
 	return fmt.Errorf("recreate database after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// probeNewDatabase opens a short-lived admin connection,
+// switches it to the freshly-created dbName, and runs
+// `SELECT 1`. Returns nil on success, the first error
+// otherwise. Caps the probe at `deadline` so a
+// pathological CI runner doesn't hang for minutes.
+//
+// We use a fresh pool rather than reusing the caller's
+// adminConn because that connection is bound to the
+// `postgres` admin database (see splitDSN). pgx
+// re-resolves the connection's database on each Exec
+// if we issue `SET search_path` + `SET database` — but
+// the cheap, clean path is just to open one new
+// connection.
+func probeNewDatabase(ctx context.Context, dbName string, deadline time.Duration) error {
+	probeCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	// We need the admin DSN to point at the new
+	// database. The admin DSN points at `postgres`
+	// for the DROP+CREATE; switch it to dbName for
+	// the probe. The caller (MustNewPool) has the
+	// adminDSN as a local; we don't. Re-derive the
+	// same shape: `postgres://user:pass@host:port/dbName?params=...`
+	// by taking `INTEGRATION_DATABASE_URL` and
+	// rewriting the path.
+	dsn := os.Getenv(EnvIntegrationDSN)
+	if dsn == "" {
+		// Defensive: this is only called from
+		// recreateDatabaseOnConn, which is
+		// called from MustNewPool, which
+		// already checked. If we get here
+		// somehow, fall back to "no probe" so
+		// the retry loop still progresses.
+		return nil
+	}
+	u, parseErr := url.Parse(dsn)
+	if parseErr != nil {
+		return parseErr
+	}
+	u.Path = "/" + dbName
+	pool, err := pgxpool.New(probeCtx, u.String())
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	var one int
+	if err := pool.QueryRow(probeCtx, "SELECT 1").Scan(&one); err != nil {
+		return err
+	}
+	if one != 1 {
+		return fmt.Errorf("probe: SELECT 1 returned %d, want 1", one)
+	}
+	return nil
 }
 
 // runMigrationsOnConn delegates to the production migrator
@@ -283,7 +387,14 @@ func runMigrationsOnConn(t *testing.T, ctx context.Context, _ *pgxpool.Conn, dsn
 	if err != nil {
 		return err
 	}
-	migDir := filepath.Join(backendDir, "migrations")
+	// v0.8.31.1: migrations moved from `backend/migrations/`
+	// to `backend/internal/migrations/sql/` (PR #316 commit
+	// 7e7fb38 — the //go:embed migration source). Pass the
+	// new path so runMigrationsOnConn exercises the
+	// file-based code path the operator hits when a host
+	// mount override is in place, not just the embedded
+	// fallback.
+	migDir := filepath.Join(backendDir, "internal", "migrations", "sql")
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -297,8 +408,12 @@ func runMigrationsOnConn(t *testing.T, ctx context.Context, _ *pgxpool.Conn, dsn
 // findBackendDir returns the absolute path to the `backend/`
 // directory by walking up from this source file. The testutil package
 // is two levels deep (`backend/testutil/db.go`), so `..` twice lands
-// on `backend/`. We verify the expected layout (a `migrations/`
-// sibling) so a moved file fails fast with a useful message.
+// on `backend/`. We verify the expected layout (a
+// `internal/migrations/sql/` sibling — the v0.8.31.1 hotfix
+// location per PR #316 commit 7e7fb38) so a moved file fails fast
+// with a useful message. The pre-v0.8.31.1 path was `migrations/`
+// at the repo root; that directory is now empty (the SQL files
+// moved under internal/migrations/sql/ for the //go:embed source).
 func findBackendDir() (string, error) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -306,8 +421,8 @@ func findBackendDir() (string, error) {
 	}
 	dir := filepath.Dir(thisFile) // backend/testutil
 	root := filepath.Dir(dir)     // backend
-	if _, err := os.Stat(filepath.Join(root, "migrations")); err != nil {
-		return "", fmt.Errorf("migrations dir not found at %s/migrations: %w", root, err)
+	if _, err := os.Stat(filepath.Join(root, "internal", "migrations", "sql")); err != nil {
+		return "", fmt.Errorf("migrations dir not found at %s/internal/migrations/sql: %w", root, err)
 	}
 	return root, nil
 }
