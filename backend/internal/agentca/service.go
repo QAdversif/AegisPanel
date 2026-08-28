@@ -28,9 +28,11 @@
 package agentca
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"sync"
@@ -286,15 +288,30 @@ func (s *Service) EnsureNodeCerts(ctx context.Context, nodeID uuid.UUID, addr st
 //     `age -r <pubkey>` encrypted ECDSA P-256 key.
 //     Plaintext ParseECPrivateKey fails on the
 //     envelope bytes; the fallback is
-//     `envelope.Decrypt` + ParseECPrivateKey. The
-//     envelope is the same SecretCipher the webhooks
-//     store uses (single `AEGIS_WEBHOOKS_SECRET_AGE_*`
+//     `envelope.Decrypt` followed by a PEM-or-DER
+//     decode (the v0.8.25 mint sealed PEM bytes
+//     via `openssl genpkey -outform PEM | age -r
+//     <pubkey>`, so the plaintext is SEC1 PEM;
+//     PKCS#8 PEM and raw DER are accepted as
+//     forward-compat fallbacks). The envelope is
+//     the same SecretCipher the webhooks store
+//     uses (single `AEGIS_WEBHOOKS_SECRET_AGE_*`
 //     config).
 //
-// If both paths fail, the row is in a format the
+// v0.8.32.4 fix (issue #328): the v0.8.25 hand-mint
+// plaintext is SEC1 PEM (the "EC PRIVATE KEY" type
+// marker), not raw DER. The v0.8.32.3 path 2 fed
+// the plaintext directly to `x509.ParseECPrivateKey`
+// and crashed with "tags don't match" on prod.
+// The fix adds a `pem.Decode` branch in path 2a
+// that handles SEC1 PEM (and PKCS#8 PEM as a
+// forward-compat fallback) before falling through
+// to the raw-DER branch.
+//
+// If all paths fail, the row is in a format the
 // Service does not understand (corrupted, or sealed
 // by a key the panel no longer has). The error
-// chains both attempts so the operator can see
+// chains the attempts so the operator can see
 // which shape the row actually has.
 func persistedToCA(r *Root, env envelope.SecretCipher) (*CA, error) {
 	cert, err := parseRootCertPEM(r.CertPEM)
@@ -314,9 +331,13 @@ func persistedToCA(r *Root, env envelope.SecretCipher) (*CA, error) {
 
 // decodeKeyDER tries the plaintext-DER path first
 // (the v0.8.32+ format), then the envelope-decrypt
-// path (the v0.8.25 prod workaround). If both fail
-// the error wraps both attempts so the operator can
-// diagnose what shape the row actually has.
+// path (the v0.8.25 prod workaround). The
+// envelope-decrypt path has two sub-branches: PEM
+// plaintext (the v0.8.25 hand-mint shape) and
+// DER plaintext (a future-compat fallback). If
+// all three paths fail the error wraps each
+// attempt so the operator can diagnose what
+// shape the row actually has.
 func decodeKeyDER(der []byte, env envelope.SecretCipher) (*ecdsa.PrivateKey, error) {
 	if len(der) == 0 {
 		return nil, errors.New("empty key bytes")
@@ -340,9 +361,57 @@ func decodeKeyDER(der []byte, env envelope.SecretCipher) (*ecdsa.PrivateKey, err
 	if err != nil {
 		return nil, fmt.Errorf("plaintext ParseECPrivateKey failed and envelope.Decrypt also failed (the row is in a format the panel cannot decode; re-mint via `aegis admin agentca rotate-root` after diagnosing the on-disk shape): plaintext=%w envelope=%w", plaintextErr, err)
 	}
+	// Path 2a: PEM plaintext. The v0.8.25 hand-mint
+	// sealed PEM bytes via `age -r <pubkey>` (the
+	// operator ran `openssl genpkey -outform PEM |
+	// age -r ...`); the plaintext is SEC1 PEM (the
+	// "EC PRIVATE KEY" type marker) or PKCS#8 PEM
+	// (the "PRIVATE KEY" type marker). The
+	// v0.8.32+ SaveRoot format does NOT take this
+	// path — it stores plaintext DER directly,
+	// handled in path 1 above. We try SEC1 first
+	// (the canonical v0.8.25 shape) and fall back
+	// to PKCS#8 (covers a future mint tooling that
+	// switches default format).
+	if bytes.HasPrefix(plain, []byte("-----BEGIN")) {
+		block, _ := pem.Decode(plain)
+		if block != nil {
+			// Try SEC1 first (the canonical v0.8.25
+			// shape: the "EC PRIVATE KEY" PEM type).
+			key, sec1Err := x509.ParseECPrivateKey(block.Bytes)
+			if sec1Err == nil {
+				return key, nil
+			}
+			// Fall back to PKCS#8 (the
+			// "PRIVATE KEY" PEM type). Covers a
+			// future mint tooling that switches
+			// default format.
+			k8, pk8Err := x509.ParsePKCS8PrivateKey(block.Bytes)
+			if pk8Err == nil {
+				if ec, ok := k8.(*ecdsa.PrivateKey); ok {
+					return ec, nil
+				}
+				return nil, fmt.Errorf("envelope.Decrypt produced a PKCS#8 PEM block that is not an EC key: %T", k8)
+			}
+			return nil, fmt.Errorf("envelope.Decrypt produced a PEM block but neither SEC1 nor PKCS#8 parse succeeded: sec1=%w pkcs8=%w", sec1Err, pk8Err)
+		}
+		// PEM marker present but no valid block;
+		// fall through to the DER attempt below
+		// (covers a partial-truncation case where
+		// the age-decrypted bytes happen to start
+		// with `-----BEGIN` from a corrupted input).
+	}
+	// Path 2b: DER plaintext. The v0.8.32+ SaveRoot
+	// format would have been handled in path 1
+	// (plaintext ParseECPrivateKey on the ciphertext
+	// itself succeeds because v0.8.32+ persists
+	// DER in `key_ciphertext` without envelope).
+	// This branch covers a future shape where
+	// envelope-sealed DER replaces envelope-sealed
+	// PEM.
 	key, err = x509.ParseECPrivateKey(plain)
 	if err != nil {
-		return nil, fmt.Errorf("envelope.Decrypt succeeded but the decrypted bytes are not a valid EC private key: %w", err)
+		return nil, fmt.Errorf("envelope.Decrypt succeeded but the decrypted bytes are not a valid EC private key (not SEC1 DER, not SEC1 PEM, not PKCS#8 PEM): %w", err)
 	}
 	return key, nil
 }
