@@ -21,7 +21,6 @@ package agentca
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -39,19 +38,32 @@ import (
 var ErrNotFound = errors.New("agentca: root CA not found")
 
 // Root is the persisted form of the panel's root CA.
-// The PrivateKey is sealed with the age envelope
-// before being handed to Store.Save; the Store's
-// implementation persists the ciphertext (same
-// pattern as `nodes.ssh_private_key_ciphertext` per
-// PR #179). CertPEM is plaintext — X.509 certs are
-// public, so no envelope is needed.
+// The Service is responsible for the encoding shape of
+// KeyDER (plaintext DER from the panel's own SaveRoot OR
+// age-envelope-sealed bytes from the v0.8.25 prod
+// workaround) and decodes both shapes during EnsureRoot.
+// The Store is dumb: it persists KeyDER verbatim and
+// returns it verbatim. The v0.8.25 prod row (manually
+// minted with `age -r <pubkey>` encrypted ECDSA P-256
+// key) is the canonical fixture for the envelope-decrypt
+// path; the v0.8.32.x SaveRoot format is the canonical
+// fixture for the plaintext-DER path. See issue #326.
 type Root struct {
-	// PrivateKey is the CA's signing key. The
-	// `Store.Save` envelope-seals it; the
-	// `Store.Get` envelope-unseals. The Service
-	// never sees the ciphertext — the Store
-	// hides that detail.
-	PrivateKey *ecdsa.PrivateKey
+	// KeyDER is the raw CA signing-key bytes
+	// (regardless of encoding). For v0.8.32+
+	// SaveRoot output this is the standard SEC1
+	// `EC PRIVATE KEY` DER produced by
+	// `x509.MarshalECPrivateKey` (plaintext,
+	// column is named `key_ciphertext` for
+	// historical reasons). For the v0.8.25
+	// hand-minted prod row this is the
+	// age-envelope-encrypted form. The Service
+	// tries plaintext ParseECPrivateKey first
+	// and falls back to envelope.Decrypt if
+	// that fails (controlled by the
+	// `AEGIS_WEBHOOKS_SECRET_AGE_*` config
+	// shared with the webhook envelope).
+	KeyDER []byte
 	// CertPEM is the on-the-wire PEM form. The
 	// Store persists it verbatim.
 	CertPEM string
@@ -107,12 +119,16 @@ type Store interface {
 	// GetRoot returns the persisted root CA. Returns
 	// ErrNotFound if no root exists yet.
 	GetRoot(ctx context.Context) (*Root, error)
-	// SaveRoot persists a new root. The Store
-	// envelope-seals `r.PrivateKey` before
-	// writing; the Service never sees the
-	// ciphertext. SaveRoot overwrites any
-	// existing root (the v0.8.31 rotation path
-	// is the only legitimate caller).
+	// SaveRoot persists a new root. The caller is
+	// responsible for the encoding of `r.KeyDER`
+	// (the v0.8.32+ Service marshals the EC key to
+	// plaintext DER via x509.MarshalECPrivateKey; the
+	// v0.8.25 prod workaround stored age-envelope
+	// ciphertext). SaveRoot does NOT envelope-seal
+	// or envelope-unseal — it's a dumb byte sink.
+	// SaveRoot overwrites any existing root (the
+	// v0.8.31 rotation path is the only legitimate
+	// caller).
 	SaveRoot(ctx context.Context, r *Root) error
 	// GetNodeCerts returns the per-node mTLS
 	// material. Returns ErrNotFound if the node
@@ -166,9 +182,8 @@ func (m *MemoryStore) GetRoot(_ context.Context) (*Root, error) {
 	// Return a deep copy so the caller cannot
 	// mutate the in-memory state by accident.
 	r := *m.root
-	if m.root.PrivateKey != nil {
-		k := *m.root.PrivateKey
-		r.PrivateKey = &k
+	if m.root.KeyDER != nil {
+		r.KeyDER = append([]byte(nil), m.root.KeyDER...)
 	}
 	return &r, nil
 }
@@ -182,9 +197,8 @@ func (m *MemoryStore) SaveRoot(_ context.Context, r *Root) error {
 	// mutation of the input struct does not
 	// affect the in-memory state.
 	rCopy := *r
-	if r.PrivateKey != nil {
-		k := *r.PrivateKey
-		rCopy.PrivateKey = &k
+	if r.KeyDER != nil {
+		rCopy.KeyDER = append([]byte(nil), r.KeyDER...)
 	}
 	m.root = &rCopy
 	return nil

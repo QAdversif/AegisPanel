@@ -29,6 +29,7 @@ package agentca
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -36,6 +37,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/QAdversif/AegisPanel/internal/crypto/envelope"
 )
 
 // Service is the high-level agentca API. One per
@@ -43,6 +46,16 @@ import (
 // is wired.
 type Service struct {
 	store Store
+	// envelope is the age SecretCipher used to
+	// decrypt the v0.8.25 prod row (manually
+	// minted with `age -r <pubkey>` encrypted
+	// ECDSA P-256 key). Nil envelope means the
+	// Service only understands the v0.8.32+
+	// plaintext-DER format; dev mode (MemoryStore
+	// + no envelope) hits the same code path. The
+	// envelope is shared with the webhooks store
+	// (same `AEGIS_WEBHOOKS_SECRET_AGE_*` env vars).
+	envelope envelope.SecretCipher
 	// cachedRoot is the in-memory root CA. The
 	// first call to EnsureRoot populates it; all
 	// subsequent calls return the cached value
@@ -56,8 +69,21 @@ type Service struct {
 // NewService returns a Service backed by `store`.
 // The store is required (the in-memory default is
 // `NewMemoryStore()` for tests + dev mode).
-func NewService(store Store) *Service {
-	return &Service{store: store}
+//
+// `env` is optional. When non-nil, EnsureRoot uses
+// it as a fallback decoder for the v0.8.25 prod
+// row (age-envelope ciphertext in `key_ciphertext`).
+// v0.8.32+ SaveRoot output is plaintext DER and
+// decodes without the envelope. The app passes the
+// same envelope the webhooks store uses
+// (single `AEGIS_WEBHOOKS_SECRET_AGE_*` env var set,
+// one identity file, one backup drill).
+func NewService(store Store, env ...envelope.SecretCipher) *Service {
+	s := &Service{store: store}
+	if len(env) > 0 && env[0] != nil {
+		s.envelope = env[0]
+	}
+	return s
 }
 
 // Store returns the underlying Store. Used by the
@@ -116,7 +142,7 @@ func (s *Service) EnsureRoot(ctx context.Context) (*CA, error) {
 	}
 	persisted, err := s.store.GetRoot(ctx)
 	if err == nil {
-		ca, err := persistedToCA(persisted)
+		ca, err := persistedToCA(persisted, s.envelope)
 		if err != nil {
 			return nil, fmt.Errorf("agentca: hydrate root from store: %w", err)
 		}
@@ -131,11 +157,15 @@ func (s *Service) EnsureRoot(ctx context.Context) (*CA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agentca: generate root: %w", err)
 	}
+	keyDER, err := x509.MarshalECPrivateKey(ca.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("agentca: marshal root key: %w", err)
+	}
 	persisted = &Root{
-		PrivateKey: ca.PrivateKey,
-		CertPEM:    ca.RootCertPEM(),
-		Serial:     ca.Serial,
-		ExpiresAt:  ca.Cert.NotAfter,
+		KeyDER:    keyDER,
+		CertPEM:   ca.RootCertPEM(),
+		Serial:    ca.Serial,
+		ExpiresAt: ca.Cert.NotAfter,
 	}
 	if err := s.store.SaveRoot(ctx, persisted); err != nil {
 		return nil, fmt.Errorf("agentca: persist root: %w", err)
@@ -243,16 +273,78 @@ func (s *Service) EnsureNodeCerts(ctx context.Context, nodeID uuid.UUID, addr st
 // the Store's persisted form. The private key is
 // the only "secret" piece; the cert PEM + serial
 // + ExpiresAt are public metadata.
-func persistedToCA(r *Root) (*CA, error) {
+//
+// v0.8.32.3 fix (issue #326): the dual-path decode
+// for `r.KeyDER` covers both encodings the panel
+// has shipped:
+//
+//  1. v0.8.32+ SaveRoot writes plaintext SEC1 DER
+//     (`x509.MarshalECPrivateKey`). This is the
+//     canonical encoding; `x509.ParseECPrivateKey`
+//     succeeds on the first try.
+//  2. The v0.8.25 prod row was hand-minted with
+//     `age -r <pubkey>` encrypted ECDSA P-256 key.
+//     Plaintext ParseECPrivateKey fails on the
+//     envelope bytes; the fallback is
+//     `envelope.Decrypt` + ParseECPrivateKey. The
+//     envelope is the same SecretCipher the webhooks
+//     store uses (single `AEGIS_WEBHOOKS_SECRET_AGE_*`
+//     config).
+//
+// If both paths fail, the row is in a format the
+// Service does not understand (corrupted, or sealed
+// by a key the panel no longer has). The error
+// chains both attempts so the operator can see
+// which shape the row actually has.
+func persistedToCA(r *Root, env envelope.SecretCipher) (*CA, error) {
 	cert, err := parseRootCertPEM(r.CertPEM)
 	if err != nil {
 		return nil, fmt.Errorf("agentca: parse persisted cert: %w", err)
 	}
+	priv, err := decodeKeyDER(r.KeyDER, env)
+	if err != nil {
+		return nil, fmt.Errorf("agentca: hydrate persisted key: %w", err)
+	}
 	return &CA{
-		PrivateKey: r.PrivateKey,
+		PrivateKey: priv,
 		Cert:       cert,
 		Serial:     r.Serial,
 	}, nil
+}
+
+// decodeKeyDER tries the plaintext-DER path first
+// (the v0.8.32+ format), then the envelope-decrypt
+// path (the v0.8.25 prod workaround). If both fail
+// the error wraps both attempts so the operator can
+// diagnose what shape the row actually has.
+func decodeKeyDER(der []byte, env envelope.SecretCipher) (*ecdsa.PrivateKey, error) {
+	if len(der) == 0 {
+		return nil, errors.New("empty key bytes")
+	}
+	// Path 1: plaintext DER. The v0.8.32+ SaveRoot
+	// output and the legacy v0.8.30 fixture both
+	// produce SEC1 `EC PRIVATE KEY` DER.
+	key, plaintextErr := x509.ParseECPrivateKey(der)
+	if plaintextErr == nil {
+		return key, nil
+	}
+	// Path 2: age envelope. The v0.8.25 prod
+	// row was hand-minted with `age -r <pubkey>`
+	// encrypted bytes; the panel's envelope
+	// (same SecretCipher the webhooks store
+	// uses) holds the matching private key.
+	if env == nil {
+		return nil, fmt.Errorf("plaintext ParseECPrivateKey failed and no envelope configured (the v0.8.25 prod workaround sealed this row with the operator's age key; AEGIS_WEBHOOKS_SECRET_AGE_RECIPIENTS / _KEY_FILE need to point at the matching identity): %w", plaintextErr)
+	}
+	plain, err := env.Decrypt(der)
+	if err != nil {
+		return nil, fmt.Errorf("plaintext ParseECPrivateKey failed and envelope.Decrypt also failed (the row is in a format the panel cannot decode; re-mint via `aegis admin agentca rotate-root` after diagnosing the on-disk shape): plaintext=%w envelope=%w", plaintextErr, err)
+	}
+	key, err = x509.ParseECPrivateKey(plain)
+	if err != nil {
+		return nil, fmt.Errorf("envelope.Decrypt succeeded but the decrypted bytes are not a valid EC private key: %w", err)
+	}
+	return key, nil
 }
 
 // nodeCertsToIssued converts the persisted form to

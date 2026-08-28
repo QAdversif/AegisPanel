@@ -112,11 +112,15 @@ func TestService_Invalidate_ReadsFromStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRootCA: %v", err)
 	}
+	keyDER, err := x509.MarshalECPrivateKey(ca2.PrivateKey)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey: %v", err)
+	}
 	if err := store.SaveRoot(ctx, &Root{
-		PrivateKey: ca2.PrivateKey,
-		CertPEM:    ca2.RootCertPEM(),
-		Serial:     ca2.Serial,
-		ExpiresAt:  ca2.Cert.NotAfter,
+		KeyDER:    keyDER,
+		CertPEM:   ca2.RootCertPEM(),
+		Serial:    ca2.Serial,
+		ExpiresAt: ca2.Cert.NotAfter,
 	}); err != nil {
 		t.Fatalf("store.SaveRoot: %v", err)
 	}

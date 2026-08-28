@@ -60,7 +60,6 @@ package agentca
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"time"
@@ -92,6 +91,19 @@ func NewPgStore(pool *pgxpool.Pool) *PgStore {
 // does not exist -- distinct from "row exists but
 // key column is empty", which we treat as a real
 // error and surface).
+//
+// v0.8.32.3 fix (issue #326): the bytea column
+// `key_ciphertext` is scanned into `r.KeyDER []byte`,
+// not into `r.PrivateKey *ecdsa.PrivateKey` (the
+// pre-fix code tried the latter, which is not a
+// pgx-supported scan path -- it always panics with
+// `cannot scan bytea in binary format into **ecdsa.PrivateKey`).
+// The Service is responsible for the encoding shape:
+// v0.8.32+ SaveRoot writes plaintext DER; the v0.8.25
+// hand-minted prod row contains age-envelope
+// ciphertext. The Service's `decodeKeyDER` tries
+// plaintext ParseECPrivateKey first and falls back
+// to envelope.Decrypt when the cipher is configured.
 func (s *PgStore) GetRoot(ctx context.Context) (*Root, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT key_ciphertext, cert_pem, serial, expires_at
@@ -99,7 +111,7 @@ func (s *PgStore) GetRoot(ctx context.Context) (*Root, error) {
 		WHERE id = 1
 	`)
 	r := &Root{}
-	err := row.Scan(&r.PrivateKey, &r.CertPEM, &r.Serial, &r.ExpiresAt)
+	err := row.Scan(&r.KeyDER, &r.CertPEM, &r.Serial, &r.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -114,6 +126,15 @@ func (s *PgStore) GetRoot(ctx context.Context) (*Root, error) {
 // `EnsureRoot` after `Invalidate` is idempotent.
 // The `id = 1` PRIMARY KEY + the CHECK constraint
 // keep the table at one row.
+//
+// v0.8.32.3 fix (issue #326): the caller is
+// responsible for producing `r.KeyDER` in the right
+// shape (plaintext DER for the v0.8.32+ SaveRoot
+// path; the v0.8.25 prod row was hand-minted with
+// age-envelope ciphertext but the panel never wrote
+// that path itself). The Store no longer marshals
+// `*ecdsa.PrivateKey` to []byte -- that was a leaky
+// abstraction that broke the v0.8.25 prod round-trip.
 func (s *PgStore) SaveRoot(ctx context.Context, r *Root) error {
 	if r == nil {
 		return fmt.Errorf("agentca: pgStore.SaveRoot: nil root")
@@ -121,22 +142,10 @@ func (s *PgStore) SaveRoot(ctx context.Context, r *Root) error {
 	if r.CertPEM == "" {
 		return fmt.Errorf("agentca: pgStore.SaveRoot: empty CertPEM")
 	}
-	if r.PrivateKey == nil {
-		return fmt.Errorf("agentca: pgStore.SaveRoot: nil PrivateKey")
+	if len(r.KeyDER) == 0 {
+		return fmt.Errorf("agentca: pgStore.SaveRoot: empty KeyDER")
 	}
-	// Persist the CA's signing key as the
-	// standard SEC1 `EC PRIVATE KEY` DER
-	// (the same shape the agent uses; the
-	// `crypto/x509.MarshalPKCS8PrivateKey`
-	// alternative is fine too but the SEC1 form
-	// is what the existing `*ecdsa.PrivateKey`
-	// pipeline already produces via
-	// `LeafKeyPEM`).
-	keyDER, err := x509.MarshalECPrivateKey(r.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("agentca: pgStore.SaveRoot: marshal key: %w", err)
-	}
-	_, err = s.pool.Exec(ctx, `
+	_, err := s.pool.Exec(ctx, `
 		INSERT INTO agentca (id, key_ciphertext, cert_pem, serial, expires_at)
 		VALUES (1, $1, $2, $3, $4)
 		ON CONFLICT (id) DO UPDATE SET
@@ -145,7 +154,7 @@ func (s *PgStore) SaveRoot(ctx context.Context, r *Root) error {
 			serial         = EXCLUDED.serial,
 			expires_at     = EXCLUDED.expires_at,
 			updated_at     = NOW()
-	`, keyDER, r.CertPEM, r.Serial, r.ExpiresAt)
+	`, r.KeyDER, r.CertPEM, r.Serial, r.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("agentca: pgStore.SaveRoot: %w", err)
 	}
