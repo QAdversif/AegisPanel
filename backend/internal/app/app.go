@@ -49,12 +49,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/agentca"
+	"github.com/QAdversif/AegisPanel/internal/agentgrpc"
 	"github.com/QAdversif/AegisPanel/internal/audits"
 	"github.com/QAdversif/AegisPanel/internal/auth"
 	"github.com/QAdversif/AegisPanel/internal/backups"
@@ -153,6 +155,29 @@ type App struct {
 	webhooksWorkerCancel  context.CancelFunc
 	backupsWorkerCancel   context.CancelFunc
 	batchedApplierCancels map[uuid.UUID]context.CancelFunc
+	batchedApplierWg      sync.WaitGroup
+	// agentClient is the per-process agentgrpc.Client
+	// (HTTP or gRPC, selected by AEGIS_AGENT_TRANSPORT).
+	// The wiring helper that calls `agentgrpc.New` sets
+	// this field via SetAgentClient; `App.Close()`
+	// releases it last so the BatchedApplier goroutines
+	// can drain in-flight Apply requests before the
+	// connection pool goes away. Pre-fix the helper's
+	// `defer client.Close()` fired when the helper
+	// returned — the client was dead before the first
+	// Apply.
+	agentClient agentgrpc.Client
+}
+
+// SetAgentClient records the per-process agentgrpc.Client
+// on the App so App.Close() can release it during
+// shutdown. The wiring helper (cmd/aegis/main.go)
+// calls this once, immediately after `agentgrpc.New`.
+// The client is an interface so the test layer can
+// inject a fake without depending on the real gRPC or
+// HTTP transport.
+func (a *App) SetAgentClient(c agentgrpc.Client) {
+	a.agentClient = c
 }
 
 // Build runs the composition root: open the pg
@@ -283,7 +308,20 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		Env:     cfg.Env,
 	})
 	a.AgentCA = agentca.NewService(agentcaStore)
-	defer func() { _ = a.AgentCA.Close() }()
+	// v0.8.32.2: Close was previously deferred here so it
+	// fired when `Build` returned. That meant
+	// `a.AgentCA.RootCertPEM()` after `Build` returned
+	// always hit a closed service — the mTLS bootstrap
+	// in `bootstrap.ServiceConfig.MTLSCerts` saw
+	// `ErrNotFound` (the cache lives on the closed
+	// receiver), the provisioner swallowed the error
+	// (per the v0.8.30 mintMTLSCerts fail-soft path), and
+	// the agent installed without mTLS material. The
+	// Close call now lives in `App.Close()` so the
+	// service stays open for every consumer that runs
+	// after Build (nodes.Service, bootstrap adapter,
+	// admin CLI subcommands, etc.).
+	//
 	// Wire the agentca Service into nodes.Service
 	// so `nodes.Service.Provision` (the v0.8.30
 	// mTLS bootstrap integration) can call
@@ -836,7 +874,19 @@ func (a *App) AddNodeBatchedApplier(
 	// whose applier is not yet visible to
 	// services that fan out via WithBatchApplier.
 	a.batchedApplierCancels[nodeID] = cancel
+	// v0.8.32.2: track the goroutine with a
+	// WaitGroup so App.Close() can wait for the
+	// last in-flight Apply to finish before
+	// closing the pg pool out from under it.
+	// Pre-fix there was no Wait, so Close
+	// returned while goroutines were still
+	// holding transactions, and the next line
+	// (`a.Pool.Close()`) closed the pool out
+	// from under them — data-loss + race on
+	// `-race` builds.
+	a.batchedApplierWg.Add(1)
 	go func() {
+		defer a.batchedApplierWg.Done()
 		defer cancel()
 		if err := applier.Run(applierCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error().Err(err).Str("node", nodeName).Msg("app: BatchedApplier.Run exited unexpectedly")
@@ -850,9 +900,47 @@ func (a *App) AddNodeBatchedApplier(
 }
 
 // Close stops the webhook retry worker, cancels
-// every BatchedApplier goroutine, and releases the
-// pg pool. Safe to call on a nil receiver and
-// safe to call multiple times (idempotent).
+// every BatchedApplier goroutine, waits for them
+// to drain, then releases the agent client, the
+// agentca Service, and the pg pool. Safe to call
+// on a nil receiver and safe to call multiple
+// times (idempotent).
+//
+// Shutdown order matters:
+//
+//  1. Cancel every long-lived goroutine (webhook
+//     worker, backups worker, per-applier
+//     contexts). The BatchedApplier goroutines
+//     use their per-applier ctx to stop calling
+//     Apply at the next flush boundary.
+//  2. Wait for the BatchedApplier goroutines to
+//     exit, capped at 10s. This is the new
+//     behaviour — pre-fix there was no Wait, so
+//     Close returned while goroutines were still
+//     holding transactions, and the next line
+//     (`a.Pool.Close()`) closed the pool out from
+//     under them. Result: data loss + race
+//     detector fires on `-race` builds.
+//  3. Close the agentgrpc.Client. After step 2
+//     the BatchedApplier has finished its last
+//     in-flight Apply; the connection pool is
+//     no longer in use. Pre-fix the wiring helper
+//     closed the client at helper-return time
+//     (a `defer client.Close()` two lines after
+//     `agentgrpc.New`), so the first Apply hit
+//     a dead client.
+//  4. Close the agentca Service. The service
+//     holds a long-lived Store (the root CA
+//     in-memory cache and the per-row cert
+//     table). Pre-fix `Build` closed it via
+//     `defer`, so any consumer that read
+//     `RootCertPEM()` after Build saw a closed
+//     receiver.
+//  5. Close the pg pool. Last, because every
+//     prior Close may have triggered a final
+//     audit row INSERT (the mTLS bootstrap in
+//     particular writes a final log row when
+//     the installer's upload-and-swap completes).
 func (a *App) Close() {
 	if a == nil {
 		return
@@ -875,6 +963,45 @@ func (a *App) Close() {
 			cancel()
 		}
 		delete(a.batchedApplierCancels, id)
+	}
+	// Wait for the BatchedApplier goroutines to
+	// finish their last in-flight Apply. Capped at
+	// 10s — a normal shutdown completes in <100ms;
+	// anything beyond that is a stuck node and we
+	// should not block the process indefinitely.
+	// The pattern is the canonical Go "wait with
+	// timeout" idiom: spawn a watcher goroutine,
+	// race the watcher against `time.After`.
+	done := make(chan struct{})
+	go func() {
+		a.batchedApplierWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Happy path. Continue to the next
+		// teardown step.
+	case <-time.After(10 * time.Second):
+		// BatchedApplier goroutines that did
+		// not finish within the timeout are
+		// abandoned. The underlying connection
+		// pool is still open at this point
+		// (we close it next), so a goroutine
+		// that wakes up after this will hit a
+		// closed pool and fail loudly — not
+		// silently, and not on a live query.
+		log.Error().Dur("timeout", 10*time.Second).Msg("app: BatchedApplier goroutines did not finish in time; abandoning")
+	}
+	if a.agentClient != nil {
+		if err := a.agentClient.Close(); err != nil {
+			log.Warn().Err(err).Msg("app: agent client close")
+		}
+		a.agentClient = nil
+	}
+	if a.AgentCA != nil {
+		if err := a.AgentCA.Close(); err != nil {
+			log.Warn().Err(err).Msg("app: agentca close")
+		}
 	}
 	if a.Pool != nil {
 		a.Pool.Close()
