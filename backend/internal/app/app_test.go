@@ -276,4 +276,36 @@ func TestBuild_EnsuresAgentCARoot(t *testing.T) {
 	if pem2 != pem {
 		t.Error("AgentCA.RootCertPEM idempotency: 1st call != 2nd call (cache miss on second read — regression in Service.cachedRoot wiring)")
 	}
+
+	// v0.8.32.2: post-Close idempotency. The
+	// pre-fix Build had `defer a.AgentCA.Close()`
+	// (line 286), which fired when Build
+	// returned. By the time this test reached
+	// its assertions, `a.AgentCA` was already
+	// closed — every `RootCertPEM()` call above
+	// would have hit a closed receiver. The fix
+	// moves Close to App.Close() so the service
+	// stays open for the lifetime of the App.
+	// The test now closes the App explicitly
+	// (Close is idempotent, so the test's
+	// `defer a.Close()` is a no-op for the second
+	// close) and asserts that:
+	//
+	//  1. `a.Close()` is safe to call (no panic,
+	//     no nil-deref);
+	//  2. `a.Close()` is idempotent — calling
+	//     it a second time is a no-op (no double-
+	//     close of the pool, no deadlock).
+	//
+	// The pre-fix code's `defer a.AgentCA.Close()`
+	// in Build is now gone; the test still
+	// passes the pre-existing `RootCertPEM()`
+	// assertions above, which means Build no
+	// longer closes the service. If a future PR
+	// re-adds the defer-in-Build pattern, the
+	// `RootCertPEM()` calls above will fail with
+	// "closed service" and the regression will
+	// be caught immediately.
+	a.Close()
+	a.Close()
 }

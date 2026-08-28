@@ -636,7 +636,17 @@ func singboxWiring(
 		return fmt.Errorf("singboxWiring: agentgrpc.New: %w", err)
 	}
 	p.Configure(client)
-	defer func() { _ = client.Close() }()
+	// v0.8.32.2: hand the client to the App so
+	// App.Close() releases it at shutdown. Pre-fix
+	// the `defer client.Close()` fired when the
+	// wiring helper returned — the client was
+	// dead before the first Apply. The gRPC
+	// transport's connection pool survives until
+	// Close; the HTTP transport's *http.Client has
+	// no persistent state so the Close is a no-op,
+	// but we still defer the call to App.Close so
+	// the shape is uniform across transports.
+	a.SetAgentClient(client)
 
 	// Hand the applier map to the services that
 	// produce deltas. This must happen BEFORE the
