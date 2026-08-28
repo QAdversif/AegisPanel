@@ -35,6 +35,41 @@ NONE. v0.8.32.1 is the test/CI surface of v0.8.32; the panel binary on `ghcr.io/
 
 NONE for the panel binary. The next panel start picks up every change in this release automatically (the v0.8.32.1 image is bit-for-bit identical to v0.8.32). The release record makes the audit trail visible.
 
+## [0.8.32.4] - 2026-08-28
+
+Bugfix for the agentca eager-`EnsureRoot` regression that broke every v0.8.32.x deploy. The `ghcr.io/qadversif/aegispanel:0.8.32.4` image is functionally the same as `:0.8.32.2` plus a 2-line `pem.Decode` branch in `decodeKeyDER` path 2a that handles SEC1 PEM (the v0.8.25 prod shape) and PKCS#8 PEM (forward-compat) before falling through to the existing raw-DER branch. No SQL migration delta, no env var change, no API change, no schema change. The v0.8.25 prod row is the canonical fixture (a pre-existing-row test, not just a fresh-row test, would have caught the bug — see Lessons below).
+
+### Fixed
+
+- **agentca: `decodeKeyDER` path 2 missing `pem.Decode` of plaintext (PR #328, issue #329)** — the v0.8.25 prod row stored `key_ciphertext` as age-envelope ciphertext of SEC1 PEM bytes (`openssl genpkey -outform PEM | age -r <pubkey>`, the default format). The v0.8.32.3 `decodeKeyDER` path 2 fed the plaintext directly to `x509.ParseECPrivateKey`, which expects raw SEC1 DER; the panel crashed on boot with `envelope.Decrypt succeeded but the decrypted bytes are not a valid EC private key: asn1: structure error: tags don't match`. v0.8.31.0 was lazy (`EnsureRoot` only ran on first node provisioning) and never hit the path, so the prod row's PEM shape stayed hidden until the eager call in v0.8.32.x promoted it to boot. Fix: new path 2a runs `pem.Decode` first when the plaintext starts with `-----BEGIN`; tries SEC1 PEM (`x509.ParseECPrivateKey`) then PKCS#8 PEM (`x509.ParsePKCS8PrivateKey` + type assert to `*ecdsa.PrivateKey`) before the existing raw-DER branch. Files: `backend/internal/agentca/service.go` (+~50 lines), `backend/internal/agentca/pg_store_decode_test.go` (+1 test `TestService_EnsureRoot_AgeEncrypted_PreExistingRow_PEMPlaintext`).
+
+### Prod data fix (out-of-band, not in any tag)
+
+The `agentca.cert_pem` row on prod was a single 592-byte line with no LF separators — the 2026-08-25 hand-mint wrote the cert into the `text` column without PEM framing newlines (`-----BEGIN CERTIFICATE-----MIIBkD...=-----END CERTIFICATE-----`). Both Go's `pem.Decode` and openssl reject this format; the v0.8.32.2 + v0.8.32.3 panels crashed on boot with `parseRootCertPEM: no block`. Fixed by an out-of-band `UPDATE agentca SET cert_pem = <reformatted>` (LF after BEGIN, LF before END, base64 wrapped at 64 chars). The reformatted PEM is preserved across deploys (604 bytes, 12 LFs, openssl + Go `pem.Decode` both happy). Backup of the broken cert_pem is at `/var/lib/aegis/backups/agentca-cert-20260828-broken.sql` on the prod host. A follow-up should add a `aegis admin agentca repair-cert` admin CLI to fix this kind of PEM shape in place from the panel side (no psql round-trip required); tracked separately.
+
+### Lessons (lifted from this incident; the rules apply to any future eager-load or cert-mint code)
+
+1. **Eager load + pre-existing row = both encodings**. Any new `App.Build` step that touches a pre-existing row must run a regression test that exercises BOTH encodings the row can be in. PR #327's tests covered plaintext-DER AND envelope-of-DER; they did NOT cover envelope-of-PEM (the v0.8.25 hand-mint shape) because the v0.8.25 fixture used `openssl genpkey -outform PEM` (the default), not `-outform DER`. The mismatch was only visible at boot. Apply when: any future "eager load X at boot" change. Test the pre-existing row, not just a fresh INSERT.
+2. **Cert/key mint tooling must round-trip-parse the bytes before INSERT/age-seal**. Any cert/key mint tooling that writes a row to the DB should run `x509.ParseCertificate(block.Bytes)` on the cert and `x509.ParseECPrivateKey(der)` (or `x509.ParsePKCS8PrivateKey(der)`) on the key. If the round-trip fails, the mint must fail loudly BEFORE the DB write. The 2026-08-25 hand-mint was a manual `openssl ... | psql -c INSERT` and skipped this verification; the v0.8.32+ `Service.SaveRoot` path does it correctly via the typed `Root` struct.
+3. **Deploy slot swap must `docker stop` BEFORE `docker run`**. The pattern `docker rename aegis-panel aegis-panel-prev8` followed by `docker run -d --name aegis-panel --network aegis-net -p <prod-host>:8080:8080` (the IP-specific bind so the panel listens on the live server's public interface, not 127.0.0.1) failed silently on a held port: the new container ended up in `Created` state on the **default bridge** (not `aegis-net`), and DNS for `aegis-postgres` then failed via `127.0.0.53:53` (systemd-resolved stub) instead of `127.0.0.11:53` (Docker DNS). Recovery: `docker rm aegis-panel`, `docker stop aegis-panel-prevN`, re-run. The `tools/scripts/install-aegis-stack.sh` and `aegis-deploy-v0.8.X.Y.sh` templates need the stop-then-rename ordering.
+
+### Closed issues
+
+- **#326** closed by PR #327 (the bytea scan panic in `pgStore.GetRoot` — the parent bug that motivated the eager `EnsureRoot` call).
+- **#329** closed by PR #328 (the PEM plaintext path — this PR).
+
+### Operator action required
+
+NONE for the panel binary. The next panel start picks up the fix automatically. If you operated the panel during the v0.8.32.2 / v0.8.32.3 outage window (2026-08-28 07:15-08:50 UTC), the cert_pem reformat was applied out-of-band; the v0.8.32.4 deploy picks it up without further action. mTLS handshake against demo-node:7001 verified with `Verification: OK` (TLS 1.3, ECDSA, server cert `aegis-agent@<demo-host>` issued by `CN = Aegis Panel Root CA`).
+
+## [0.8.32.3] - 2026-08-28 (BROKEN, do not use)
+
+This tag is preserved on origin for the audit trail but the `:0.8.32.3` image is broken on prod (panel restart-loops on `parseRootCertPEM: no block` then, after cert_pem reformat, on `envelope.Decrypt succeeded but the decrypted bytes are not a valid EC private key: tags don't match`). The image bit-for-bit equals the v0.8.32.2 image plus the bytea-scan fix from PR #327; the panic on boot is the upstream eager-`EnsureRoot` chain that v0.8.32.4 fixes. Do not deploy. v0.8.32.4 supersedes this tag.
+
+## [0.8.32.2] - 2026-08-28 (BROKEN, do not use)
+
+This tag is preserved on origin for the audit trail (the 5-PR silent-bug batch PRs #320-#324) but the `:0.8.32.2` image is broken on prod (panel restart-loops on `cannot scan bytea (OID 17) in binary format into **ecdsa.PrivateKey`). The image bit-for-bit equals the v0.8.32.1 image; the panic on boot is a regression in the eager `EnsureRoot` call path. PR #327 (closed via #326) fixed the scan path; v0.8.32.3 still broke on the cert/key shape; v0.8.32.4 fixes the cert/key shape. Do not deploy. v0.8.32.4 supersedes this tag.
+
 ## [0.8.32] - 2026-08-25
 
 Three small post-v0.8.31.1 cleanups that close UX / observability gaps the v0.8.31.1 hotfixes exposed but did not fix. Image rebuild — the `ghcr.io/qadversif/aegispanel:0.8.32` image differs from `:0.8.31.1` in the 3 code patches documented below (no new endpoints, no new env vars, no schema changes). The migration warnings are doc-only; the agent help text + log hint + config.validate are code. Ship as a separate tag (no fold-into-0.8.31.2) so the release record makes the operator-surface cleanup visible; an operator who has already pulled v0.8.31.1 and is happy with the hotfixes can defer this to the next scheduled deploy.
