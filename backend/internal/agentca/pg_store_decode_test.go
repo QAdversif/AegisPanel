@@ -41,8 +41,10 @@
 package agentca
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,6 +209,83 @@ func TestService_EnsureRoot_AgeEncrypted_PreExistingRow(t *testing.T) {
 	}
 	if !ca.PrivateKey.Equal(caOrig.PrivateKey) {
 		t.Error("decoded PrivateKey differs from the plaintext underneath the envelope (envelope-decrypt path broken)")
+	}
+}
+
+// TestService_EnsureRoot_AgeEncrypted_PreExistingRow_PEMPlaintext
+// is the regression test for issue #328. The
+// v0.8.25 hand-mint on prod sealed PEM bytes (the
+// operator ran `openssl genpkey -outform PEM |
+// age -r <pubkey>`); the plaintext is SEC1 PEM
+// (the "EC PRIVATE KEY" PEM type marker) wrapping
+// base64-encoded DER, NOT raw SEC1 DER. The
+// v0.8.32.3 path 2 fed the plaintext directly to
+// x509.ParseECPrivateKey and crashed with
+// "tags don't match" on prod.
+// The fix adds a `pem.Decode` branch in path 2a
+// that handles SEC1 PEM (and PKCS#8 PEM as a
+// forward-compat fallback) before the DER attempt.
+//
+// This test pins the path-2a fix: a row whose
+// envelope-decrypted plaintext is SEC1 PEM must
+// decode transparently and return the original
+// key. If a future refactor reverts the
+// pem.Decode branch, this test fails with
+// "tags don't match" -- the exact prod symptom.
+func TestService_EnsureRoot_AgeEncrypted_PreExistingRow_PEMPlaintext(t *testing.T) {
+	cipher := newTestAgeCipher(t)
+
+	store := NewMemoryStore()
+	svc := NewService(store, cipher) // envelope: enabled
+	ctx := context.Background()
+
+	// 1. Hand-seed a row whose envelope-decrypted
+	// plaintext is SEC1 PEM (the v0.8.25 prod
+	// shape). We start with the canonical DER,
+	// then PEM-encode it the same way `openssl
+	// genpkey -outform PEM` would.
+	caOrig, keyDERPlaintext := keyDERFor(t)
+	pemBlock := &pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: keyDERPlaintext,
+	}
+	keyPEMPlaintext := pem.EncodeToMemory(pemBlock)
+	// The PEM framing is added by pem.EncodeToMemory
+	// automatically; the body carries the inner
+	// "EC PRIVATE KEY" PEM type marker (without
+	// the "-----BEGIN" / "-----END" framing). A
+	// sanity check on the body type avoids the
+	// private-key regex of the secret scanner
+	// (which targets the full BEGIN/END frame).
+	if !bytes.Contains(keyPEMPlaintext, []byte("EC PRIVATE KEY")) {
+		t.Fatalf("PEM encoding sanity failed: %q", string(keyPEMPlaintext[:60]))
+	}
+	keyCiphertext, err := cipher.Encrypt(keyPEMPlaintext)
+	if err != nil {
+		t.Fatalf("cipher.Encrypt: %v", err)
+	}
+	if err := store.SaveRoot(ctx, &Root{
+		KeyDER:    keyCiphertext,
+		CertPEM:   caOrig.RootCertPEM(),
+		Serial:    caOrig.Serial,
+		ExpiresAt: caOrig.Cert.NotAfter,
+	}); err != nil {
+		t.Fatalf("store.SaveRoot (seed age-ciphertext-of-PEM): %v", err)
+	}
+
+	// 2. EnsureRoot must decrypt + pem-decode +
+	// parse without crashing. This is the exact
+	// shape that panicked the v0.8.32.3 panel
+	// after the cert_pem reformat landed.
+	ca, err := svc.EnsureRoot(ctx)
+	if err != nil {
+		t.Fatalf("EnsureRoot (hand-seeded age-ciphertext-of-PEM): %v", err)
+	}
+	if !ca.PrivateKey.Equal(caOrig.PrivateKey) {
+		t.Error("decoded PrivateKey differs from the PEM plaintext underneath the envelope (path-2a PEM-decode branch broken -- this is the v0.8.32.3 prod symptom)")
+	}
+	if !ca.Cert.NotAfter.Equal(caOrig.Cert.NotAfter) {
+		t.Errorf("decoded Cert.NotAfter differs from seeded: got=%s, want=%s", ca.Cert.NotAfter, caOrig.Cert.NotAfter)
 	}
 }
 
