@@ -191,6 +191,45 @@ func (a *App) SetAgentClient(c agentgrpc.Client) {
 func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	logger := log.Logger
 
+	// 0. Build the age SecretCipher once, early.
+	//    The cipher is the v0.8.x shared age-envelope
+	//    boundary for "long-lived at-rest secrets" the
+	//    panel stores (see internal/crypto/envelope).
+	//    Three call sites share it:
+	//
+	//      - agentca.Service (v0.8.32.3+, the fix for
+	//        issue #326 -- decrypts the v0.8.25
+	//        hand-minted prod `agentca.key_ciphertext`
+	//        row)
+	//      - webhooks.NewPgStore (seals
+	//        `webhook_endpoints.secret`)
+	//      - nodes.WithEnvelope (decrypts
+	//        `nodes.ssh_private_key_ciphertext` for the
+	//        stored-key read endpoint)
+	//
+	//    Constructing it once at the top of Build
+	//    means the agentca Service has the envelope
+	//    available from its first call (no "build
+	//    twice" pattern). Memory/dev mode uses the
+	//    NoopSecretCipher (plaintext on disk; same
+	//    dev-mode shortcut the v0.7.x webhook memory
+	//    store used).
+	var cipher envelope.SecretCipher
+	switch cfg.WebhooksBackend {
+	case "pg":
+		c, err := envelope.NewAgeSecretCipher(
+			cfg.WebhooksSecretAgeRecipients,
+			cfg.WebhooksSecretAgeKeyFile,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("app: build age secret cipher: %w", err)
+		}
+		cipher = c
+	default:
+		cipher = envelope.NewNoopSecretCipher()
+		logger.Warn().Msg("app: envelope is noop (memory/dev mode; secrets are plaintext on disk)")
+	}
+
 	// 1. Wire the noop core provider in dev. In
 	//    production a real provider self-registers
 	//    via its own init() and we leave the
@@ -307,7 +346,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		MemCtor: func() agentca.Store { return agentca.NewMemoryStore() },
 		Env:     cfg.Env,
 	})
-	a.AgentCA = agentca.NewService(agentcaStore)
+	a.AgentCA = agentca.NewService(agentcaStore, cipher)
 	// v0.8.32.2: Close was previously deferred here so it
 	// fired when `Build` returned. That meant
 	// `a.AgentCA.RootCertPEM()` after `Build` returned
@@ -431,40 +470,23 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	})
 	a.Plans = plans.NewService(plansStore)
 
-	// 9. Build the age envelope. v0.8.x: the same
-	//    cipher is shared between webhooks (for
-	//    endpoint secrets) and bootstrap (for the
-	//    panel's persistent node SSH key). We
-	//    pick the implementation based on the
-	//    webhooks backend (the same `pg` /
-	//    `memory` switch the panel has used
-	//    since v0.7.0) and share the result with
-	//    the bootstrap service later in this
-	//    function. Memory mode uses the
-	//    `envelope.NoopSecretCipher` (dev only,
-	//    same plaintext-on-DB caveat as the v0.7.0
-	//    webhook memory store).
-	var (
-		cipher        envelope.SecretCipher
-		webhooksStore webhooks.Store
-	)
+	// 9. Wire the webhooks store. The age envelope
+	//    was built at the top of Build (step 0) and
+	//    is shared with the agentca service (step 4)
+	//    and the nodes service (step 10). The webhooks
+	//    backend is the same `pg` / `memory` switch
+	//    the panel has used since v0.7.0; the cipher
+	//    selection is already done by the time we get
+	//    here.
+	var webhooksStore webhooks.Store
 	switch cfg.WebhooksBackend {
 	case "pg":
-		ageCipher, err := envelope.NewAgeSecretCipher(
-			cfg.WebhooksSecretAgeRecipients,
-			cfg.WebhooksSecretAgeKeyFile,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("webhooks: failed to build age secret cipher: %w", err)
-		}
-		cipher = ageCipher
 		webhooksStore = webhooks.NewPgStore(pool, cipher)
 		logger.Info().
 			Int("recipients", len(cfg.WebhooksSecretAgeRecipients)).
 			Str("key_file", cfg.WebhooksSecretAgeKeyFile).
 			Msg("webhooks: using pgx-backed store (PgStore, age-encrypted secret)")
 	default:
-		cipher = envelope.NewNoopSecretCipher()
 		webhooksStore = webhooks.NewMemoryStore()
 		logger.Warn().Msg("webhooks: using in-memory store (MemoryStore, dev only — secret is plaintext)")
 	}
