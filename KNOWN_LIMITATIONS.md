@@ -1,4 +1,36 @@
-# Known Limitations — AegisPanel v0.8.28
+# Known Limitations — AegisPanel v0.8.32.1
+
+This document tracks the gaps between what the latest shipped
+milestone delivers and the full design in `ARCHITECTURE.md` §21.
+Every open entry points to the milestone that closes it.
+**Closed** items are kept for context — the PR that closed each
+one is named so future readers can find the diff.
+
+The current state of the project is **v0.8.32.1** (the
+test/CI hygiene baseline + 6 P0/P1 issues closed +
+`App.Close()` shutdown order fix; PRs #318 / #320 / #321 /
+#322 / #323 / #324; release cut at `04bbbcea`). No image
+change over v0.8.32 — the `ghcr.io/qadversif/aegispanel:0.8.32.1`
+image is bit-for-bit identical to `:0.8.32`. The release
+closes 6 P0/P1 issues that lived on main since v0.8.30
+(issues #301 / #302 / #303 / #304 / #306 / #307) plus the
+three `App.Close()` premature-`Close` bugs that the
+v0.8.31.1 hotfix made visible but did not fix. The full
+release record is in [`CHANGELOG.md`](./CHANGELOG.md)
+§[0.8.32.1].
+
+**v0.8.32** (PR #317) is the prior image rebuild — 3 small
+post-v0.8.31.1 cleanups (`aegis-agent` mTLS flag help text,
+migration files 0023+0024 dual-section trap doc, and
+`config.validate()` completeness). **v0.8.31.1** (PR #316)
+is the 3 v0.8.30/31 mTLS install-pipeline hotfix batch
+(`EnsureRoot` wired in `app.Build`, `//go:embed` for
+migration files, fail-loud on partial host-mount override).
+**v0.8.28.6** is the ops + code-quality batch
+(PRs #291-#300, C1-C4 of #289 + #290 D2/D3 + #297 install
+contract). **v0.8.28** is the Tier 3 dialog-extraction
+closeout + Tier 1 #3 backup-cron closeout (PRs #254-#275;
+release cut at `4a3c31a`).
 
 This document tracks the gaps between what the latest shipped
 milestone delivers and the full design in `ARCHITECTURE.md` §21.
