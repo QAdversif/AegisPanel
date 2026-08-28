@@ -8,8 +8,8 @@ one is named so future readers can find the diff.
 
 The current state of the project is **v0.8.32.1** (the
 test/CI hygiene baseline + 6 P0/P1 issues closed +
-`App.Close()` shutdown order fix; PRs #318 / #320 / #321 /
-#322 / #323 / #324; release cut at `04bbbcea`). No image
+`App.Close()` shutdown order fix; PRs \#318 / \#320 / \#321 /
+\#322 / \#323 / \#324; release cut at `04bbbcea`). No image
 change over v0.8.32 — the `ghcr.io/qadversif/aegispanel:0.8.32.1`
 image is bit-for-bit identical to `:0.8.32`. The release
 closes 6 P0/P1 issues that lived on main since v0.8.30
