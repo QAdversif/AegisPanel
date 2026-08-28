@@ -1,33 +1,26 @@
 # Aegis — VPN Control Panel
 
 > **Aegis** is a self-hosted control panel for multi-protocol VPN
-> services. **v0.8.28** (latest tagged release, 2026-08-21) is
-> the Tier 3 dialog-extraction closeout + Tier 1 #3 (backup
-> cron) closeout. Tier 3: PRs #254-#270 split HostsView and
-> NodesView into 8 self-contained dialog components under
-> `frontend/src/views/dialogs/`, replace the per-row
-> `window.confirm` with a typed `ConfirmDialog`, ship the typed
-> `as Parameters<...>` casts replacing `as never`, add the
-> `GET /api/v1/inbounds` batch endpoint, and ship 52 new vitest
-> tests (39 → 91 total). Tier 1 #3: PRs #273-#275 extend the
-> backup-cron parser to the full Vixie `*` / `N` / `N-M` /
-> `N-M/S` / `*/S` / `N,M,K` construct set, add 33 scheduler
-> goroutine tests (4 new test functions), and ship the
-> `GET /api/v1/backups/schedule` endpoint + `Backups → Schedule`
-> admin UI section so the operator can audit the active cron +
-> retention at a glance. PR #272 hardens the anti-leak
-> infrastructure by adding a `ghp_` / `github_pat_` regex to
-> `check-sensitive.sh`'s `BANNED_PATTERNS` (closes the
-> 2026-08-20 3-PAT incident loop). The v0.8.27 cut (PR #271)
-> brought in the anti-leak infrastructure (PR #241), the
-> `release.yml` smoke-test hard-gate before cosign re-sign
-> (PR #247), the `docs/RUNBOOKS/oncall.md` incident-response
-> playbook (PR #251), the `docs/RUNBOOKS/deploy.md`
-> production-state sync (PR #252), and the recreated
-> `docs/gap-analysis-v0.8.24.md` (PR #246, closing 3 broken
-> cross-links). The `v0.8.26` interim cut (PR #240) carried the
-> 9-bug chain closeout into the docs tag with the v0.8.25
-> `UploadAndSwap` fix intact.
+> services. **v0.8.32.1** (latest tagged release, 2026-08-27) is
+> the test/CI hygiene baseline release — no image change over
+> v0.8.32. Closes 6 P0/P1 issues that lived on main since v0.8.30
+> (sqlfluff LT02 false-positive, testutil aegis_it race, e2e.yml
+> stale-secrets silent Playwright 401, testutil `findBackendDir`
+> hardcoded the old `backend/migrations` path, migration
+> `strings.Index` docstring-shadowing the real `-- +migrate Up`
+> marker in `0023_agentca.sql` / `0024_add_nodes_agent_transport.sql`,
+> and the v0.8.32 image was built without those test/CI fixes).
+> Plus the three `App.Close()` premature-`Close` bugs
+> (`defer a.AgentCA.Close()` in `Build()`, `defer client.Close()`
+> in the wiring helper, no `Wait()` on `BatchedApplier` goroutines)
+> that the v0.8.31.1 hotfix made visible but did not fix. The
+> image is `ghcr.io/qadversif/aegispanel:0.8.32.1`; the full
+> release record (8 PRs) is in [`CHANGELOG.md`](./CHANGELOG.md).
+> **v0.8.32** (the prior tagged release, 2026-08-25) is the
+> image rebuild that ships the 3 small post-v0.8.31.1 cleanups
+> (`aegis-agent` mTLS flag help text, migration files 0023+0024
+> dual-section trap doc, `config.validate()` completeness) — see
+> `CHANGELOG.md` §[0.8.32].
 >
 > **Stack:** Go 1.26+ backend, Vue 3 + TypeScript frontend
 > (Vite + shadcn-vue), PostgreSQL, Caddy, fail2ban, sops+age
@@ -44,65 +37,48 @@
 
 ## Status
 
-**v0.8.28 (shipped, 2026-08-21) — Tier 3 dialog
-extraction + Tier 1 #3 backup-cron closeout.**
-Two release tracks in one tag. **Tier 3 (PRs
-\#254-\#270)**: HostsView and NodesView each shed
-their per-action dialogs into 8 self-contained Vue
-components under `frontend/src/views/dialogs/` —
-`HostCreateDialog` + `HostEditDialog` (#265),
-`NodeCreateDialog` + `NodeEditDialog` (#266),
-`NodeProvisionDialog` (#267), `NodeRotateDialog`
-(#268), `NodeRefreshDialog` + `NodeInspectDialog`
-(#269). The view files keep only the trigger refs
-and per-row pointers; the dialogs own the form state,
-the wire-payload builder, and the success card
-surface. Adjacent refactors: `ChangePasswordRequest`
-dedup (#254), `window.confirm` → `ConfirmDialog`
-migration (#256), typed `as Parameters<...>` casts
-replacing `as never` (#263). Two perf wins:
-`camelizeKeys` memoization for large response bodies
-(#255) and a new `GET /api/v1/inbounds` batch
-endpoint that replaces the per-row `GetByNode`
-fan-out during HostsView + NodesView open (#264).
-52 new vitest tests across 8 dialog test files; the
-project total goes from 39 → 91 (#270). **Tier 1 #3
-(PRs #273-#275)**: backup-cron hardening. PR #273
-extends `parseCronField` to support the full Vixie
-construct set: `*` (wildcard), `N` (specific value),
-`N-M` (range, inclusive), `N-M/S` (range with step),
-`*/S` (every S-th value), and `N,M,K` (list of
-values, sorted + deduplicated). The parser stays
-wall-clock only (5 fields required, no `@`-syntax,
-no sub-minute granularity, no timezones). PR #274
-adds 33 scheduler goroutine tests across 4 new test
-functions — `IdempotentWithinMinute`,
-`AdvancesLastEvenOnNonMatch`,
-`RespectsCancelledContext`,
-`TriggersAtScheduledTime` — in
-`backend/internal/backups/scheduler_test.go`. PR
-\#275 ships the admin-UI surface: `Service.ReloadCron`
-on the backend + read-only `GET
-/api/v1/backups/schedule` endpoint (admin-scoped,
-`backups` scope) + `Backups → Schedule` section in
-`BackupsView.vue` + 10 i18n keys (`backups.schedule.*`
-in en.json + ru.json) + OpenAPI schema bump to
-`0.8.28` + auto-regenerated `frontend/src/types/api.d.ts`.
-The v0.8.28 release also hardens the anti-leak
-infrastructure (PR #272): a `ghp_` / `github_pat_`
-regex is added to `BANNED_PATTERNS` in
-`tools/scripts/check-sensitive.sh` (and the AGENTS.md
-mirror), closing the 2026-08-20 3-PAT incident loop
-(classic `ghp_` / fine-grained `github_pat_` / OAuth
-`gho_` / `ghu_` / `ghs_` / `ghr_` tokens are now
-caught by the pre-commit + CI gate). 7 v0.9.1
-follow-up items are parked (data race in
-`scheduler.maybeFire` load-bearing, handler tests
-for `GET /schedule`, `scheduleActive` semantic
-clarification, `POST` endpoint for hot-reload,
-weekly cron for orphan file sweep, `BackupsCron`
-field naming consistency, doc syntax examples) — see
-`KNOWN_LIMITATIONS.md` v0.9.1 section.
+**v0.8.32.1 (shipped, 2026-08-27) — test/CI hygiene
+baseline + 6 P0/P1 issues closed + `App.Close()`
+shutdown order fix.** No image change over v0.8.32. PRs
+\#318 (sqlfluff LT02 + testutil aegis_it race + e2e.yml
+stale-secrets + testutil `findBackendDir` + migration
+`strings.Index` → line-anchored regex; the v0.8.32 image
+was built without these test/CI fixes), \#320 (Blob
+bodies preserved by the response interceptor — issue
+\#301), \#321 (backups scheduler wired + `s.cron` read
+race — issue \#302), \#322 (per-user credentials in
+base64 sub + HostEditDialog non-editable endpoint
+fields — issues \#303 + \#304), \#323 (migrator journal
+atomic with schema + 0013 markers — issues #306 + #307),
+\#324 (three `App.Close()` premature-`Close` bugs: defer
+in `Build()`, defer in wiring helper, no `Wait()` on
+`BatchedApplier` goroutines). All 22 CI checks green on
+both runners. Memory: `v0.8.32.1 tag` anchor. The release
+record is in [`CHANGELOG.md`](./CHANGELOG.md) §[0.8.32.1].
+
+**v0.8.32 (shipped, 2026-08-25) — 3 small post-v0.8.31.1
+cleanups.** Image rebuild. The 3 fixes are: `aegis-agent`
+mTLS flag help text corrected, migration files
+`0023_agentca.sql` + `0024_add_nodes_agent_transport.sql`
+dual-section trap documented (with `sed` snippet in
+`docs/operator-install.md`), and `config.validate()`
+completeness (the v0.8.28 prod env shipped with two env
+vars that should have been required but were silently
+tolerated). No new endpoints, no new env vars, no
+schema changes.
+
+**v0.8.31.1 (shipped, 2026-08-25) — 3 v0.8.30/31
+mTLS install-pipeline hotfixes baked in.** Image rebuild.
+The hotfixes close the v0.8.30/31 mTLS chicken-and-egg
+(panel boots with partial schema → first query against
+new column crashes) without operator intervention.
+The big one: `EnsureRoot` is now called in `app.Build`,
+so the agentca root CA is minted at boot and the mTLS
+bootstrap stops failing with "root CA not yet
+provisioned". Plus: the panel binary `//go:embed`s the
+24 migration files (no more scp before every upgrade),
+and the migration runner fail-loud on a partial
+host-mount override.
 
 **v0.8.27 — anti-leak infra + `release.yml` smoke gate
 plus oncall runbook + recreate gap-analysis — shipped.**
@@ -263,6 +239,10 @@ The release ladder:
 | `v0.8.25` | **shipped** | `Client.UploadAndSwap(ctx, src, dst, mode)` for ETXTBSY-safe binary replacement (PR #235). Pre-PR the SFTP step did direct overwrite of `/usr/local/bin/aegis-agent`, which Linux refused with `ETXTBSY` (text-file-busy) on a re-provision of a running node — the agent's mmap'd text region can't be unlinked by another process. v0.8.25 splits the upload into SFTP-to-temp (`.basename.swap.<8-hex>`) + `mv -f` over the target via SSH; `rename(2)` is always permitted, the running process keeps the unlinked inode alive until it exits, the systemd `Restart=always` loop picks up the new binary. Mock seam in `installer_test.go` records `uploadSwapPaths` separately from `uploadPaths`; `TestInstaller_SuccessPath` asserts the agent binary path uses `UploadAndSwap` (regression guard). No OpenAPI / migration / UI changes. |
 | `v0.8.26` | **shipped** | CHANGELOG-only release cut (PR #240) that re-anchors the v0.8.25 `UploadAndSwap` fix in the docs tag. No application code change. |
 | `v0.8.27` | **shipped** | Anti-leak infrastructure (PR #241: AGENTS.md + `tools/scripts/check-sensitive.sh` scanner + pre-commit + CI gate); `release.yml` hard-gate smoke test (PR #247); recreated `docs/gap-analysis-v0.8.24.md` (PR #246); `docs/RUNBOOKS/oncall.md` (PR #251); `docs/RUNBOOKS/deploy.md` production-state sync (PR #252); gitignore `.local/` (PR #249); Go 1.26.5 → 1.26.6 govulncheck bump (PR #248); `branch-start.sh` / `release.sh` `--dry-run` / `--snapshot` hardening (PR #250). First release where the anti-leak infrastructure gates a merge end-to-end. |
+| `v0.8.32.1` | **shipped** | test/CI hygiene baseline + 6 P0/P1 issues closed + `App.Close()` shutdown order fix. No image change over v0.8.32. PRs #318 (sqlfluff LT02 + testutil aegis_it race + e2e.yml stale-secrets + testutil `findBackendDir` + migration `strings.Index` → line-anchored regex; the v0.8.32 image was built without these test/CI fixes), \#320 (Blob bodies preserved by the response interceptor — issue #301), #321 (backups scheduler wired + `s.cron` read race — issue #302), #322 (per-user credentials in base64 sub + HostEditDialog non-editable endpoint fields — issues #303 + #304), #323 (migrator journal atomic with schema + 0013 markers — issues #306 + #307), \#324 (three `App.Close()` premature-`Close` bugs: defer in `Build()`, defer in wiring helper, no `Wait()` on `BatchedApplier` goroutines). All 22 CI checks green on both runners. |
+| `v0.8.32` | **shipped** | 3 small post-v0.8.31.1 cleanups. Image rebuild. The 3 fixes are: `aegis-agent` mTLS flag help text corrected, migration files `0023_agentca.sql` + `0024_add_nodes_agent_transport.sql` dual-section trap documented (with `sed` snippet in `docs/operator-install.md`), and `config.validate()` completeness (the v0.8.28 prod env shipped with two env vars that should have been required but were silently tolerated). No new endpoints, no new env vars, no schema changes. |
+| `v0.8.31.1` | **shipped** | 3 v0.8.30/31 mTLS install-pipeline hotfixes baked in. Image rebuild. The hotfixes close the v0.8.30/31 mTLS chicken-and-egg (panel boots with partial schema → first query against new column crashes) without operator intervention. The big one: `EnsureRoot` is now called in `app.Build`, so the agentca root CA is minted at boot and the mTLS bootstrap stops failing with "root CA not yet provisioned". Plus: the panel binary `//go:embed`s the 24 migration files (no more scp before every upgrade), and the migration runner fail-loud on a partial host-mount override. |
+| `v0.8.28.6` | **shipped** | No image change — pure ops + code-quality batch. The `ghcr.io/qadversif/aegispanel:0.8.28` image is the same as v0.8.28; this entry covers a migration applied to the live prod database and a series of code-quality / infra PRs. C1-C4 of issue #289 (cross-user credential cache leak, `Subs.WithCreds` wiring, agent response body leak, migration 0022 path_check relaxation) closed in PRs #291-#298; hand-rolled JSON escapers × 11 handler files (#290 D3) replaced with `internal/httpjson` in PR #300; compose install contract + idempotent wrapper + privacy rules (#297); `NodeProvisionResponse` type dedup (#299). |
 | `v0.8.28` | **shipped** | Tier 3 dialog extraction closeout (PRs #254-#270) + Tier 1 #3 (backup cron) closeout (PRs #273-#275) + anti-leak infra hardening (PR #272). 5 dialog-extraction PRs (#265-#269) split HostsView and NodesView into 8 self-contained dialog components under `frontend/src/views/dialogs/`; adjacent refactors `ChangePasswordRequest` dedup (#254), `window.confirm` → `ConfirmDialog` (#256), typed `as Parameters<...>` casts (#263); two perf wins (`camelizeKeys` memoization #255, new `GET /api/v1/inbounds` batch endpoint #264); 52 new vitest tests across the 8 dialog test files (39 → 91 total, PR #270). Tier 1 #3: cron parser extended to the full Vixie `N-M` / `N-M/S` / `*/S` / `N,M,K` construct set (#273); 33 scheduler goroutine tests across 4 new test functions (#274); admin-UI surface — `Service.ReloadCron` + `GET /api/v1/backups/schedule` endpoint + `Backups → Schedule` section in `BackupsView.vue` + 10 i18n keys + OpenAPI schema bump to `0.8.28` (#275). PR #272 adds a `ghp_` / `github_pat_` regex to `BANNED_PATTERNS` in `check-sensitive.sh` (and the AGENTS.md mirror), closing the 2026-08-20 3-PAT incident loop. 7 v0.9.1 follow-up items parked (data race in `scheduler.maybeFire`, `GET /schedule` handler tests, `scheduleActive` semantic, `POST` endpoint for hot-reload, weekly orphan-file cron, `BackupsCron` field naming, doc syntax examples). Release cut at `4a3c31a`. |
 | `v0.8.x` | done | All v0.8.x-bucket items shipped: host → node mapping (PR #192), subscription URL display (PR #193), per-user credential filter (PR #198, v0.8.10+), merged "Add node + Provision" dialog (PR #201, v0.8.12+), eslint cleanup (PR #200, v0.8.12+), shadcn-vue `RadioGroup` (PR #202, v0.8.12+), inbound-templates (PRs #205/#209/#210/#211/#212, v0.8.13+), audit-3.1 fix chain (PRs #214/#215/#216, v0.8.13+), v0.8.13 body-field shim closure (PR #217, v0.8.14), v0.8.14 dialog overflow + SelectItem empty value (PRs #220/#221), v0.8.15 multi-stage Dockerfile (PR #222), v0.8.16..v0.8.25 silent-bug chain (PRs #222/#224/#226/#228/#229/#230/#231/#232/#233/#234/#235), anti-leak infra + smoke gate + oncall + recreate gap-analysis (PRs #241/#246/#247/#249/#250/#251/#252, v0.8.27+), Tier 3 dialog extraction + perf + tests (PRs #254-#270, in v0.8.28). |
 | `v0.9.0` | planned | Smoke test on fresh VM in CI (terraform + ansible + boot log artifact) + restore-drill on a clean VM (download backup → restore → first-boot → panel reachable) + `release.yml` hard-gate smoke (the single most-important infra change to prevent future silent bugs). The missing pieces for the v1.0.0-mvp-soft-launch tag. |

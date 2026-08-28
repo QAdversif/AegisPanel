@@ -5,14 +5,14 @@ UI pair on a Linux server (Ubuntu 24.04+ recommended). For the full
 operator contract (Caddy, env, sops+age envelope, backups), see
 `operator-guide.md`.
 
-> **v0.8.31.1 hotfix (this file was updated for):** the panel binary
+> **v0.8.32.1 baseline (this file was updated for):** the panel binary
 > now `//go:embed`s the full set of migration files (the v0.8.30/31
 > mTLS files 0023 + 0024 ship in the binary). The host mount at
 > `/var/lib/aegis/migrations` is now an optional operator override
 > (hot-fix path), not the only source of truth. See §"Schema
 > migrations" below for the new contract. If you ran v0.8.28.6 or
 > v0.8.30/31 on prod and used to scp migrations before every
-> upgrade, you can stop doing that after upgrading to v0.8.31.1.
+> upgrade, you can stop doing that after upgrading to v0.8.32.1. The v0.8.32.1 release is a test/CI-hygiene baseline (no image change over v0.8.32); see `CHANGELOG.md` §[0.8.32.1] for the 8-PR release record.
 
 ## TL;DR
 
@@ -23,9 +23,9 @@ sudo tools/scripts/aegis-deploy-setup.sh
 
 # 2. Configure the host env (or write /opt/aegis/.env).
 export AEGIS_PROD_IP="1.2.3.4"          # your server's public IP
-export AEGIS_PANEL_TAG="0.8.31.1"       # aegispanel image tag
-export AEGIS_UI_TAG="v0.8.31.1"         # aegispanel-ui image tag
-export AEGIS_ENV_FILE="/tmp/aegis-v0.8.31.1.env"
+export AEGIS_PANEL_TAG="0.8.32.1"       # aegispanel image tag
+export AEGIS_UI_TAG="v0.8.32.1"         # aegispanel-ui image tag
+export AEGIS_ENV_FILE="/tmp/aegis-v0.8.32.1.env"
 export AEGIS_UI_CADDYFILE="/tmp/ui-Caddyfile"
 
 # 3. Install / upgrade.
@@ -72,8 +72,8 @@ first SSH; rotate / lock root password after).
    (`tools/scripts/release.sh` is the typical entry point).
 2. On the server:
    ```bash
-   export AEGIS_PANEL_TAG="0.8.31.1"  # new tag
-   export AEGIS_UI_TAG="v0.8.31.1"
+   export AEGIS_PANEL_TAG="0.8.32.1"  # new tag
+   export AEGIS_UI_TAG="v0.8.32.1"
    sudo tools/scripts/install-aegis-stack.sh
    ```
 3. Smoke through the public URL. If something's wrong:
@@ -118,7 +118,7 @@ new env-file paths on demand.
 - **Top-level Caddy** — runs on the host as a systemd service, not as a
   container. See `operator-guide.md` for the Caddyfile contract.
 - **Schema migrations** — the panel binary now `//go:embed`s the full
-  set of migration files (v0.8.31.1 hotfix). The host mount at
+  set of migration files (v0.8.31.1 hotfix; v0.8.32.1 unchanged). The host mount at
   `/var/lib/aegis/migrations` is an optional operator override for
   hot-fixing a migration without rebuilding the image. If the host
   mount is non-empty but missing any embedded migration, the migrator
@@ -126,11 +126,11 @@ new env-file paths on demand.
   remediation rather than silently falling back. See the
   "Schema migrations" section below for the full new contract.
 - **sops+age envelope** — `AEGIS_WEBHOOKS_SECRET_AGE_*` and similar go
-  through the env file at `/tmp/aegis-v0.8.31.1.env`, which the operator
+  through the env file at `/tmp/aegis-v0.8.32.1.env`, which the operator
   builds offline with `sops` and ships to the server. The env file is
   never committed to the repo.
 
-## Schema migrations (v0.8.31.1+)
+## Schema migrations (v0.8.31.1+, unchanged in v0.8.32.1)
 
 The panel binary bundles the full migration set via
 [`//go:embed`](https://pkg.go.dev/embed) at
@@ -139,7 +139,7 @@ function in `internal/migrations/migrator.go` picks the source
 deterministically:
 
 1. **No host mount / empty mount / missing dir** — reads from the
-   embedded FS. The canonical install contract for v0.8.31.1+:
+   embedded FS. The canonical install contract for v0.8.31.1+ (v0.8.32.1 ships the same binary):
    do nothing. The panel just works.
 2. **Non-empty host mount with every embedded migration** —
    reads from the host mount. This is the operator's hot-fix
@@ -158,7 +158,7 @@ deterministically:
 
 You can remove the `/var/lib/aegis/migrations` host mount from
 the compose (and from the `aegis-stack.yml` template) once
-you're on v0.8.31.1+. The panel binary ships everything; the
+you're on v0.8.31.1+ (or v0.8.32.1). The panel binary ships everything; the
 mount becomes pure ceremony. A follow-up compose cleanup
 PR is tracked separately.
 
@@ -185,10 +185,10 @@ sanity:
 ```bash
 docker exec aegis-postgres psql -U aegis -d aegis -tAc \
   "SELECT count(*) FROM schema_migrations WHERE name LIKE '00%'"
-# expect 24 (0001..0024) on a v0.8.31.1+ deploy
+# expect 24 (0001..0024) on a v0.8.31.1+ / v0.8.32.1 deploy
 ```
 
-If the count is < 24 and the panel is on v0.8.31.1+, the
+If the count is < 24 and the panel is on v0.8.31.1+ / v0.8.32.1, the
 embedded migrator did not run (e.g. someone added a `--no-migrate`
 flag in a future refactor — this would be a regression
 caught by `TestResolveSource_EmbeddedIsNonEmpty` in
@@ -204,7 +204,7 @@ new image. The 2026-08-25 v0.8.30/31 prod deploy hit this:
 the host had 0001-0022 but not 0023-0024, the panel
 silently fell through, and the v0.5.0 singbox wiring
 crashed on `SELECT n.agent_transport FROM nodes` with
-`column does not exist`. The v0.8.31.1 hotfix (a) embeds
+`column does not exist`. The v0.8.31.1 hotfix (v0.8.32.1 unchanged) (a) embeds
 the SQL files in the binary and (b) fail-loud-checks any
 host mount override, so the failure mode is now impossible.
 
