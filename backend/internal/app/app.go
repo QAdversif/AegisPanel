@@ -49,10 +49,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/agentca"
@@ -760,6 +762,18 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		Int("max_count", cfg.BackupsMaxCount).
 		Bool("allow_ui_restore", cfg.BackupsAllowUIRestore).
 		Msg("backups: service initialised")
+	// Boot-time footgun guard. The 2026-08-30 "backups
+	// disappeared from UI" incident was silent because
+	// (a) the local store returns [] on a missing index
+	// with no error, (b) NewOSBackend auto-creates the
+	// dir so the service "succeeds", and (c) the
+	// relative default ("./var/backups") resolved to
+	// a path that the volume mount did not populate. A
+	// loud WARN at boot makes the footgun visible in
+	// `docker logs aegis-panel | grep boot:` instead of
+	// being discovered hours later from an empty UI list.
+	// See warnRelativeDefaultDir for the full rationale.
+	warnRelativeDefaultDir(logger, "AEGIS_BACKUPS_DIR", cfg.BackupsDir)
 
 	// 17. Subscription endpoint rate limiter.
 	//     One instance shared across the default
@@ -1063,4 +1077,45 @@ func newSubscriptionRateLimiter(cfg *config.Config) *ratelimit.Limiter {
 		Int("max_keys", cfg.SubscriptionRateLimitMaxKeys).
 		Msg("subscription rate limiter enabled")
 	return l
+}
+
+// warnRelativeDefaultDir emits a loud WARN at boot
+// when an env var with a relative `envDefault` (e.g.
+// `AEGIS_BACKUPS_DIR` -> `./var/backups`) was NOT
+// overridden in the deploy's env file. The default is
+// fine in dev (panel CWD = repo root) but the panel's
+// CWD in production is `/` (distroless) and the
+// resolved path almost never matches the docker volume
+// mount. The 2026-08-30 "backups disappeared from UI"
+// incident on prod was silent — the local store's
+// `readIndex` returned `[]` on a missing `_index.json`
+// with no error, the panel booted cleanly, and the
+// first hint was the empty UI list. This warn makes
+// the footgun loud at the first `docker logs aegis-panel`
+// after deploy.
+//
+// `envName` is the env var to check (e.g.
+// "AEGIS_BACKUPS_DIR"). `resolvedDir` is the value the
+// panel is actually using (i.e. the config field, which
+// is the default when the env var is unset). The helper
+// intentionally does NOT check whether the resolved
+// path exists or is non-empty: NewOSBackend /
+// NewMemoryBackend auto-create the dir, so a
+// successful init does not imply the operator
+// intended this path.
+func warnRelativeDefaultDir(logger zerolog.Logger, envName, resolvedDir string) {
+	if os.Getenv(envName) != "" {
+		return
+	}
+	cwd, _ := os.Getwd()
+	logger.Warn().
+		Str("env", envName).
+		Str("resolved_dir", resolvedDir).
+		Str("container_cwd", cwd).
+		Msg("boot: " + envName + " is NOT set; the panel is using the relative default " +
+			"from config. In production this resolves to <container_cwd>/" + resolvedDir +
+			" which almost never matches the docker volume mount. Set " + envName +
+			" to the absolute container path (the right side of the deploy -v mount) " +
+			"and restart, otherwise the service will silently read from an empty or " +
+			"freshly-created dir (e.g. backups will appear to disappear from the UI).")
 }

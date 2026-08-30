@@ -20,9 +20,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/QAdversif/AegisPanel/internal/config"
 )
@@ -308,4 +312,136 @@ func TestBuild_EnsuresAgentCARoot(t *testing.T) {
 	// be caught immediately.
 	a.Close()
 	a.Close()
+}
+
+// TestBuild_WarnsOnBackupsDirDefault is the regression
+// test for the 2026-08-30 "backups disappeared from UI"
+// prod incident. The panel boot path must emit a loud
+// WARN when the operator forgot to override
+// `AEGIS_BACKUPS_DIR` (or any other AEGIS_*_DIR with a
+// relative `envDefault`). The pre-fix code had no such
+// warn: the service initialized cleanly because
+// NewOSBackend auto-creates the dir, the local store
+// returned `[]` on a missing `_index.json` with no
+// error, and the first hint was an empty UI list hours
+// after deploy.
+//
+// The test captures the zerolog output to a buffer and
+// asserts the WARN line is present.
+//
+// IMPORTANT: this test must NOT set AEGIS_BACKUPS_DIR
+// (or AEGIS_AGENT_KNOWN_HOSTS) - the whole point is to
+// exercise the relative-default path. The other env vars
+// are set to memory mode (matching the rest of the file)
+// so config.Load() and Build() succeed.
+func TestBuild_WarnsOnBackupsDirDefault(t *testing.T) {
+	t.Setenv("AEGIS_ENV", "development")
+	t.Setenv("AEGIS_JWT_SECRET", "test-jwt-secret-must-be-at-least-32-characters-long-xxxxxx")
+	t.Setenv("AEGIS_POSTGRES_DSN", "postgres://localhost:5432/aegis_smoke?sslmode=disable")
+	t.Setenv("AEGIS_REDIS_ADDR", "localhost:6379")
+	t.Setenv("AEGIS_NATS_URL", "nats://localhost:4222")
+	t.Setenv("AEGIS_AUTH_BACKEND", "memory")
+	t.Setenv("AEGIS_NODES_BACKEND", "memory")
+	t.Setenv("AEGIS_INBOUNDS_BACKEND", "memory")
+	t.Setenv("AEGIS_HOSTS_BACKEND", "memory")
+	t.Setenv("AEGIS_USERS_BACKEND", "memory")
+	t.Setenv("AEGIS_PLANS_BACKEND", "memory")
+	t.Setenv("AEGIS_SUBSCRIPTION_BACKEND", "memory")
+	t.Setenv("AEGIS_PANELCFG_BACKEND", "memory")
+	t.Setenv("AEGIS_AUDITS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED", "false")
+	t.Setenv("AEGIS_AGENT_BINARY", t.TempDir()+"/aegis-agent-not-used-in-smoke")
+	// Do NOT set AEGIS_BACKUPS_DIR � the default
+	// "./var/backups" must apply.
+	// Do NOT set AEGIS_AGENT_KNOWN_HOSTS either �
+	// same footgun class.
+
+	// Capture log output to a buffer. Use InfoLevel
+	// so the boot's Info-level "backups: service
+	// initialised" line is also captured (the
+	// sanity check below verifies the warn fires
+	// at the right point in the boot sequence).
+	var logBuf bytes.Buffer
+	origLogger := log.Logger
+	log.Logger = zerolog.New(&logBuf).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger = origLogger })
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := Build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer a.Close()
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "AEGIS_BACKUPS_DIR is NOT set") {
+		t.Errorf("expected WARN about AEGIS_BACKUPS_DIR default, got log:\n%s", logs)
+	}
+	// Sanity: the existing init log is also present,
+	// confirming the warn fires at the right point
+	// in the boot sequence.
+	if !strings.Contains(logs, "backups: service initialised") {
+		t.Errorf("expected the backups init log line, got log:\n%s", logs)
+	}
+}
+
+// TestBuild_NoWarnWhenBackupsDirSet is the positive
+// counterpart to TestBuild_WarnsOnBackupsDirDefault. The
+// warn helper must stay silent when the operator has
+// explicitly set the env var (the production path).
+// Without this test, a future refactor that hardcodes
+// the warn (instead of gating on `os.Getenv != ""`)
+// would slip through CI and spam logs on every boot.
+func TestBuild_NoWarnWhenBackupsDirSet(t *testing.T) {
+	t.Setenv("AEGIS_ENV", "development")
+	t.Setenv("AEGIS_JWT_SECRET", "test-jwt-secret-must-be-at-least-32-characters-long-xxxxxx")
+	t.Setenv("AEGIS_POSTGRES_DSN", "postgres://localhost:5432/aegis_smoke?sslmode=disable")
+	t.Setenv("AEGIS_REDIS_ADDR", "localhost:6379")
+	t.Setenv("AEGIS_NATS_URL", "nats://localhost:4222")
+	t.Setenv("AEGIS_AUTH_BACKEND", "memory")
+	t.Setenv("AEGIS_NODES_BACKEND", "memory")
+	t.Setenv("AEGIS_INBOUNDS_BACKEND", "memory")
+	t.Setenv("AEGIS_HOSTS_BACKEND", "memory")
+	t.Setenv("AEGIS_USERS_BACKEND", "memory")
+	t.Setenv("AEGIS_PLANS_BACKEND", "memory")
+	t.Setenv("AEGIS_SUBSCRIPTION_BACKEND", "memory")
+	t.Setenv("AEGIS_PANELCFG_BACKEND", "memory")
+	t.Setenv("AEGIS_AUDITS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_BACKEND", "memory")
+	t.Setenv("AEGIS_WEBHOOKS_RETRY_WORKER_ENABLED", "false")
+	t.Setenv("AEGIS_AGENT_BINARY", t.TempDir()+"/aegis-agent-not-used-in-smoke")
+	// Set the env var � the warn helper should stay
+	// silent.
+	t.Setenv("AEGIS_BACKUPS_DIR", t.TempDir())
+	t.Setenv("AEGIS_AGENT_KNOWN_HOSTS", t.TempDir()+"/known_hosts")
+
+	var logBuf bytes.Buffer
+	origLogger := log.Logger
+	log.Logger = zerolog.New(&logBuf).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = origLogger })
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, err := Build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	defer a.Close()
+
+	logs := logBuf.String()
+	if strings.Contains(logs, "AEGIS_BACKUPS_DIR is NOT set") {
+		t.Errorf("did not expect WARN about AEGIS_BACKUPS_DIR (env was set), got log:\n%s", logs)
+	}
 }
