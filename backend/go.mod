@@ -13,7 +13,7 @@ require (
 	// Configuration from env / files
 	github.com/caarlos0/env/v11 v11.4.1
 	// HTTP router
-	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/joho/godotenv v1.5.1
 
 	// Metrics
@@ -38,8 +38,8 @@ require (
 	github.com/swaggo/swag v1.16.6
 	golang.org/x/crypto v0.55.0
 	golang.org/x/term v0.45.0
-	google.golang.org/grpc v1.83.1
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
